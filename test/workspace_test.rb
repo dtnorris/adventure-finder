@@ -174,6 +174,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
 
       assert workspace.test(repos: [repo])
       assert_match(/^timed-suite\s+PASS\s+\d+\.\d{2}s$/, out.string)
+      assert_match(/^1\/1 suites passed\.\s+\d+\.\d{2}s$/, out.string)
     end
   end
 

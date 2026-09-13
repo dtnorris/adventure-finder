@@ -289,7 +289,10 @@ module AdventureFinderWorkspace
       end
 
       failures = results.select { |_name, result, _elapsed| result != :pass }
-      out.puts "#{results.length - failures.length}/#{results.length} suites passed."
+      passed = results.length - failures.length
+      total_elapsed = results.sum { |_name, _result, elapsed| elapsed || 0.0 }
+      summary = "#{passed}/#{results.length} suites passed."
+      out.puts format("%-38s %8s", summary, format("%.2fs", total_elapsed))
       failures.empty?
     end
 
