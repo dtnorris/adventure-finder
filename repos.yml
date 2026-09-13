@@ -1,0 +1,160 @@
+---
+schema_version: adventurefinder-workspace/v0.1
+workspace_root_default: /Users/davidnorris/code
+
+# `default: true` means normal bootstrap/status/sync/test operations include the
+# repository. Historical/experimental repos remain documented but opt-in.
+repositories:
+  - name: md-specification-files
+    github: dtnorris/md-specification-files
+    role: Normative AdventureFinder specifications and semantic contracts.
+    groups: [core, authority]
+    lifecycle: current
+    visibility: private
+    default: true
+
+  - name: af-xlsx-data-sources
+    github: dtnorris/af-xlsx-data-sources
+    role: Canonical AMC workbooks and PROJECT_STATE.yml moving-role authority.
+    groups: [core, authority, data]
+    lifecycle: current
+    visibility: private
+    default: true
+
+  - name: md-for-llm-book-content
+    github: dtnorris/md-for-llm-book-content
+    role: Private canonical page-addressable Markdown corpus and source registry.
+    groups: [core, authority, library]
+    lifecycle: current
+    visibility: private
+    default: true
+    notes:
+      - Copyright-sensitive owned source material; keep private.
+
+  - name: af-data-pipeline
+    github: dtnorris/af-data-pipeline
+    role: Deterministic source intake, boundary handoffs, AMC mutation, review, and finalization.
+    groups: [core, code, ingest]
+    lifecycle: current
+    visibility: private
+    default: true
+    setup: bundle install
+    test: bundle exec rake test
+    requires: [ruby, bundle, git]
+
+  - name: af-cli-scoring-utility
+    github: dtnorris/af-cli-scoring-utility
+    role: Source-grounded AFAO assessment generation and scoring evidence.
+    groups: [core, code, scoring]
+    lifecycle: current
+    visibility: private
+    default: true
+    setup: bundle install
+    test: bundle exec rake test
+    requires: [ruby, bundle, git]
+
+  - name: local-model-eval
+    github: dtnorris/local-model-eval
+    role: Local/remote model-evaluation and production scoring orchestration.
+    groups: [core, code, scoring]
+    lifecycle: current
+    visibility: public
+    default: true
+    setup: bundle install
+    test: bundle exec rake test
+    requires: [ruby, bundle, git]
+
+  - name: af-frontier-pack
+    github: dtnorris/af-frontier-pack
+    role: Deterministic consumption bridge from canonical artifacts to frontier-model reasoning packs.
+    groups: [core, code, consumption]
+    lifecycle: current
+    visibility: private
+    default: true
+    setup: bundle install
+    test: bundle exec rake
+    requires: [ruby, bundle, git]
+
+  - name: af-cli-query-matcher
+    github: dtnorris/af-cli-query-matcher
+    role: AFPS parsing plus deterministic filtering/ranking runtime.
+    groups: [code, matcher]
+    lifecycle: current
+    visibility: private
+    default: true
+    setup: bundle install
+    test: bundle exec rake test
+    requires: [ruby, bundle, git]
+
+  - name: pdf-to-llm-md-converter
+    github: dtnorris/pdf-to-llm-md-converter
+    role: Deterministic PDF-to-page-addressable-Markdown conversion.
+    groups: [code, ingest]
+    lifecycle: current
+    visibility: public
+    default: true
+    setup: bundle install
+    test: bundle exec rake test
+    requires: [ruby, bundle, git]
+    optional_runtime_requires: [python3, pdfinfo, pdfseparate, pdftotext, pdftoppm, qpdf, tesseract, docling]
+    notes:
+      - Python/Docling setup is intentionally not automated by this workspace; follow the repository README.
+
+  - name: image-to-pdf-converter
+    github: dtnorris/image-to-pdf-converter
+    role: Conservative physical-book photo normalization into image-only PDFs.
+    groups: [code, ingest]
+    lifecycle: current
+    visibility: public
+    default: true
+    setup: bundle install
+    test: rake test
+    requires: [ruby, bundle, git]
+    optional_runtime_requires: [python3, img2pdf]
+    notes:
+      - Python environment setup is intentionally not automated by this workspace; follow the repository README.
+
+  - name: llm-response-data
+    github: dtnorris/llm-response-data
+    role: Historical/raw AdventureFinder evidence archive; never project-state authority.
+    groups: [evidence, data]
+    lifecycle: current
+    visibility: private
+    default: true
+    clone_depth: 1
+    notes:
+      - Shallow-cloned by default because this repository is materially larger than the other AdventureFinder repositories.
+      - Run `git fetch --unshallow` inside the repository only when historical Git traversal is actually needed.
+
+  - name: 5e-tools-corpus-converter
+    github: dtnorris/5e-tools-corpus-converter
+    role: Earlier local-5e.tools corpus-conversion spike retained for reference.
+    groups: [code, experimental]
+    lifecycle: experimental
+    visibility: private
+    default: false
+    setup: bundle install
+    test: bundle exec rake test
+    requires: [ruby, bundle, git]
+
+  - name: af-corpus-ingester-basics
+    github: dtnorris/af-corpus-ingester-basics
+    role: Superseded deterministic candidate-ingestion prototype.
+    groups: [code, archive]
+    lifecycle: archived
+    visibility: private
+    default: false
+    setup: bundle install
+    test: bundle exec rake
+    requires: [ruby, bundle, git]
+
+  - name: af-matcher-cli
+    github: dtnorris/af-matcher-cli
+    role: Completed direct-LLM recommendation experiment retained for reproducibility.
+    groups: [code, archive]
+    lifecycle: archived
+    visibility: private
+    default: false
+    setup: bundle install
+    test: bin/test
+    requires: [ruby, bundle, git]

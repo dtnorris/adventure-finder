@@ -1,0 +1,174 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "optparse"
+require "pathname"
+
+$LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
+require "adventure_finder_workspace"
+
+module AdventureFinderWorkspace
+  class CLI
+    def initialize(argv)
+      @argv = argv.dup
+      @manifest_path = Pathname(File.expand_path("../repos.yml", __dir__))
+    end
+
+    def run
+      command = @argv.shift
+      return usage(0) if command.nil? || %w[-h --help help].include?(command)
+
+      manifest = Manifest.new(@manifest_path)
+      case command
+      when "bootstrap" then bootstrap(manifest)
+      when "status"    then status(manifest)
+      when "sync"      then sync(manifest)
+      when "test"      then test(manifest)
+      when "doctor"    then doctor(manifest)
+      when "snapshot"  then snapshot(manifest)
+      else
+        warn "Unknown command: #{command}"
+        usage(2)
+      end
+    rescue Error => e
+      warn "ERROR: #{e.message}"
+      2
+    rescue OptionParser::ParseError => e
+      warn "ERROR: #{e.message}"
+      2
+    end
+
+    private
+
+    def common_options(manifest)
+      {
+        root: ENV.fetch("AF_PROJECT_ROOT", manifest.workspace_root_default),
+        all: false,
+        core: false
+      }
+    end
+
+    def add_selection_options(parser, options)
+      parser.on("--root PATH", "Workspace root (default: AF_PROJECT_ROOT or manifest default)") { |v| options[:root] = v }
+      parser.on("--all", "Include archived/experimental repositories") { options[:all] = true }
+      parser.on("--core", "Only repositories tagged core") { options[:core] = true }
+    end
+
+    def selected(manifest, options)
+      raise Error, "--all and --core are mutually exclusive" if options[:all] && options[:core]
+      manifest.selected(all: options[:all], core: options[:core])
+    end
+
+    def bootstrap(manifest)
+      options = common_options(manifest).merge(
+        protocol: ENV.fetch("AF_GIT_PROTOCOL", "ssh"),
+        setup: false
+      )
+      parser = OptionParser.new do |p|
+        p.banner = "Usage: bin/af-workspace bootstrap [options]"
+        add_selection_options(p, options)
+        p.on("--protocol PROTOCOL", %w[ssh https], "Clone protocol: ssh or https (default: ssh)") { |v| options[:protocol] = v }
+        p.on("--setup", "Run each repository's lightweight setup command after clone") { options[:setup] = true }
+      end
+      parser.parse!(@argv)
+
+      workspace = Workspace.new(manifest: manifest, root: options[:root])
+      workspace.bootstrap(repos: selected(manifest, options), protocol: options[:protocol], setup: options[:setup]) ? 0 : 1
+    end
+
+    def status(manifest)
+      options = common_options(manifest)
+      parser = OptionParser.new do |p|
+        p.banner = "Usage: bin/af-workspace status [options]"
+        add_selection_options(p, options)
+      end
+      parser.parse!(@argv)
+      Workspace.new(manifest: manifest, root: options[:root]).print_status(repos: selected(manifest, options))
+      0
+    end
+
+    def sync(manifest)
+      options = common_options(manifest)
+      parser = OptionParser.new do |p|
+        p.banner = "Usage: bin/af-workspace sync [options]"
+        add_selection_options(p, options)
+      end
+      parser.parse!(@argv)
+      Workspace.new(manifest: manifest, root: options[:root]).sync(repos: selected(manifest, options)) ? 0 : 1
+    end
+
+    def test(manifest)
+      options = common_options(manifest).merge(fail_fast: false)
+      parser = OptionParser.new do |p|
+        p.banner = "Usage: bin/af-workspace test [options]"
+        add_selection_options(p, options)
+        p.on("--fail-fast", "Stop after the first missing/failing suite") { options[:fail_fast] = true }
+      end
+      parser.parse!(@argv)
+      Workspace.new(manifest: manifest, root: options[:root]).test(
+        repos: selected(manifest, options),
+        fail_fast: options[:fail_fast]
+      ) ? 0 : 1
+    end
+
+    def doctor(manifest)
+      options = common_options(manifest).merge(strict: false)
+      parser = OptionParser.new do |p|
+        p.banner = "Usage: bin/af-workspace doctor [options]"
+        add_selection_options(p, options)
+        p.on("--strict", "Treat warnings (including missing optional runtime tools) as failure") { options[:strict] = true }
+      end
+      parser.parse!(@argv)
+      Workspace.new(manifest: manifest, root: options[:root]).doctor(
+        repos: selected(manifest, options),
+        strict: options[:strict]
+      ) ? 0 : 1
+    end
+
+    def snapshot(manifest)
+      options = common_options(manifest).merge(output: nil)
+      parser = OptionParser.new do |p|
+        p.banner = "Usage: bin/af-workspace snapshot [options]"
+        add_selection_options(p, options)
+        p.on("--output PATH", "Output YAML path (default: snapshots/<timestamp>.yml)") { |v| options[:output] = v }
+      end
+      parser.parse!(@argv)
+      output = options[:output] || File.join(
+        File.expand_path("..", __dir__),
+        "snapshots",
+        "workspace-#{Time.now.utc.strftime('%Y%m%dT%H%M%SZ')}.yml"
+      )
+      Workspace.new(manifest: manifest, root: options[:root]).snapshot(
+        repos: selected(manifest, options),
+        output_path: output
+      )
+      0
+    end
+
+    def usage(code)
+      puts <<~TEXT
+        AdventureFinder workspace orchestration
+
+        Usage:
+          bin/af-workspace bootstrap [--setup] [--core|--all]
+          bin/af-workspace status [--core|--all]
+          bin/af-workspace sync [--core|--all]
+          bin/af-workspace test [--fail-fast] [--core|--all]
+          bin/af-workspace doctor [--strict] [--core|--all]
+          bin/af-workspace snapshot [--output PATH] [--core|--all]
+
+        Defaults:
+          workspace root: AF_PROJECT_ROOT, otherwise /Users/davidnorris/code
+          repository set: current/default repos in repos.yml
+          clone protocol: AF_GIT_PROTOCOL, otherwise ssh
+
+        Safety:
+          sync always fetches first, skips pull on dirty/detached/no-upstream repos,
+          and only uses `git pull --ff-only`. It never resets, stashes, commits, or pushes.
+      TEXT
+      code
+    end
+  end
+end
+
+exit AdventureFinderWorkspace::CLI.new(ARGV).run
