@@ -267,23 +267,28 @@ module AdventureFinderWorkspace
         path = repo_path(repo)
 
         unless git_checkout?(path)
-          results << [name, :missing]
+          results << [name, :missing, nil]
           break if fail_fast
           next
         end
 
         out.puts
         out.puts "=== #{name}: #{repo['test']} ==="
+        started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
         ok = runner.shell(repo["test"], chdir: path, env: {"AF_PROJECT_ROOT" => root.to_s})
-        results << [name, ok ? :pass : :fail]
+        elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at
+        results << [name, ok ? :pass : :fail, elapsed]
         break if fail_fast && !ok
       end
 
       out.puts
       out.puts "=== AdventureFinder cross-repo test summary ==="
-      results.each { |name, result| out.puts format("%-30s %s", name, result.to_s.upcase) }
+      results.each do |name, result, elapsed|
+        duration = elapsed ? format("%.2fs", elapsed) : "-"
+        out.puts format("%-30s %-7s %8s", name, result.to_s.upcase, duration)
+      end
 
-      failures = results.select { |_name, result| result != :pass }
+      failures = results.select { |_name, result, _elapsed| result != :pass }
       out.puts "#{results.length - failures.length}/#{results.length} suites passed."
       failures.empty?
     end

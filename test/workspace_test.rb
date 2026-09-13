@@ -151,6 +151,32 @@ class AdventureFinderWorkspaceTest < Minitest::Test
     end
   end
 
+  def test_cross_repo_test_summary_includes_elapsed_seconds
+    runner_class = Class.new do
+      def shell(_command, chdir:, env: {})
+        true
+      end
+    end
+
+    repo = {"name" => "timed-suite", "test" => "bin/test"}
+
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "timed-suite", ".git"))
+
+      out = StringIO.new
+      workspace = AdventureFinderWorkspace::Workspace.new(
+        manifest: manifest,
+        root: dir,
+        runner: runner_class.new,
+        out: out,
+        err: StringIO.new
+      )
+
+      assert workspace.test(repos: [repo])
+      assert_match(/^timed-suite\s+PASS\s+\d+\.\d{2}s$/, out.string)
+    end
+  end
+
   def test_unknown_clone_protocol_fails_closed
     Dir.mktmpdir do |dir|
       workspace = AdventureFinderWorkspace::Workspace.new(
