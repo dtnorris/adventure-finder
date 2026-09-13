@@ -64,6 +64,30 @@ class AdventureFinderWorkspaceTest < Minitest::Test
     end
   end
 
+  def test_command_runner_uses_non_login_shell
+    runner_class = Class.new(AdventureFinderWorkspace::CommandRunner) do
+      attr_reader :invocation
+
+      def system(*argv, chdir: nil, env: {})
+        @invocation = {argv: argv, chdir: chdir, env: env}
+        true
+      end
+    end
+
+    runner = runner_class.new
+    runner.shell("echo ok", chdir: "/tmp", env: {"SENTINEL" => "present"})
+
+    assert_equal ["/bin/sh", "-c", "echo ok"], runner.invocation[:argv]
+    assert_equal({"SENTINEL" => "present"}, runner.invocation[:env])
+  end
+
+  def test_converter_tests_prepend_repo_local_virtualenv
+    %w[pdf-to-llm-md-converter image-to-pdf-converter].each do |name|
+      repo = manifest.repositories.find { |entry| entry["name"] == name }
+      assert_includes repo.fetch("test"), 'PATH="$PWD/.venv/bin:$PATH"'
+    end
+  end
+
   def test_unknown_clone_protocol_fails_closed
     Dir.mktmpdir do |dir|
       workspace = AdventureFinderWorkspace::Workspace.new(

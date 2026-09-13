@@ -115,6 +115,11 @@ Run the repository-owned test suite for each current/default code repository:
 bin/af-test
 ```
 
+Cross-repository commands deliberately run in a **non-login shell** so they inherit the
+operator's active PATH (for example mise/asdf/Homebrew Ruby) instead of silently falling
+back to macOS system Ruby. Converter test commands additionally prepend their own
+`.venv/bin` when present so repo-local Python dependencies remain repo-local.
+
 The default is sequential execution so failures remain easy to attribute and local
 resource use stays modest. Use:
 
@@ -138,8 +143,9 @@ Check the local workspace and important authorities:
 bin/af-doctor
 ```
 
-It checks required commands, reports missing runtime-specific commands, checks expected
-repository checkouts, verifies the canonical source registry exists, and—when
+It checks required commands (including the resolved executable path and useful runtime
+versions), reports missing runtime-specific commands, checks expected repository
+checkouts, verifies the canonical source registry exists, and—when
 `af-xlsx-data-sources` is present—reads the *live* `PROJECT_STATE.yml`, resolves
 `catalog_head`, and verifies that workbook's byte size and SHA-256.
 

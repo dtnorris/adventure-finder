@@ -94,7 +94,7 @@ repositories:
     visibility: public
     default: true
     setup: bundle install
-    test: bundle exec rake test
+    test: PATH="$PWD/.venv/bin:$PATH" bundle exec rake test
     requires: [ruby, bundle, git]
     optional_runtime_requires: [python3, pdfinfo, pdfseparate, pdftotext, pdftoppm, qpdf, tesseract, docling]
     notes:
@@ -108,7 +108,7 @@ repositories:
     visibility: public
     default: true
     setup: bundle install
-    test: rake test
+    test: PATH="$PWD/.venv/bin:$PATH" bundle exec rake test
     requires: [ruby, bundle, git]
     optional_runtime_requires: [python3, img2pdf]
     notes:

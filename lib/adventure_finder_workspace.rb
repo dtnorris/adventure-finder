@@ -94,7 +94,11 @@ module AdventureFinderWorkspace
     end
 
     def shell(command, chdir:, env: {})
-      system("/bin/sh", "-lc", command, chdir: chdir, env: env)
+      # Deliberately use a non-login shell. A login shell may rebuild PATH from
+      # profile files and silently replace the caller's mise/asdf/Homebrew
+      # runtimes with macOS system Ruby/Python. Workspace commands should run
+      # in the environment the operator actually invoked AdventureFinder from.
+      system("/bin/sh", "-c", command, chdir: chdir, env: env)
     end
   end
 
@@ -295,8 +299,8 @@ module AdventureFinderWorkspace
       out.puts
       out.puts "Required commands:"
       required.each do |command|
-        if command_available?(command)
-          out.puts "  PASS #{command}"
+        if (path = command_path(command))
+          out.puts "  PASS #{command} (#{path})#{version_suffix(command)}"
         else
           out.puts "  FAIL #{command}"
           errors << "missing required command: #{command}"
@@ -307,8 +311,8 @@ module AdventureFinderWorkspace
         out.puts
         out.puts "Optional/runtime-specific commands:"
         optional.each do |command|
-          if command_available?(command)
-            out.puts "  PASS #{command}"
+          if (path = command_path(command))
+            out.puts "  PASS #{command} (#{path})#{version_suffix(command)}"
           else
             out.puts "  WARN #{command}"
             warnings << "missing optional runtime command: #{command}"
@@ -399,7 +403,29 @@ module AdventureFinderWorkspace
     end
 
     def command_available?(command)
-      runner.capture("/bin/sh", "-lc", "command -v #{shell_escape(command)} >/dev/null 2>&1").success?
+      !command_path(command).nil?
+    end
+
+    def command_path(command)
+      result = runner.capture("/bin/sh", "-c", "command -v #{shell_escape(command)}")
+      return nil unless result.success?
+
+      path = result.stdout.lines.first.to_s.strip
+      path.empty? ? nil : path
+    end
+
+    def version_suffix(command)
+      argv = case command
+             when "ruby" then ["ruby", "--version"]
+             when "bundle" then ["bundle", "--version"]
+             when "git" then ["git", "--version"]
+             when "python3" then ["python3", "--version"]
+             end
+      return "" unless argv
+
+      result = runner.capture(*argv)
+      text = [result.stdout, result.stderr].join("\n").lines.map(&:strip).find { |line| !line.empty? }
+      text ? " — #{text}" : ""
     end
 
     def shell_escape(value)
