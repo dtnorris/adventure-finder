@@ -21,7 +21,7 @@ Required fields:
 Optional fields:
 
 ```yaml
-setup: bundle install
+setup: bin/setup
 test: bundle exec rake test
 requires: [ruby, bundle, git]
 optional_runtime_requires: [python3]
@@ -29,6 +29,12 @@ clone_depth: 1
 notes:
   - Important operational caveat.
 ```
+
+Prefer a repository-owned, idempotent `bin/setup` when setup is more than a single
+package-manager command. Mixed-runtime repositories should create their Python virtual
+environment inside that repository (normally `.venv`) and must not install Python
+packages globally. The workspace only dispatches the declared setup command; the
+component remains authoritative for how its dependencies are installed.
 
 ## Lifecycle
 

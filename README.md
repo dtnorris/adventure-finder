@@ -43,9 +43,11 @@ bin/af-doctor
 bin/af-test
 ```
 
-`--setup` intentionally does **not** install Homebrew packages, download Docling/model
-assets, create cloud resources, or run inference. Repositories with heavier runtime
-requirements retain those instructions in their own READMEs.
+`--setup` delegates dependency installation to each repository's own setup command.
+For mixed Ruby/Python converters, that includes creating or reusing a repository-local
+`.venv` and installing the component-owned Python dependencies there. It intentionally
+does **not** install Homebrew/system packages, download model assets, create cloud
+resources, or run inference.
 
 If HTTPS cloning is preferred:
 

@@ -93,12 +93,12 @@ repositories:
     lifecycle: current
     visibility: public
     default: true
-    setup: bundle install
+    setup: bin/setup
     test: PATH="$PWD/.venv/bin:$PATH" bundle exec rake test
     requires: [ruby, bundle, git]
-    optional_runtime_requires: [python3, pdfinfo, pdfseparate, pdftotext, pdftoppm, qpdf, tesseract, docling]
+    optional_runtime_requires: [python3, pdfinfo, pdfseparate, pdftotext, pdftoppm, qpdf, tesseract]
     notes:
-      - Python/Docling setup is intentionally not automated by this workspace; follow the repository README.
+      - bin/setup creates/reuses the repository-local .venv and installs Docling there; system tools remain external prerequisites.
 
   - name: image-to-pdf-converter
     github: dtnorris/image-to-pdf-converter
@@ -107,12 +107,12 @@ repositories:
     lifecycle: current
     visibility: public
     default: true
-    setup: bundle install
+    setup: bin/setup
     test: PATH="$PWD/.venv/bin:$PATH" bundle exec rake test
     requires: [ruby, bundle, git]
     optional_runtime_requires: [python3, img2pdf]
     notes:
-      - Python environment setup is intentionally not automated by this workspace; follow the repository README.
+      - bin/setup creates/reuses the repository-local .venv and installs the checked-in Python requirements there.
 
   - name: llm-response-data
     github: dtnorris/llm-response-data
