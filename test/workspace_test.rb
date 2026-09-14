@@ -27,6 +27,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
 
     assert_includes names, "af-data-pipeline"
     assert_includes names, "llm-response-data"
+    assert_includes names, "runpod-ollama-fleet"
     refute_includes names, "af-corpus-ingester-basics"
     refute_includes names, "af-matcher-cli"
     refute_includes names, "5e-tools-corpus-converter"
@@ -42,6 +43,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
     assert_includes names, "af-cli-scoring-utility"
     assert_includes names, "af-inference-orchestrator"
     assert_includes names, "af-frontier-pack"
+    refute_includes names, "runpod-ollama-fleet"
     refute_includes names, "llm-response-data"
   end
 

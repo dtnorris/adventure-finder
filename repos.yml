@@ -75,7 +75,7 @@ repositories:
     test: bundle exec rake test
     requires: [ruby, bundle, git]
     notes:
-      - Step-4 extraction target; keep opt-in until the LME-to-RPOF bridge cutover is proven.
+      - Current/default supporting infrastructure; intentionally not tagged core.
       - Owns provider mechanics only; AdventureFinder inference intent remains outside this repository.
 
   - name: af-frontier-pack

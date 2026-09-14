@@ -70,6 +70,12 @@ Clone missing repositories into the workspace root.
 Normal bootstrap includes current repositories marked `default: true` in `repos.yml`.
 It does not modify repositories that are already present.
 
+Because checkout paths derive from manifest names, the current topology expects
+`af-inference-orchestrator` and `runpod-ollama-fleet` as sibling checkout names
+under the workspace root. Both participate in normal default bootstrap. AFIO is
+tagged `core`; RPOF is current/default supporting infrastructure and is therefore
+omitted by `--core`.
+
 ```bash
 bin/af-bootstrap
 bin/af-bootstrap --setup
@@ -188,6 +194,7 @@ The machine-readable source of truth for this table is [`repos.yml`](repos.yml).
 | `af-data-pipeline` | current | Deterministic ingestion handoffs, AMC mutation, review, and finalization |
 | `af-cli-scoring-utility` | current | Source-grounded AFAO assessment/scoring evidence |
 | `af-inference-orchestrator` | current | AFIO local/remote inference and scoring orchestration |
+| `runpod-ollama-fleet` | current/supporting | RPOF RunPod/Ollama fleet lifecycle and generic remote dispatch |
 | `af-frontier-pack` | current | Deterministic frontier-model consumption bridge |
 | `af-cli-query-matcher` | current/supporting | AFPS parsing and deterministic filtering/ranking |
 | `pdf-to-llm-md-converter` | current | PDF → page-addressable Markdown |
@@ -239,6 +246,10 @@ owned published sources
           |                     |
           v                     v
 af-inference-orchestrator frontier reasoning
+          |
+          +---- optional remote execution ----> runpod-ollama-fleet
+          |                                      |
+          <----------- generic results ----------+
           |
           v
    llm-response-data
