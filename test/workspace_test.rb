@@ -241,6 +241,18 @@ class AdventureFinderWorkspaceTest < Minitest::Test
       assert workspace.test(repos: repos, jobs: 3)
       assert_equal 3, runner.max_active
 
+      start_lines = out.string.lines.grep(/^START \[/)
+      assert_equal repos.length, start_lines.length
+      start_lines.each_with_index do |line, index|
+        assert_match(/^START \[#{index + 1}\/#{repos.length}\] /, line)
+      end
+
+      running_position = out.string.index("Running 5 repository test suites with 3 jobs...")
+      first_start_position = out.string.index("START [1/5]")
+      first_header_position = out.string.index("=== suite-a: bin/test ===")
+      assert_operator running_position, :<, first_start_position
+      assert_operator first_start_position, :<, first_header_position
+
       header_positions = repos.map do |repo|
         out.string.index("=== #{repo.fetch('name')}: bin/test ===")
       end

@@ -399,6 +399,9 @@ module AdventureFinderWorkspace
     def run_tests_parallel(testable, jobs:)
       results = Array.new(testable.length)
       queue = Queue.new
+      progress_mutex = Mutex.new
+      started_count = 0
+      total_count = testable.length
       # Static duration hints are scheduling priorities only. Result slots stay
       # keyed to the original deterministic repository order, so parallel
       # execution starts long suites first without changing presentation order.
@@ -408,6 +411,9 @@ module AdventureFinderWorkspace
 
       worker_count = [jobs, testable.length].min
       worker_count.times { queue << nil }
+      out.puts "Running #{total_count} repository test suites with #{worker_count} jobs..."
+      out.flush if out.respond_to?(:flush)
+
       workers = Array.new(worker_count) do
         Thread.new do
           loop do
@@ -415,6 +421,11 @@ module AdventureFinderWorkspace
             break if item.nil?
 
             index, repo = item
+            progress_mutex.synchronize do
+              started_count += 1
+              print_test_start(repo, started: started_count, total: total_count)
+            end
+
             results[index] = run_test_repo(repo, capture: true)
           end
         end
@@ -496,6 +507,17 @@ module AdventureFinderWorkspace
       out.puts format("%-30s %8d", "Test jobs:", jobs)
       out.puts format("%-30s %8s", "Cumulative suite time:", format("%.2fs", cumulative_elapsed))
       out.puts format("%-30s %8s", "Workspace wall time:", format("%.2fs", workspace_elapsed))
+    end
+
+    def print_test_start(repo, started:, total:)
+      hint = test_duration_hint_seconds(repo)
+      hint_text = hint.positive? ? format("  ~%.2fs hint", hint) : ""
+
+      out.puts format(
+        "START [%d/%d] %-30s%s",
+        started, total, repo.fetch("name"), hint_text
+      )
+      out.flush if out.respond_to?(:flush)
     end
 
     def prioritized_testables(testable)
