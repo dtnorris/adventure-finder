@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adventurefinder.local/contracts/afio-rpof/v0.1/dispatch-summary.schema.json",
+  "title": "AFIO RPOF dispatch summary v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "fleet_key",
+    "fleet_id",
+    "started_at_utc",
+    "finished_at_utc",
+    "status",
+    "worker_count",
+    "job_count",
+    "completed_count",
+    "failed_count",
+    "not_started_count",
+    "not_started_job_ids",
+    "infrastructure_failures",
+    "jobs"
+  ],
+  "properties": {
+    "contract_version": {
+      "const": "afio-rpof-dispatch-summary/v0.1"
+    },
+    "fleet_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    },
+    "fleet_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "started_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "finished_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "status": {
+      "enum": [
+        "completed",
+        "workload_failed",
+        "infrastructure_failed",
+        "integrity_failed",
+        "interrupted"
+      ]
+    },
+    "worker_count": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "job_count": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "completed_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "failed_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "not_started_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "not_started_job_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+      }
+    },
+    "infrastructure_failures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "worker_index",
+          "at_utc",
+          "error"
+        ],
+        "properties": {
+          "worker_index": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "at_utc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "error": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "jobs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "job_id",
+          "worker_index",
+          "started_at_utc",
+          "finished_at_utc",
+          "elapsed_seconds",
+          "status",
+          "exit_status",
+          "stdout_path",
+          "stderr_path"
+        ],
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          },
+          "worker_index": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "started_at_utc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finished_at_utc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "elapsed_seconds": {
+            "type": "number",
+            "minimum": 0
+          },
+          "status": {
+            "enum": [
+              "completed",
+              "failed"
+            ]
+          },
+          "exit_status": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "stdout_path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "stderr_path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "error": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "integrity_errors": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}

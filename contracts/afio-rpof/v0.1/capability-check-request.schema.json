@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adventurefinder.local/contracts/afio-rpof/v0.1/capability-check-request.schema.json",
+  "title": "AFIO RPOF capability check request v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "fleet_key",
+    "worker_selector",
+    "requirements"
+  ],
+  "properties": {
+    "contract_version": {
+      "const": "afio-rpof-capability-check-request/v0.1"
+    },
+    "fleet_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    },
+    "worker_selector": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ],
+          "properties": {
+            "mode": {
+              "const": "all"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "indices"
+          ],
+          "properties": {
+            "mode": {
+              "const": "indices"
+            },
+            "indices": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "requirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "models",
+        "required_context_length",
+        "require_fully_gpu_resident"
+      ],
+      "properties": {
+        "models": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "expected_digest": {
+                "type": "string",
+                "pattern": "^[0-9A-Fa-f]{64}$"
+              }
+            }
+          }
+        },
+        "required_context_length": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "require_fully_gpu_resident": {
+          "const": true
+        },
+        "required_gpu_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      }
+    }
+  }
+}
