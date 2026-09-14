@@ -187,7 +187,7 @@ The machine-readable source of truth for this table is [`repos.yml`](repos.yml).
 | `md-for-llm-book-content` | current/private | Canonical page-addressable source corpus plus `source_registry.yml` |
 | `af-data-pipeline` | current | Deterministic ingestion handoffs, AMC mutation, review, and finalization |
 | `af-cli-scoring-utility` | current | Source-grounded AFAO assessment/scoring evidence |
-| `local-model-eval` | current | Local/remote model-evaluation and scoring orchestration |
+| `af-inference-orchestrator` | current | AFIO local/remote inference and scoring orchestration |
 | `af-frontier-pack` | current | Deterministic frontier-model consumption bridge |
 | `af-cli-query-matcher` | current/supporting | AFPS parsing and deterministic filtering/ranking |
 | `pdf-to-llm-md-converter` | current | PDF → page-addressable Markdown |
@@ -238,7 +238,7 @@ owned published sources
  af-cli-scoring-utility    af-frontier-pack
           |                     |
           v                     v
-  local-model-eval        frontier reasoning
+af-inference-orchestrator frontier reasoning
           |
           v
    llm-response-data

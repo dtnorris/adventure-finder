@@ -40,7 +40,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
     assert_includes names, "md-for-llm-book-content"
     assert_includes names, "af-data-pipeline"
     assert_includes names, "af-cli-scoring-utility"
-    assert_includes names, "local-model-eval"
+    assert_includes names, "af-inference-orchestrator"
     assert_includes names, "af-frontier-pack"
     refute_includes names, "llm-response-data"
   end

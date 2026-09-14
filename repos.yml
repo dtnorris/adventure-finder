@@ -53,9 +53,9 @@ repositories:
     test: bundle exec rake test
     requires: [ruby, bundle, git]
 
-  - name: local-model-eval
-    github: dtnorris/local-model-eval
-    role: Local/remote model-evaluation and production scoring orchestration.
+  - name: af-inference-orchestrator
+    github: dtnorris/af-inference-orchestrator
+    role: AdventureFinder local/remote inference and production scoring orchestration.
     groups: [core, code, scoring]
     lifecycle: current
     visibility: public
