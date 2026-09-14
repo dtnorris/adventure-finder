@@ -64,6 +64,20 @@ repositories:
     test: bundle exec rake test
     requires: [ruby, bundle, git]
 
+  - name: runpod-ollama-fleet
+    github: dtnorris/runpod-ollama-fleet
+    role: RunPod/Ollama fleet lifecycle, readiness, safety, and generic remote dispatch.
+    groups: [code, scoring, infrastructure]
+    lifecycle: current
+    visibility: public
+    default: true
+    setup: bundle install
+    test: bundle exec rake test
+    requires: [ruby, bundle, git]
+    notes:
+      - Step-4 extraction target; keep opt-in until the LME-to-RPOF bridge cutover is proven.
+      - Owns provider mechanics only; AdventureFinder inference intent remains outside this repository.
+
   - name: af-frontier-pack
     github: dtnorris/af-frontier-pack
     role: Deterministic consumption bridge from canonical artifacts to frontier-model reasoning packs.
