@@ -10,6 +10,41 @@ require "yaml"
 require "adventure_finder_workspace"
 
 class AdventureFinderWorkspaceTest < Minitest::Test
+  FakeStatus = Struct.new(:successful) do
+    def success?
+      successful
+    end
+  end
+
+  class ParallelTestRunner
+    attr_reader :max_active
+
+    def initialize(fail_names: [], delay: 0.05)
+      @fail_names = fail_names
+      @delay = delay
+      @mutex = Mutex.new
+      @active = 0
+      @max_active = 0
+    end
+
+    def shell_capture(_command, chdir:, env: {})
+      name = File.basename(chdir.to_s)
+      @mutex.synchronize do
+        @active += 1
+        @max_active = [@max_active, @active].max
+      end
+
+      sleep @delay
+      AdventureFinderWorkspace::CommandRunner::Result.new(
+        stdout: "#{name} output\n",
+        stderr: "",
+        status: FakeStatus.new(!@fail_names.include?(name))
+      )
+    ensure
+      @mutex.synchronize { @active -= 1 }
+    end
+  end
+
   def manifest
     @manifest ||= AdventureFinderWorkspace::Manifest.new(
       Pathname(__dir__).join("..", "repos.yml")
@@ -176,7 +211,135 @@ class AdventureFinderWorkspaceTest < Minitest::Test
 
       assert workspace.test(repos: [repo])
       assert_match(/^timed-suite\s+PASS\s+\d+\.\d{2}s$/, out.string)
-      assert_match(/^1\/1 suites passed\.\s+\d+\.\d{2}s$/, out.string)
+      assert_match(/^1\/1 suites passed\.$/, out.string)
+      assert_match(/^Test jobs:\s+1$/, out.string)
+      assert_match(/^Cumulative suite time:\s+\d+\.\d{2}s$/, out.string)
+      assert_match(/^Workspace wall time:\s+\d+\.\d{2}s$/, out.string)
+    end
+  end
+
+  def test_parallel_cross_repo_tests_respect_job_limit_and_buffer_output_in_repo_order
+    repos = %w[suite-a suite-b suite-c suite-d suite-e].map do |name|
+      {"name" => name, "test" => "bin/test"}
+    end
+
+    Dir.mktmpdir do |dir|
+      repos.each do |repo|
+        FileUtils.mkdir_p(File.join(dir, repo.fetch("name"), ".git"))
+      end
+
+      runner = ParallelTestRunner.new
+      out = StringIO.new
+      workspace = AdventureFinderWorkspace::Workspace.new(
+        manifest: manifest,
+        root: dir,
+        runner: runner,
+        out: out,
+        err: StringIO.new
+      )
+
+      assert workspace.test(repos: repos, jobs: 3)
+      assert_equal 3, runner.max_active
+
+      header_positions = repos.map do |repo|
+        out.string.index("=== #{repo.fetch('name')}: bin/test ===")
+      end
+      refute_includes header_positions, nil
+      assert_equal header_positions.sort, header_positions
+      assert_match(/^5\/5 suites passed\.$/, out.string)
+      assert_match(/^Test jobs:\s+3$/, out.string)
+    end
+  end
+
+  def test_parallel_cross_repo_tests_prioritize_longest_duration_hints_deterministically
+    repos = [
+      {"name" => "suite-a", "test" => "bin/test", "test_duration_hint_seconds" => 1.0},
+      {"name" => "suite-b", "test" => "bin/test", "test_duration_hint_seconds" => 5.0},
+      {"name" => "suite-c", "test" => "bin/test", "test_duration_hint_seconds" => 4.0},
+      {"name" => "suite-d", "test" => "bin/test", "test_duration_hint_seconds" => 3.0},
+      {"name" => "suite-e", "test" => "bin/test", "test_duration_hint_seconds" => 2.0}
+    ]
+
+    workspace = AdventureFinderWorkspace::Workspace.new(
+      manifest: manifest,
+      root: Dir.tmpdir,
+      out: StringIO.new,
+      err: StringIO.new
+    )
+
+    prioritized = workspace.send(:prioritized_testables, repos)
+
+    assert_equal(
+      %w[suite-b suite-c suite-d suite-e suite-a],
+      prioritized.map { |repo, _index| repo.fetch("name") }
+    )
+    assert_equal [1, 2, 3, 4, 0], prioritized.map { |_repo, index| index }
+  end
+
+  def test_parallel_cross_repo_tests_aggregate_failures
+    repos = %w[suite-a suite-b suite-c].map do |name|
+      {"name" => name, "test" => "bin/test"}
+    end
+
+    Dir.mktmpdir do |dir|
+      repos.each do |repo|
+        FileUtils.mkdir_p(File.join(dir, repo.fetch("name"), ".git"))
+      end
+
+      out = StringIO.new
+      workspace = AdventureFinderWorkspace::Workspace.new(
+        manifest: manifest,
+        root: dir,
+        runner: ParallelTestRunner.new(fail_names: ["suite-b"], delay: 0.01),
+        out: out,
+        err: StringIO.new
+      )
+
+      refute workspace.test(repos: repos, jobs: 2)
+      assert_match(/^suite-a\s+PASS\s+\d+\.\d{2}s$/, out.string)
+      assert_match(/^suite-b\s+FAIL\s+\d+\.\d{2}s$/, out.string)
+      assert_match(/^suite-c\s+PASS\s+\d+\.\d{2}s$/, out.string)
+      assert_match(/^2\/3 suites passed\.$/, out.string)
+    end
+  end
+
+  def test_parallel_cross_repo_tests_report_missing_repositories
+    repos = [
+      {"name" => "present-suite", "test" => "bin/test"},
+      {"name" => "missing-suite", "test" => "bin/test"}
+    ]
+
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "present-suite", ".git"))
+
+      out = StringIO.new
+      workspace = AdventureFinderWorkspace::Workspace.new(
+        manifest: manifest,
+        root: dir,
+        runner: ParallelTestRunner.new(delay: 0.01),
+        out: out,
+        err: StringIO.new
+      )
+
+      refute workspace.test(repos: repos, jobs: 2)
+      assert_match(/^missing-suite\s+MISSING\s+-$/, out.string)
+      assert_match(/^1\/2 suites passed\.$/, out.string)
+    end
+  end
+
+  def test_parallel_cross_repo_test_validation_rejects_invalid_job_settings
+    workspace = AdventureFinderWorkspace::Workspace.new(
+      manifest: manifest,
+      root: Dir.tmpdir,
+      out: StringIO.new,
+      err: StringIO.new
+    )
+
+    assert_raises(AdventureFinderWorkspace::Error) do
+      workspace.test(repos: [], jobs: 0)
+    end
+    assert_raises(AdventureFinderWorkspace::Error) do
+      workspace.test(repos: [], jobs: 2, fail_fast: true)
     end
   end
 

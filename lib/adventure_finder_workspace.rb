@@ -4,6 +4,7 @@ require "digest"
 require "fileutils"
 require "open3"
 require "pathname"
+require "thread"
 require "time"
 require "yaml"
 
@@ -100,9 +101,18 @@ module AdventureFinderWorkspace
       # in the environment the operator actually invoked AdventureFinder from.
       system("/bin/sh", "-c", command, chdir: chdir, env: env)
     end
+
+    def shell_capture(command, chdir:, env: {})
+      options = {}
+      options[:chdir] = chdir.to_s if chdir
+      output, status = Open3.capture2e(env, "/bin/sh", "-c", command, **options)
+      Result.new(stdout: output, stderr: "", status: status)
+    end
   end
 
   class Workspace
+    TestResult = Struct.new(:name, :command, :result, :elapsed, :output, keyword_init: true)
+
     attr_reader :manifest, :root, :runner, :out, :err
 
     def initialize(manifest:, root:, runner: CommandRunner.new, out: $stdout, err: $stderr)
@@ -258,42 +268,23 @@ module AdventureFinderWorkspace
       failures.empty?
     end
 
-    def test(repos:, fail_fast: false)
+    def test(repos:, fail_fast: false, jobs: 1)
+      unless jobs.is_a?(Integer) && jobs >= 1
+        raise Error, "jobs must be an integer >= 1"
+      end
+      raise Error, "fail_fast requires jobs: 1" if fail_fast && jobs != 1
+
       testable = repos.select { |repo| repo["test"] }
-      results = []
+      workspace_started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      results = if jobs == 1
+                  run_tests_serial(testable, fail_fast: fail_fast)
+                else
+                  run_tests_parallel(testable, jobs: jobs)
+                end
+      workspace_elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - workspace_started_at
 
-      testable.each do |repo|
-        name = repo.fetch("name")
-        path = repo_path(repo)
-
-        unless git_checkout?(path)
-          results << [name, :missing, nil]
-          break if fail_fast
-          next
-        end
-
-        out.puts
-        out.puts "=== #{name}: #{repo['test']} ==="
-        started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-        ok = runner.shell(repo["test"], chdir: path, env: {"AF_PROJECT_ROOT" => root.to_s})
-        elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at
-        results << [name, ok ? :pass : :fail, elapsed]
-        break if fail_fast && !ok
-      end
-
-      out.puts
-      out.puts "=== AdventureFinder cross-repo test summary ==="
-      results.each do |name, result, elapsed|
-        duration = elapsed ? format("%.2fs", elapsed) : "-"
-        out.puts format("%-30s %-7s %8s", name, result.to_s.upcase, duration)
-      end
-
-      failures = results.select { |_name, result, _elapsed| result != :pass }
-      passed = results.length - failures.length
-      total_elapsed = results.sum { |_name, _result, elapsed| elapsed || 0.0 }
-      summary = "#{passed}/#{results.length} suites passed."
-      out.puts format("%-38s %8s", summary, format("%.2fs", total_elapsed))
-      failures.empty?
+      print_test_summary(results, workspace_elapsed: workspace_elapsed, jobs: jobs)
+      results.all? { |result| result.result == :pass }
     end
 
     def doctor(repos:, strict: false)
@@ -392,6 +383,130 @@ module AdventureFinderWorkspace
     end
 
     private
+
+    def run_tests_serial(testable, fail_fast:)
+      results = []
+
+      testable.each do |repo|
+        result = run_test_repo(repo, capture: false)
+        results << result
+        break if fail_fast && result.result != :pass
+      end
+
+      results
+    end
+
+    def run_tests_parallel(testable, jobs:)
+      results = Array.new(testable.length)
+      queue = Queue.new
+      # Static duration hints are scheduling priorities only. Result slots stay
+      # keyed to the original deterministic repository order, so parallel
+      # execution starts long suites first without changing presentation order.
+      prioritized_testables(testable).each do |repo, index|
+        queue << [index, repo]
+      end
+
+      worker_count = [jobs, testable.length].min
+      worker_count.times { queue << nil }
+      workers = Array.new(worker_count) do
+        Thread.new do
+          loop do
+            item = queue.pop
+            break if item.nil?
+
+            index, repo = item
+            results[index] = run_test_repo(repo, capture: true)
+          end
+        end
+      end
+      workers.each(&:join)
+
+      results.each { |result| print_buffered_test_output(result) }
+      results
+    end
+
+    def run_test_repo(repo, capture:)
+      name = repo.fetch("name")
+      command = repo.fetch("test")
+      path = repo_path(repo)
+
+      unless git_checkout?(path)
+        return TestResult.new(
+          name: name,
+          command: command,
+          result: :missing,
+          elapsed: nil,
+          output: nil
+        )
+      end
+
+      unless capture
+        out.puts
+        out.puts "=== #{name}: #{command} ==="
+      end
+
+      started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      output = nil
+      ok = if capture
+             execution = runner.shell_capture(
+               command,
+               chdir: path,
+               env: {"AF_PROJECT_ROOT" => root.to_s}
+             )
+             output = execution.stdout
+             execution.success?
+           else
+             runner.shell(command, chdir: path, env: {"AF_PROJECT_ROOT" => root.to_s})
+           end
+      elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at
+
+      TestResult.new(
+        name: name,
+        command: command,
+        result: ok ? :pass : :fail,
+        elapsed: elapsed,
+        output: output
+      )
+    end
+
+    def print_buffered_test_output(result)
+      return if result.result == :missing
+
+      out.puts
+      out.puts "=== #{result.name}: #{result.command} ==="
+      return if result.output.to_s.empty?
+
+      out.print(result.output)
+      out.puts unless result.output.end_with?("\n")
+    end
+
+    def print_test_summary(results, workspace_elapsed:, jobs:)
+      out.puts
+      out.puts "=== AdventureFinder cross-repo test summary ==="
+      results.each do |result|
+        duration = result.elapsed ? format("%.2fs", result.elapsed) : "-"
+        out.puts format("%-30s %-7s %8s", result.name, result.result.to_s.upcase, duration)
+      end
+
+      failures = results.reject { |result| result.result == :pass }
+      passed = results.length - failures.length
+      cumulative_elapsed = results.sum { |result| result.elapsed || 0.0 }
+
+      out.puts "#{passed}/#{results.length} suites passed."
+      out.puts format("%-30s %8d", "Test jobs:", jobs)
+      out.puts format("%-30s %8s", "Cumulative suite time:", format("%.2fs", cumulative_elapsed))
+      out.puts format("%-30s %8s", "Workspace wall time:", format("%.2fs", workspace_elapsed))
+    end
+
+    def prioritized_testables(testable)
+      testable.each_with_index.sort_by do |repo, index|
+        [-test_duration_hint_seconds(repo), index]
+      end
+    end
+
+    def test_duration_hint_seconds(repo)
+      Float(repo.fetch("test_duration_hint_seconds", 0.0))
+    end
 
     def repo_path(repo)
       root / repo.fetch("name")

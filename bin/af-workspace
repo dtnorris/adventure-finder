@@ -98,16 +98,18 @@ module AdventureFinderWorkspace
     end
 
     def test(manifest)
-      options = common_options(manifest).merge(fail_fast: false)
+      options = common_options(manifest).merge(fail_fast: false, jobs: 1)
       parser = OptionParser.new do |p|
         p.banner = "Usage: bin/af-workspace test [options]"
         add_selection_options(p, options)
-        p.on("--fail-fast", "Stop after the first missing/failing suite") { options[:fail_fast] = true }
+        p.on("-j N", "--jobs N", Integer, "Run up to N repository test suites concurrently (default: 1)") { |v| options[:jobs] = v }
+        p.on("--fail-fast", "Stop after the first missing/failing suite (requires --jobs 1)") { options[:fail_fast] = true }
       end
       parser.parse!(@argv)
       Workspace.new(manifest: manifest, root: options[:root]).test(
         repos: selected(manifest, options),
-        fail_fast: options[:fail_fast]
+        fail_fast: options[:fail_fast],
+        jobs: options[:jobs]
       ) ? 0 : 1
     end
 
@@ -153,7 +155,7 @@ module AdventureFinderWorkspace
           bin/af-workspace bootstrap [--setup] [--core|--all]
           bin/af-workspace status [--core|--all]
           bin/af-workspace sync [--core|--all]
-          bin/af-workspace test [--fail-fast] [--core|--all]
+          bin/af-workspace test [-j N|--jobs N] [--fail-fast] [--core|--all]
           bin/af-workspace doctor [--strict] [--core|--all]
           bin/af-workspace snapshot [--output PATH] [--core|--all]
 
