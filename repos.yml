@@ -64,7 +64,7 @@ repositories:
     default: true
     setup: bundle install
     test: bundle exec rake test
-    test_duration_hint_seconds: 9.15
+    test_duration_hint_seconds: 5.25
     requires: [ruby, bundle, git]
 
   - name: runpod-ollama-fleet
