@@ -129,19 +129,44 @@ back to macOS system Ruby. Converter test commands additionally prepend their ow
 `.venv/bin` when present so repo-local Python dependencies remain repo-local.
 
 The default is sequential execution so failures remain easy to attribute and local
-resource use stays modest. Use:
+resource use stays modest. Parallel execution is opt-in with `--jobs N`; the four-job
+convenience wrapper is `bin/af-test-4`:
+
+```bash
+bin/af-test --jobs 4
+bin/af-test-4
+```
+
+Use serial fail-fast mode when the first failure is sufficient evidence to stop:
 
 ```bash
 bin/af-test --fail-fast
 ```
-
-when the first failure is sufficient evidence to stop.
 
 Archived and experimental suites are intentionally excluded unless requested:
 
 ```bash
 bin/af-test --all
 ```
+
+#### Install a global `af-test` command
+
+To run the four-job workspace test from any AdventureFinder sibling repository while
+leaving the shell in the directory where it started, install the user-level wrapper:
+
+```bash
+bin/install-af-test-command
+```
+
+The installer writes `~/bin/af-test` (or `$AF_USER_BIN/af-test` when that override is
+set) as a tiny wrapper pointing at this checkout's `bin/af-test-4`. It is idempotent
+and refuses to overwrite a different existing command. It does **not** edit shell
+startup files. If the install directory is not already on `PATH`, it prints the exact
+`export PATH=...` line to add.
+
+After installation, `af-test` can be run from any directory. Because the wrapper does
+not `cd`, the caller's current working directory is unchanged when the test run exits.
+If this `adventure-finder` checkout moves, rerun the installer from the new location.
 
 ### `bin/af-doctor`
 

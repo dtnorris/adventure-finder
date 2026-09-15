@@ -1,0 +1,54 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+TARGET="$SCRIPT_DIR/af-test-4"
+INSTALL_DIR="${AF_USER_BIN:-$HOME/bin}"
+COMMAND="$INSTALL_DIR/af-test"
+
+if [ ! -x "$TARGET" ]; then
+  echo "ERROR: expected executable not found: $TARGET" >&2
+  exit 1
+fi
+
+mkdir -p "$INSTALL_DIR"
+TMP="$COMMAND.tmp.$$"
+LEGACY_TMP="$COMMAND.legacy.tmp.$$"
+trap 'rm -f "$TMP" "$LEGACY_TMP"' EXIT HUP INT TERM
+
+cat > "$TMP" <<EOF_WRAPPER
+#!/bin/sh
+exec "$TARGET" "\$@"
+EOF_WRAPPER
+chmod +x "$TMP"
+
+cat > "$LEGACY_TMP" <<EOF_WRAPPER
+#!/bin/sh
+exec $TARGET "\$@"
+EOF_WRAPPER
+
+if [ -e "$COMMAND" ] || [ -L "$COMMAND" ]; then
+  if cmp -s "$TMP" "$COMMAND"; then
+    echo "af-test is already installed at $COMMAND"
+  elif cmp -s "$LEGACY_TMP" "$COMMAND"; then
+    echo "af-test is already installed at $COMMAND (compatible existing wrapper)"
+  else
+    echo "ERROR: $COMMAND already exists and differs from the AdventureFinder wrapper." >&2
+    echo "Move or remove it explicitly, then rerun this installer." >&2
+    exit 1
+  fi
+else
+  mv "$TMP" "$COMMAND"
+  echo "Installed af-test at $COMMAND"
+fi
+
+case ":$PATH:" in
+  *":$INSTALL_DIR:"*)
+    echo "Run 'af-test' from any directory."
+    ;;
+  *)
+    echo
+    echo "$INSTALL_DIR is not currently on PATH. Add this to your shell startup file:"
+    printf '  export PATH="%s:$PATH"\n' "$INSTALL_DIR"
+    ;;
+esac
