@@ -241,16 +241,21 @@ class AdventureFinderWorkspaceTest < Minitest::Test
       assert workspace.test(repos: repos, jobs: 3)
       assert_equal 3, runner.max_active
 
-      start_lines = out.string.lines.grep(/^START \[/)
+      start_lines = out.string.lines.grep(/^⠋ \[/)
       assert_equal repos.length, start_lines.length
       start_lines.each_with_index do |line, index|
-        assert_match(/^START \[#{index + 1}\/#{repos.length}\] /, line)
+        assert_match(/^⠋ \[#{index + 1}\/#{repos.length}\] /, line)
       end
 
+      completion_lines = out.string.lines.grep(/^✓ \[/)
+      assert_equal repos.length, completion_lines.length
+
       running_position = out.string.index("Running 5 repository test suites with 3 jobs...")
-      first_start_position = out.string.index("START [1/5]")
+      first_start_position = out.string.index("⠋ [1/5]")
+      first_completion_position = out.string.index("✓ [")
       first_header_position = out.string.index("=== suite-a: bin/test ===")
       assert_operator running_position, :<, first_start_position
+      assert_operator first_start_position, :<, first_completion_position
       assert_operator first_start_position, :<, first_header_position
 
       header_positions = repos.map do |repo|
@@ -312,6 +317,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
       assert_match(/^suite-b\s+FAIL\s+\d+\.\d{2}s$/, out.string)
       assert_match(/^suite-c\s+PASS\s+\d+\.\d{2}s$/, out.string)
       assert_match(/^2\/3 suites passed\.$/, out.string)
+      assert_match(/^✗ \[\d+\/3\] suite-b\s+\d+\.\d{2}s$/, out.string)
     end
   end
 

@@ -421,12 +421,19 @@ module AdventureFinderWorkspace
             break if item.nil?
 
             index, repo = item
+            start_number = nil
             progress_mutex.synchronize do
               started_count += 1
-              print_test_start(repo, started: started_count, total: total_count)
+              start_number = started_count
+              print_test_start(repo, started: start_number, total: total_count)
             end
 
-            results[index] = run_test_repo(repo, capture: true)
+            result = run_test_repo(repo, capture: true)
+            results[index] = result
+
+            progress_mutex.synchronize do
+              print_test_completion(result, started: start_number, total: total_count)
+            end
           end
         end
       end
@@ -514,8 +521,23 @@ module AdventureFinderWorkspace
       hint_text = hint.positive? ? format("  ~%.2fs hint", hint) : ""
 
       out.puts format(
-        "START [%d/%d] %-30s%s",
+        "⠋ [%d/%d] %-30s%s",
         started, total, repo.fetch("name"), hint_text
+      )
+      out.flush if out.respond_to?(:flush)
+    end
+
+    def print_test_completion(result, started:, total:)
+      marker = case result.result
+               when :pass then "✓"
+               when :fail then "✗"
+               else "!"
+               end
+      duration = result.elapsed ? format("%.2fs", result.elapsed) : "-"
+
+      out.puts format(
+        "%s [%d/%d] %-30s %8s",
+        marker, started, total, result.name, duration
       )
       out.flush if out.respond_to?(:flush)
     end
