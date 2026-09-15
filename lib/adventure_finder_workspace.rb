@@ -397,14 +397,14 @@ module AdventureFinderWorkspace
     end
 
     def run_tests_parallel(testable, jobs:)
-      results = Array.new(testable.length)
+      results = []
       queue = Queue.new
       progress_mutex = Mutex.new
       started_count = 0
       total_count = testable.length
-      # Static duration hints are scheduling priorities only. Result slots stay
-      # keyed to the original deterministic repository order, so parallel
-      # execution starts long suites first without changing presentation order.
+      # Static duration hints are scheduling priorities only. Result collection
+      # happens under the same mutex as completion reporting so buffered output
+      # and the final summary follow the visible completion order.
       prioritized_testables(testable).each do |repo, index|
         queue << [index, repo]
       end
@@ -420,7 +420,7 @@ module AdventureFinderWorkspace
             item = queue.pop
             break if item.nil?
 
-            index, repo = item
+            _index, repo = item
             start_number = nil
             progress_mutex.synchronize do
               started_count += 1
@@ -429,10 +429,10 @@ module AdventureFinderWorkspace
             end
 
             result = run_test_repo(repo, capture: true)
-            results[index] = result
 
             progress_mutex.synchronize do
               print_test_completion(result, started: start_number, total: total_count)
+              results << result
             end
           end
         end

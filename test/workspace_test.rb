@@ -218,7 +218,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
     end
   end
 
-  def test_parallel_cross_repo_tests_respect_job_limit_and_buffer_output_in_repo_order
+  def test_parallel_cross_repo_tests_respect_job_limit_and_buffer_output_in_completion_order
     repos = %w[suite-a suite-b suite-c suite-d suite-e].map do |name|
       {"name" => name, "test" => "bin/test"}
     end
@@ -249,20 +249,28 @@ class AdventureFinderWorkspaceTest < Minitest::Test
 
       completion_lines = out.string.lines.grep(/^✓ \[/)
       assert_equal repos.length, completion_lines.length
+      completion_names = completion_lines.map do |line|
+        line[/^✓ \[\d+\/\d+\] (\S+)/, 1]
+      end
 
       running_position = out.string.index("Running 5 repository test suites with 3 jobs...")
       first_start_position = out.string.index("⠋ [1/5]")
       first_completion_position = out.string.index("✓ [")
-      first_header_position = out.string.index("=== suite-a: bin/test ===")
+      first_header_position = out.string.index("=== #{completion_names.first}: bin/test ===")
       assert_operator running_position, :<, first_start_position
       assert_operator first_start_position, :<, first_completion_position
-      assert_operator first_start_position, :<, first_header_position
+      assert_operator first_completion_position, :<, first_header_position
 
-      header_positions = repos.map do |repo|
-        out.string.index("=== #{repo.fetch('name')}: bin/test ===")
+      header_names = out.string.lines.grep(/^=== suite-/).map do |line|
+        line[/^=== ([^:]+): /, 1]
       end
-      refute_includes header_positions, nil
-      assert_equal header_positions.sort, header_positions
+      assert_equal completion_names, header_names
+
+      summary = out.string.split("=== AdventureFinder cross-repo test summary ===\n", 2).last
+      summary_names = summary.lines.filter_map do |line|
+        line[/^(suite-\S+)\s+(?:PASS|FAIL|MISSING)\b/, 1]
+      end
+      assert_equal completion_names, summary_names
       assert_match(/^5\/5 suites passed\.$/, out.string)
       assert_match(/^Test jobs:\s+3$/, out.string)
     end
