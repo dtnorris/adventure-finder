@@ -518,7 +518,7 @@ module AdventureFinderWorkspace
 
     def print_test_start(repo, started:, total:)
       hint = test_duration_hint_seconds(repo)
-      hint_text = hint.positive? ? format("  ~%.2fs hint", hint) : ""
+      hint_text = hint.positive? ? format("  ~%ds", [hint.round, 1].max) : ""
 
       out.puts format(
         "⠋ [%d/%d] %-30s%s",

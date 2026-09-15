@@ -301,6 +301,34 @@ class AdventureFinderWorkspaceTest < Minitest::Test
     assert_equal [1, 2, 3, 4, 0], prioritized.map { |_repo, index| index }
   end
 
+  def test_parallel_test_start_renders_rounded_duration_hint
+    out = StringIO.new
+    workspace = AdventureFinderWorkspace::Workspace.new(
+      manifest: manifest,
+      root: Dir.tmpdir,
+      out: out,
+      err: StringIO.new
+    )
+
+    workspace.send(
+      :print_test_start,
+      {"name" => "suite-a", "test_duration_hint_seconds" => 9.15},
+      started: 1,
+      total: 2
+    )
+    workspace.send(
+      :print_test_start,
+      {"name" => "suite-b", "test_duration_hint_seconds" => 0.44},
+      started: 2,
+      total: 2
+    )
+
+    lines = out.string.lines
+    assert_match(/^⠋ \[1\/2\] suite-a\s+~9s$/, lines[0])
+    assert_match(/^⠋ \[2\/2\] suite-b\s+~1s$/, lines[1])
+    refute_match(/hint|\.\d+s/, out.string)
+  end
+
   def test_parallel_cross_repo_tests_aggregate_failures
     repos = %w[suite-a suite-b suite-c].map do |name|
       {"name" => name, "test" => "bin/test"}
