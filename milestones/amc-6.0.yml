@@ -1,0 +1,100 @@
+---
+schema_version: adventurefinder-historical-milestone/v0.1
+
+milestone:
+  id: amc-6.0
+  title: "AMC 6.0 — established 13-column production-scoring baseline complete"
+  reached_on: '2026-09-19'
+  status: historical
+  authority_note: >-
+    This file is a frozen historical record, not project-state authority. Moving
+    catalog roles remain authoritative only in af-xlsx-data-sources/PROJECT_STATE.yml.
+
+  completion:
+    adventure_catalog_records: 879
+    production_scoring_columns_complete: 13
+    populated_assessment_cells: 11427
+    scope_note: >-
+      Completion refers to the established 13 production-scoring columns on the
+      879 Adventure Catalog records. It does not assert complete population of all
+      19 AFAO dimensions or promotion of the deterministic matcher baseline.
+
+catalog_identity:
+  repository: dtnorris/af-xlsx-data-sources
+  repository_commit: 9b6897644dd3ca529600e5ea6d9b81ed821c8a54
+  catalog_promotion_commit: 9b6897644dd3ca529600e5ea6d9b81ed821c8a54
+  project_state:
+    path: PROJECT_STATE.yml
+    schema_version: adventurefinder-project-state/v0.2
+    git_blob_sha1: 27f6ada1886cba2c134da0faf7ff54a51c4f8dec
+    roles_at_milestone:
+      catalog_head: '6.0'
+      matcher_authorized_baseline: '4.1'
+      production_dependency_floor: '4.14'
+  artifact:
+    version: '6.0'
+    path: 5e_Adventure_Master_Catalog_6.0.xlsx
+    bytes: 295632
+    sha256: 56e071a90c0e5adef82c19775a0f358cb93df647470eb64153f251475dba0920
+    git_blob_sha1: 63411793b8f90094b93a87faf679d3cbf465281f
+
+governing_assessment_authorities:
+  analysis_ontology:
+    repository: dtnorris/md-specification-files
+    repository_commit: 0d9548c8c48998e14890b3c035a0f5f3869ca9a5
+    path: AdventureFinder_Analysis_Ontology_v1.6.1.md
+    version: '1.6.1'
+    git_blob_sha1: 063558d4a4139bca2584a20c23d0c25d432a0720
+  assessment_specification:
+    repository: dtnorris/md-specification-files
+    repository_commit: 0d9548c8c48998e14890b3c035a0f5f3869ca9a5
+    path: AdventureFinder_Analysis_Data_Assessment_Specification_v0.1.md
+    version: '0.1'
+    git_blob_sha1: 9fe0aac41a56aaaf056f1e84143dd7c0ef40b83d
+  source_registry:
+    repository: dtnorris/md-for-llm-book-content
+    repository_commit: 95fb8ab966094fd97a43e571152b210dfde62962
+    path: source_registry.yml
+    schema_version: adventurefinder-source-registry/v0.1
+    git_blob_sha1: a4702529a0d57402b6eb207ff3309994fd92aa28
+
+validation_at_milestone:
+  project_state_consumer_conformance:
+    result: PASS
+    suite_schema: adventurefinder-project-state-conformance/v0.1
+    project_state_schema: adventurefinder-project-state/v0.2
+    consumers:
+      af-data-pipeline: 9/9
+      af-cli-query-matcher: 9/9
+      af-frontier-pack: 9/9
+
+repository_heads_at_snapshot:
+  # adventure-finder cannot self-reference the commit that will contain this
+  # file; this is the exact basis commit on which the milestone patch was authored.
+  adventure-finder:
+    sha: 34c2d28c4db6369ba3034a63f862d7be0150dd13
+    role: snapshot_basis
+  md-specification-files:
+    sha: 0d9548c8c48998e14890b3c035a0f5f3869ca9a5
+  af-xlsx-data-sources:
+    sha: 9b6897644dd3ca529600e5ea6d9b81ed821c8a54
+  md-for-llm-book-content:
+    sha: 95fb8ab966094fd97a43e571152b210dfde62962
+  af-data-pipeline:
+    sha: 2d8a076f5ac30342b35fe750e4226d7dd71c9c96
+  af-cli-scoring-utility:
+    sha: 9721354b1e80ac9dc34376f1d8bd14d014e59805
+  af-inference-orchestrator:
+    sha: cf50ec2df5d634f0f302d56d541281059342688b
+  runpod-ollama-fleet:
+    sha: 34cf91ffb545653e97ad929b5e9f43c97e916f1b
+  af-frontier-pack:
+    sha: 27c2bd4aee1463d08137bb79ddc29d313e7c747f
+  af-cli-query-matcher:
+    sha: 8b11d2b6a3e91af5a658240a68d4568d0af7cad6
+  pdf-to-llm-md-converter:
+    sha: 4d0a960eb3fa4f2f921fc28dd33147c003bae942
+  image-to-pdf-converter:
+    sha: 7195d50d33b67cd43365a88d2a3bd8048e3e672e
+  llm-response-data:
+    sha: baf81c96c6ede557b5ae6f32c625e6e8ffac3099

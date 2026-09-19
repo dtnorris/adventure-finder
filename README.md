@@ -20,6 +20,16 @@ Only cross-repository concerns:
 It deliberately contains **no copied AMC workbook, book corpus, scoring semantics,
 matching semantics, or model evidence**.
 
+## Historical milestones
+
+**AMC 6.0 — September 19, 2026.** AMC 6.0 marks completion of the established
+13-column production-scoring baseline across all 879 Adventure Catalog records.
+The frozen cross-repository and artifact snapshot is recorded in
+[`milestones/amc-6.0.yml`](milestones/amc-6.0.yml).
+
+This is historical context only. Live catalog roles remain authoritative in
+`af-xlsx-data-sources/PROJECT_STATE.yml`.
+
 ## Quick start
 
 Assuming AdventureFinder repositories live under `/Users/davidnorris/code`:
