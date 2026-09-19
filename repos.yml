@@ -40,7 +40,7 @@ repositories:
     default: true
     setup: bundle install
     test: bundle exec rake test
-    test_duration_hint_seconds: 1.85
+    test_duration_hint_seconds: 3.71
     requires: [ruby, bundle, git]
 
   - name: af-cli-scoring-utility
@@ -52,7 +52,7 @@ repositories:
     default: true
     setup: bundle install
     test: bundle exec rake test
-    test_duration_hint_seconds: 1.07
+    test_duration_hint_seconds: 1.57
     requires: [ruby, bundle, git]
 
   - name: af-inference-orchestrator
@@ -64,7 +64,7 @@ repositories:
     default: true
     setup: bundle install
     test: bundle exec rake test
-    test_duration_hint_seconds: 5.25
+    test_duration_hint_seconds: 8.73
     requires: [ruby, bundle, git]
 
   - name: runpod-ollama-fleet
@@ -76,7 +76,7 @@ repositories:
     default: true
     setup: bundle install
     test: bundle exec rake test
-    test_duration_hint_seconds: 3.28
+    test_duration_hint_seconds: 9.22
     requires: [ruby, bundle, git]
     notes:
       - Current/default supporting infrastructure; intentionally not tagged core.
@@ -91,7 +91,7 @@ repositories:
     default: true
     setup: bundle install
     test: bundle exec rake
-    test_duration_hint_seconds: 0.44
+    test_duration_hint_seconds: 0.59
     requires: [ruby, bundle, git]
 
   - name: af-cli-query-matcher
@@ -103,7 +103,7 @@ repositories:
     default: true
     setup: bundle install
     test: bundle exec rake test
-    test_duration_hint_seconds: 1.56
+    test_duration_hint_seconds: 2.06
     requires: [ruby, bundle, git]
 
   - name: pdf-to-llm-md-converter
@@ -115,7 +115,7 @@ repositories:
     default: true
     setup: bin/setup
     test: PATH="$PWD/.venv/bin:$PATH" bundle exec rake test
-    test_duration_hint_seconds: 0.76
+    test_duration_hint_seconds: 0.86
     requires: [ruby, bundle, git]
     optional_runtime_requires: [python3, pdfinfo, pdfseparate, pdftotext, pdftoppm, qpdf, tesseract]
     notes:
@@ -130,7 +130,7 @@ repositories:
     default: true
     setup: bin/setup
     test: PATH="$PWD/.venv/bin:$PATH" bundle exec rake test
-    test_duration_hint_seconds: 1.31
+    test_duration_hint_seconds: 2.38
     requires: [ruby, bundle, git]
     optional_runtime_requires: [python3, img2pdf]
     notes:
