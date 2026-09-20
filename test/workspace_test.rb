@@ -215,6 +215,14 @@ class AdventureFinderWorkspaceTest < Minitest::Test
       assert_match(/^Test jobs:\s+1$/, out.string)
       assert_match(/^Cumulative suite time:\s+\d+\.\d{2}s$/, out.string)
       assert_match(/^Workspace wall time:\s+\d+\.\d{2}s$/, out.string)
+
+      history_files = Dir.glob(File.join(dir, "adventure-finder", "output", "af-test", "run-*.yml"))
+      assert_equal 1, history_files.length
+      history = YAML.safe_load(File.read(history_files.first), permitted_classes: [], aliases: false)
+      assert_equal AdventureFinderWorkspace::TEST_TIMING_HISTORY_SCHEMA_VERSION, history["schema_version"]
+      assert_equal 1, history["jobs"]
+      assert_equal "pass", history.dig("repositories", "timed-suite", "result")
+      assert_operator history.dig("repositories", "timed-suite", "elapsed_seconds"), :>=, 0.0
     end
   end
 
@@ -299,6 +307,53 @@ class AdventureFinderWorkspaceTest < Minitest::Test
       prioritized.map { |repo, _index| repo.fetch("name") }
     )
     assert_equal [1, 2, 3, 4, 0], prioritized.map { |_repo, index| index }
+  end
+
+  def test_parallel_cross_repo_tests_use_median_of_latest_three_timing_records
+    repos = [
+      {"name" => "suite-a", "test" => "bin/test", "test_duration_hint_seconds" => 20.0},
+      {"name" => "suite-b", "test" => "bin/test", "test_duration_hint_seconds" => 1.0}
+    ]
+
+    Dir.mktmpdir do |dir|
+      history_dir = File.join(dir, "adventure-finder", "output", "af-test")
+      FileUtils.mkdir_p(history_dir)
+      records = [
+        ["run-1.yml", {"suite-a" => 99.0, "suite-b" => 1.0}],
+        ["run-2.yml", {"suite-a" => 2.0, "suite-b" => 8.0}],
+        ["run-3.yml", {"suite-a" => 4.0, "suite-b" => 6.0}],
+        ["run-4.yml", {"suite-a" => 3.0, "suite-b" => 7.0}]
+      ]
+      records.each do |filename, timings|
+        payload = {
+          "schema_version" => AdventureFinderWorkspace::TEST_TIMING_HISTORY_SCHEMA_VERSION,
+          "repositories" => timings.transform_values do |elapsed|
+            {"result" => "pass", "elapsed_seconds" => elapsed}
+          end
+        }
+        File.write(File.join(history_dir, filename), payload.to_yaml)
+      end
+
+      out = StringIO.new
+      workspace = AdventureFinderWorkspace::Workspace.new(
+        manifest: manifest,
+        root: dir,
+        out: out,
+        err: StringIO.new
+      )
+      history = workspace.send(:load_test_duration_history)
+      workspace.instance_variable_set(:@test_duration_history, history)
+
+      assert_in_delta 3.0, workspace.send(:test_duration_hint_seconds, repos[0]), 0.001
+      assert_in_delta 7.0, workspace.send(:test_duration_hint_seconds, repos[1]), 0.001
+      prioritized = workspace.send(:prioritized_testables, repos)
+      assert_equal %w[suite-b suite-a], prioritized.map { |repo, _index| repo.fetch("name") }
+
+      workspace.send(:print_test_start, repos[0], started: 1, total: 2)
+      workspace.send(:print_test_start, repos[1], started: 2, total: 2)
+      assert_match(/^⠋ \[1\/2\] suite-a\s+~3s$/, out.string)
+      assert_match(/^⠋ \[2\/2\] suite-b\s+~7s$/, out.string)
+    end
   end
 
   def test_parallel_test_start_renders_rounded_duration_hint

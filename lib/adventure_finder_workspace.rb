@@ -10,6 +10,8 @@ require "yaml"
 
 module AdventureFinderWorkspace
   SCHEMA_VERSION = "adventurefinder-workspace/v0.1"
+  TEST_TIMING_HISTORY_SCHEMA_VERSION = "adventurefinder-test-timings/v0.1"
+  TEST_TIMING_HISTORY_LIMIT = 3
 
   class Error < StandardError; end
 
@@ -275,6 +277,7 @@ module AdventureFinderWorkspace
       raise Error, "fail_fast requires jobs: 1" if fail_fast && jobs != 1
 
       testable = repos.select { |repo| repo["test"] }
+      @test_duration_history = load_test_duration_history
       workspace_started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       results = if jobs == 1
                   run_tests_serial(testable, fail_fast: fail_fast)
@@ -284,6 +287,7 @@ module AdventureFinderWorkspace
       workspace_elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - workspace_started_at
 
       print_test_summary(results, workspace_elapsed: workspace_elapsed, jobs: jobs)
+      record_test_timing_history(results, workspace_elapsed: workspace_elapsed, jobs: jobs)
       results.all? { |result| result.result == :pass }
     end
 
@@ -402,7 +406,7 @@ module AdventureFinderWorkspace
       progress_mutex = Mutex.new
       started_count = 0
       total_count = testable.length
-      # Static duration hints are scheduling priorities only. Result collection
+      # Recent timing history (with manifest fallback) only sets scheduling priority. Result collection
       # happens under the same mutex as completion reporting so buffered output
       # and the final summary follow the visible completion order.
       prioritized_testables(testable).each do |repo, index|
@@ -549,7 +553,75 @@ module AdventureFinderWorkspace
     end
 
     def test_duration_hint_seconds(repo)
+      historical = @test_duration_history&.fetch(repo.fetch("name"), nil)
+      return median(historical) if historical && !historical.empty?
+
       Float(repo.fetch("test_duration_hint_seconds", 0.0))
+    end
+
+    def load_test_duration_history
+      history = Hash.new { |values, name| values[name] = [] }
+      paths = Dir.glob((test_timing_history_dir / "run-*.yml").to_s).sort.last(TEST_TIMING_HISTORY_LIMIT)
+
+      paths.each do |path|
+        begin
+          data = YAML.safe_load(File.read(path), permitted_classes: [], aliases: false)
+        rescue Psych::Exception, SystemCallError
+          next
+        end
+        next unless data.is_a?(Hash) && data["schema_version"] == TEST_TIMING_HISTORY_SCHEMA_VERSION
+
+        repositories = data["repositories"]
+        next unless repositories.is_a?(Hash)
+
+        repositories.each do |name, row|
+          next unless row.is_a?(Hash) && row["result"] == "pass"
+
+          begin
+            elapsed = Float(row["elapsed_seconds"])
+          rescue ArgumentError, TypeError
+            next
+          end
+          next unless elapsed.finite? && elapsed >= 0.0
+
+          history[name] << elapsed
+        end
+      end
+
+      history
+    end
+
+    def record_test_timing_history(results, workspace_elapsed:, jobs:)
+      directory = test_timing_history_dir
+      FileUtils.mkdir_p(directory)
+      payload = {
+        "schema_version" => TEST_TIMING_HISTORY_SCHEMA_VERSION,
+        "created_at" => Time.now.utc.iso8601(6),
+        "jobs" => jobs,
+        "workspace_elapsed_seconds" => workspace_elapsed.round(6),
+        "repositories" => results.each_with_object({}) do |result, repositories|
+          repositories[result.name] = {
+            "result" => result.result.to_s,
+            "elapsed_seconds" => result.elapsed&.round(6)
+          }
+        end
+      }
+      timestamp = Time.now.utc.strftime("%Y%m%dT%H%M%S.%6NZ")
+      (directory / "run-#{timestamp}.yml").write(payload.to_yaml)
+    rescue SystemCallError => e
+      err.puts "WARN: unable to record test timing history: #{e.message}"
+    end
+
+    def test_timing_history_dir
+      root / "adventure-finder" / "output" / "af-test"
+    end
+
+    def median(values)
+      sorted = values.sort
+      middle = sorted.length / 2
+      return sorted[middle] if sorted.length.odd?
+
+      (sorted[middle - 1] + sorted[middle]) / 2.0
     end
 
     def repo_path(repo)
