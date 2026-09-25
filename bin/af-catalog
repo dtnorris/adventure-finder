@@ -28,12 +28,28 @@ def stream_command(env, *command)
   status = nil
 
   Open3.popen2e(env, *command.map(&:to_s)) do |_stdin, output, wait_thread|
-    output.each_line do |line|
-      $stdout.write(line)
-      if (match = line.match(/\AConversion receipt:\s+(.+?)\s*\z/))
+    line_buffer = +""
+
+    begin
+      loop do
+        chunk = output.readpartial(4096)
+        $stdout.write(chunk)
+        $stdout.flush
+
+        line_buffer << chunk
+        while (newline = line_buffer.index("\n"))
+          line = line_buffer.slice!(0..newline)
+          if (match = line.match(/\AConversion receipt:\s+(.+?)\s*\z/))
+            receipt = Pathname.new(match[1]).expand_path
+          end
+        end
+      end
+    rescue EOFError
+      if (match = line_buffer.match(/\AConversion receipt:\s+(.+?)\s*\z/))
         receipt = Pathname.new(match[1]).expand_path
       end
     end
+
     status = wait_thread.value
   end
 
