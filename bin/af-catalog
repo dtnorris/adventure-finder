@@ -1,0 +1,98 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "open3"
+require "pathname"
+
+ROOT = Pathname.new(__dir__).join("..").expand_path
+CODE_ROOT = ROOT.parent
+
+PDF_CONVERTER_ROOT = Pathname.new(
+  ENV.fetch("AF_PDF_CONVERTER_ROOT", CODE_ROOT.join("pdf-to-llm-md-converter").to_s)
+).expand_path
+DATA_PIPELINE_ROOT = Pathname.new(
+  ENV.fetch("AF_DATA_PIPELINE_ROOT", CODE_ROOT.join("af-data-pipeline").to_s)
+).expand_path
+
+def abort_with(message, status = 1)
+  warn "af-catalog: #{message}"
+  exit status
+end
+
+def executable!(path, label)
+  abort_with("#{label} not found or not executable: #{path}") unless path.file? && path.executable?
+end
+
+def stream_command(env, *command)
+  receipt = nil
+  status = nil
+
+  Open3.popen2e(env, *command.map(&:to_s)) do |_stdin, output, wait_thread|
+    output.each_line do |line|
+      $stdout.write(line)
+      if (match = line.match(/\AConversion receipt:\s+(.+?)\s*\z/))
+        receipt = Pathname.new(match[1]).expand_path
+      end
+    end
+    status = wait_thread.value
+  end
+
+  [status, receipt]
+end
+
+pdf = ARGV.shift
+abort_with("usage: bin/af-catalog INPUT.pdf") unless pdf
+abort_with("unexpected arguments: #{ARGV.join(' ')}") unless ARGV.empty?
+
+pdf = Pathname.new(pdf).expand_path
+abort_with("input PDF does not exist: #{pdf}") unless pdf.file?
+abort_with("input must be a .pdf file: #{pdf}") unless pdf.extname.casecmp?(".pdf")
+
+converter = PDF_CONVERTER_ROOT.join("bin", "convert-cached")
+router = DATA_PIPELINE_ROOT.join("bin", "af-ingest-next")
+executable!(converter, "cached PDF converter")
+executable!(router, "ingestion next-action router")
+
+build_dir = PDF_CONVERTER_ROOT.join("build")
+venv_bin = PDF_CONVERTER_ROOT.join(".venv", "bin")
+env = {}
+if venv_bin.directory?
+  current_path = ENV.fetch("PATH", "")
+  env["PATH"] = [venv_bin.to_s, current_path].reject(&:empty?).join(File::PATH_SEPARATOR)
+end
+
+puts "AdventureFinder catalog ingest"
+puts "  PDF: #{pdf}"
+puts "  Converter: #{converter}"
+puts "  Router: #{router}"
+puts
+
+conversion_status, receipt = stream_command(
+  env,
+  converter,
+  pdf,
+  "--output-dir",
+  build_dir
+)
+
+unless receipt&.file?
+  abort_with(
+    "converter did not report a durable conversion receipt; " \
+    "conversion exit status was #{conversion_status.exitstatus}",
+    conversion_status.success? ? 1 : conversion_status.exitstatus
+  )
+end
+
+puts
+puts "Routing durable conversion state..."
+puts
+
+router_ok = system(router.to_s, receipt.to_s)
+router_status = $?
+
+unless router_ok
+  code = router_status&.exitstatus || 1
+  abort_with("ingestion router failed with exit status #{code}", code)
+end
+
+exit conversion_status.exitstatus unless conversion_status.success?
