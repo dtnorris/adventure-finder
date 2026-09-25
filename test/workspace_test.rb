@@ -412,6 +412,42 @@ class AdventureFinderWorkspaceTest < Minitest::Test
     end
   end
 
+  def test_cross_repo_test_summary_rolls_up_minitest_counts
+    result_class = Struct.new(:name, :result, :elapsed, :output, keyword_init: true)
+    results = [
+      result_class.new(
+        name: "suite-a",
+        result: :pass,
+        elapsed: 1.0,
+        output: <<~OUTPUT
+          10 runs, 20 assertions, 1 failures, 2 errors, 3 skips
+          4 runs, 8 assertions, 0 failures, 0 errors, 1 skips
+        OUTPUT
+      ),
+      result_class.new(
+        name: "suite-b",
+        result: :pass,
+        elapsed: 2.0,
+        output: "6 runs, 12 assertions, 2 failures, 1 errors, 0 skips\n"
+      )
+    ]
+    out = StringIO.new
+    workspace = AdventureFinderWorkspace::Workspace.new(
+      manifest: manifest,
+      root: Dir.tmpdir,
+      out: out,
+      err: StringIO.new
+    )
+
+    workspace.send(:print_test_summary, results, workspace_elapsed: 2.0, jobs: 2)
+
+    assert_match(/^Total runs:\s+20$/, out.string)
+    assert_match(/^Total assertions:\s+40$/, out.string)
+    assert_match(/^Total failures:\s+3$/, out.string)
+    assert_match(/^Total errors:\s+3$/, out.string)
+    assert_match(/^Total skips:\s+4$/, out.string)
+  end
+
   def test_parallel_cross_repo_tests_report_missing_repositories
     repos = [
       {"name" => "present-suite", "test" => "bin/test"},

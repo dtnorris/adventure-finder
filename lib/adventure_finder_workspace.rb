@@ -513,11 +513,41 @@ module AdventureFinderWorkspace
       failures = results.reject { |result| result.result == :pass }
       passed = results.length - failures.length
       cumulative_elapsed = results.sum { |result| result.elapsed || 0.0 }
+      minitest_totals = aggregate_minitest_totals(results)
 
       out.puts "#{passed}/#{results.length} suites passed."
+      out.puts format("%-30s %8d", "Total runs:", minitest_totals.fetch(:runs))
+      out.puts format("%-30s %8d", "Total assertions:", minitest_totals.fetch(:assertions))
+      out.puts format("%-30s %8d", "Total failures:", minitest_totals.fetch(:failures))
+      out.puts format("%-30s %8d", "Total errors:", minitest_totals.fetch(:errors))
+      out.puts format("%-30s %8d", "Total skips:", minitest_totals.fetch(:skips))
       out.puts format("%-30s %8d", "Test jobs:", jobs)
       out.puts format("%-30s %8s", "Cumulative suite time:", format("%.2fs", cumulative_elapsed))
       out.puts format("%-30s %8s", "Workspace wall time:", format("%.2fs", workspace_elapsed))
+    end
+
+    def aggregate_minitest_totals(results)
+      totals = {
+        runs: 0,
+        assertions: 0,
+        failures: 0,
+        errors: 0,
+        skips: 0
+      }
+
+      pattern = /\b(\d+) runs, (\d+) assertions, (\d+) failures, (\d+) errors, (\d+) skips\b/
+
+      results.each do |result|
+        result.output.to_s.scan(pattern) do |runs, assertions, failures, errors, skips|
+          totals[:runs] += Integer(runs)
+          totals[:assertions] += Integer(assertions)
+          totals[:failures] += Integer(failures)
+          totals[:errors] += Integer(errors)
+          totals[:skips] += Integer(skips)
+        end
+      end
+
+      totals
     end
 
     def print_test_start(repo, started:, total:)
