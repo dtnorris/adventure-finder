@@ -147,6 +147,12 @@ bin/af-test --jobs 4
 bin/af-test-4
 ```
 
+When more than one repository test worker is active, `af-test` automatically
+marks child suites as contended. Runtime-gated repositories use that context to
+apply their fixed contention allowance while retaining their stricter calibrated
+limits for serial `af-test` runs and direct repository `rake` runs. No caller
+flag is required.
+
 Use serial fail-fast mode when the first failure is sufficient evidence to stop:
 
 ```bash

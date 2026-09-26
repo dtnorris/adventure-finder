@@ -17,11 +17,12 @@ class AdventureFinderWorkspaceTest < Minitest::Test
   end
 
   class ParallelTestRunner
-    attr_reader :max_active
+    attr_reader :max_active, :envs
 
     def initialize(fail_names: [], delay: 0.05)
       @fail_names = fail_names
       @delay = delay
+      @envs = []
       @mutex = Mutex.new
       @active = 0
       @max_active = 0
@@ -31,6 +32,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
       name = File.basename(chdir.to_s)
       @mutex.synchronize do
         @active += 1
+        @envs << env.dup
         @max_active = [@max_active, @active].max
       end
 
@@ -55,6 +57,18 @@ class AdventureFinderWorkspaceTest < Minitest::Test
     assert_equal "adventurefinder-workspace/v0.1", manifest.data["schema_version"]
     names = manifest.repositories.map { |repo| repo.fetch("name") }
     assert_equal names.uniq.sort, names.sort
+  end
+
+  def test_repository_owned_safety_sweeps_use_default_rake_task
+    %w[
+      af-data-pipeline
+      af-inference-orchestrator
+      runpod-ollama-fleet
+    ].each do |name|
+      repo = manifest.repositories.find { |entry| entry.fetch("name") == name }
+
+      assert_equal "bundle exec rake", repo.fetch("test"), name
+    end
   end
 
   def test_default_selection_excludes_archived_and_experimental_repos
@@ -190,7 +204,10 @@ class AdventureFinderWorkspaceTest < Minitest::Test
 
   def test_cross_repo_test_summary_includes_elapsed_seconds
     runner_class = Class.new do
+      attr_reader :env
+
       def shell(_command, chdir:, env: {})
+        @env = env
         true
       end
     end
@@ -200,16 +217,18 @@ class AdventureFinderWorkspaceTest < Minitest::Test
     Dir.mktmpdir do |dir|
       FileUtils.mkdir_p(File.join(dir, "timed-suite", ".git"))
 
+      runner = runner_class.new
       out = StringIO.new
       workspace = AdventureFinderWorkspace::Workspace.new(
         manifest: manifest,
         root: dir,
-        runner: runner_class.new,
+        runner: runner,
         out: out,
         err: StringIO.new
       )
 
       assert workspace.test(repos: [repo])
+      refute_includes runner.env, "AF_TEST_CONTENDED"
       assert_match(/^timed-suite\s+PASS\s+\d+\.\d{2}s$/, out.string)
       assert_match(/^1\/1 suites passed\.$/, out.string)
       assert_match(/^Test jobs:\s+1$/, out.string)
@@ -248,6 +267,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
 
       assert workspace.test(repos: repos, jobs: 3)
       assert_equal 3, runner.max_active
+      assert runner.envs.all? { |env| env["AF_TEST_CONTENDED"] == "1" }
 
       start_lines = out.string.lines.grep(/^⠋ \[/)
       assert_equal repos.length, start_lines.length

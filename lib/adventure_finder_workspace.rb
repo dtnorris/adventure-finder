@@ -432,7 +432,7 @@ module AdventureFinderWorkspace
               print_test_start(repo, started: start_number, total: total_count)
             end
 
-            result = run_test_repo(repo, capture: true)
+            result = run_test_repo(repo, capture: true, contended: worker_count > 1)
 
             progress_mutex.synchronize do
               print_test_completion(result, started: start_number, total: total_count)
@@ -447,10 +447,12 @@ module AdventureFinderWorkspace
       results
     end
 
-    def run_test_repo(repo, capture:)
+    def run_test_repo(repo, capture:, contended: false)
       name = repo.fetch("name")
       command = repo.fetch("test")
       path = repo_path(repo)
+      test_env = {"AF_PROJECT_ROOT" => root.to_s}
+      test_env["AF_TEST_CONTENDED"] = "1" if contended
 
       unless git_checkout?(path)
         return TestResult.new(
@@ -473,12 +475,12 @@ module AdventureFinderWorkspace
              execution = runner.shell_capture(
                command,
                chdir: path,
-               env: {"AF_PROJECT_ROOT" => root.to_s}
+               env: test_env
              )
              output = execution.stdout
              execution.success?
            else
-             runner.shell(command, chdir: path, env: {"AF_PROJECT_ROOT" => root.to_s})
+             runner.shell(command, chdir: path, env: test_env)
            end
       elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at
 

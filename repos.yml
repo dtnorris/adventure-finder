@@ -39,7 +39,7 @@ repositories:
     visibility: private
     default: true
     setup: bundle install
-    test: bundle exec rake test
+    test: bundle exec rake
     test_duration_hint_seconds: 3.71
     requires: [ruby, bundle, git]
 
@@ -63,7 +63,7 @@ repositories:
     visibility: public
     default: true
     setup: bundle install
-    test: bundle exec rake test
+    test: bundle exec rake
     test_duration_hint_seconds: 8.73
     requires: [ruby, bundle, git]
 
@@ -75,7 +75,7 @@ repositories:
     visibility: public
     default: true
     setup: bundle install
-    test: bundle exec rake test
+    test: bundle exec rake
     test_duration_hint_seconds: 9.22
     requires: [ruby, bundle, git]
     notes:
