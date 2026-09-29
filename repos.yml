@@ -55,17 +55,30 @@ repositories:
     test_duration_hint_seconds: 1.57
     requires: [ruby, bundle, git]
 
-  - name: af-inference-orchestrator
-    github: dtnorris/af-inference-orchestrator
-    role: AdventureFinder local/remote inference and production scoring orchestration.
-    groups: [core, code, scoring]
+  - name: af-workloads
+    github: dtnorris/af-workloads
+    role: AdventureFinder scoring workloads, qualification semantics, and result interpretation.
+    groups: [core, code, scoring, workloads]
     lifecycle: current
     visibility: public
     default: true
     setup: bundle install
     test: bundle exec rake
-    test_duration_hint_seconds: 8.73
     requires: [ruby, bundle, git]
+
+  - name: workload-orchestrator
+    github: dtnorris/workload-orchestrator
+    role: Generic execution plans, worker placement, readiness, scheduling, and execution state.
+    groups: [code, execution, infrastructure]
+    lifecycle: current
+    visibility: public
+    default: true
+    setup: bundle install
+    test: bundle exec rake
+    requires: [ruby, bundle, git]
+    notes:
+      - Current/default supporting execution infrastructure; intentionally not tagged core.
+      - Executes opaque jobs; AdventureFinder workload semantics remain in af-workloads.
 
   - name: runpod-ollama-fleet
     github: dtnorris/runpod-ollama-fleet

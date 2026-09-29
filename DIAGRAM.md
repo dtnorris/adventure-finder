@@ -1,8 +1,12 @@
+This is the forward responsibility map. General legacy production paths remain during
+migration. Evidence still passes through `af-data-pipeline` review/adjudication before
+AMC promotion; this map does not change its current inference-root behavior.
+
 ```text
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
 │                         ADVENTUREFINDER WORKSPACE / CONTROL PLANE                       │
 │  adventure-finder                                                                       │
-│  PROJECT_STATE.yml • repo manifest • af-status • af-test • af-doctor • sync/snapshot    │
+│  repo manifest • af-status • af-test • af-doctor • sync/snapshot                        │
 └─────────────────────────────────────────────────────────────────────────────────────────┘
                                               │
                                               │ coordinates / verifies
@@ -51,7 +55,7 @@
 │                │                                                                         │
 │                ▼                                                                         │
 │                     af-xlsx-data-sources                                                 │
-│                     CANONICAL PROJECT STATE                                              │
+│                     CANONICAL PROJECT STATE: PROJECT_STATE.yml                           │
 │                     Adventure Master Catalog (AMC)                                       │
 │                     metadata + boundaries + accepted assessments                         │
 │                                                                                          │
@@ -68,19 +72,19 @@
 │  OWNS ADVENTUREFINDER MEANING                                                            │
 │                                                                                          │
 │  ├─ choose Adventure IDs / dimensions                                                    │
-│  ├─ qualified model + prompt/profile policy                                              │
-│  ├─ production backlog semantics                                                         │
-│  ├─ scoring-workload snapshots                                                           │
+│  ├─ qualified model + scoring-profile policy                                             │
+│  ├─ production workload + qualification / result interpretation                          │
+│  ├─ scoring-workload snapshots + human qualification adjudication                        │
 │  ├─ exact source / AMC / ontology provenance                                             │
 │  └─ compile work into generic executable jobs                                            │
 │                                                                                          │
 │  workloads/<id>/                                                                         │
 │  ├─ snapshot.yml                                                                         │
 │  ├─ case_index.csv                                                                       │
-│  ├─ execution-plan.json                                                                  │
-│  └─ cases/...                                                                            │
+│  └─ execution-plan.json (v0.2 logical plan)                                              │
+│  build/workloads/<id>/cases/... (generated; runtime/preflight alongside)                 │
 │                                                                                          │
-│                         │ opaque argv/env/worker/budget/output plan                      │
+│                         │ opaque argv/env + logical pools; placement via WLO profile     │
 │                         ▼                                                                │
 └─────────────────────────┼────────────────────────────────────────────────────────────────┘
                           │
@@ -97,11 +101,11 @@
 │  ├─ readiness                                                                            │
 │  ├─ resume / failure state                                                               │
 │  ├─ logs + execution provenance                                                          │
-│  ├─ circuit breakers                                                                     │
-│  └─ finite runtime / budget enforcement                                                  │
+│  ├─ audited retries / circuit breakers                                                   │
+│  └─ zero-cost admission; paid cost/runtime controls via guarded budget API               │
 │                                                                                          │
 │                  │                                    │                                  │
-│          DEFAULT / $0 PATH                     OPTIONAL REMOTE PATH                      │
+│          DEFAULT / $0 PATH                     OPTIONAL PROVIDER APIs                    │
 │                  │                                    │                                  │
 │                  ▼                                    ▼                                  │
 │        local worker / Ollama                 runpod-ollama-fleet (RPOF)                  │
@@ -115,8 +119,8 @@
 │                                                        ▼                                 │
 │                                               remote Ollama workers                      │
 │                                                                                          │
-│  NOTE: the new AFW→WLO local path is the forward path; the paid RPOF seam remains        │
-│  retained/legacy until the new architecture proves the remote integration end-to-end.    │
+│  NOTE: AFW→WLO local execution is the default forward path. RPOF readiness,              │
+│  guarded budget and capacity APIs exist; paid RPOF job-runner dispatch is blocked.       │
 │                                                                                          │
 └─────────────────────────┬────────────────────────────────────────────────────────────────┘
                           │ executes
@@ -124,7 +128,7 @@
 
 ┌────────────────────────────── SCORING EXECUTION ─────────────────────────────────────────┐
 │                                                                                          │
-│                    afw-score-job adapter                                                 │
+│                    AFW scoring / qualification job adapters (local commands)             │
 │                             │                                                            │
 │                             ▼                                                            │
 │                    af-cli-scoring-utility (AFSU)                                         │
@@ -133,7 +137,7 @@
 │  ├─ prompt construction                                                                  │
 │  ├─ frozen dimension rubric/profile                                                      │
 │  ├─ source submission                                                                    │
-│  ├─ model invocation                                                                     │
+│  ├─ model invocation against the selected Ollama endpoint                                │
 │  ├─ strict structured-output validation                                                  │
 │  └─ score + confidence + evidence                                                        │
 │                                                                                          │

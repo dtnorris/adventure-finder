@@ -57,12 +57,14 @@ class AdventureFinderWorkspaceTest < Minitest::Test
     assert_equal "adventurefinder-workspace/v0.1", manifest.data["schema_version"]
     names = manifest.repositories.map { |repo| repo.fetch("name") }
     assert_equal names.uniq.sort, names.sort
+    refute_includes names, "af-inference-orchestrator"
   end
 
   def test_repository_owned_safety_sweeps_use_default_rake_task
     %w[
       af-data-pipeline
-      af-inference-orchestrator
+      af-workloads
+      workload-orchestrator
       runpod-ollama-fleet
     ].each do |name|
       repo = manifest.repositories.find { |entry| entry.fetch("name") == name }
@@ -76,7 +78,10 @@ class AdventureFinderWorkspaceTest < Minitest::Test
 
     assert_includes names, "af-data-pipeline"
     assert_includes names, "llm-response-data"
+    assert_includes names, "af-workloads"
+    assert_includes names, "workload-orchestrator"
     assert_includes names, "runpod-ollama-fleet"
+    refute_includes names, "af-inference-orchestrator"
     refute_includes names, "af-corpus-ingester-basics"
     refute_includes names, "af-matcher-cli"
     refute_includes names, "5e-tools-corpus-converter"
@@ -90,10 +95,23 @@ class AdventureFinderWorkspaceTest < Minitest::Test
     assert_includes names, "md-for-llm-book-content"
     assert_includes names, "af-data-pipeline"
     assert_includes names, "af-cli-scoring-utility"
-    assert_includes names, "af-inference-orchestrator"
+    assert_includes names, "af-workloads"
+    refute_includes names, "workload-orchestrator"
     assert_includes names, "af-frontier-pack"
     refute_includes names, "runpod-ollama-fleet"
     refute_includes names, "llm-response-data"
+  end
+
+  def test_afw_and_wlo_setup_is_current_without_stale_timing_hints
+    %w[af-workloads workload-orchestrator].each do |name|
+      repo = manifest.repositories.find { |entry| entry.fetch("name") == name }
+
+      assert_equal "dtnorris/#{name}", repo.fetch("github")
+      assert_equal "current", repo.fetch("lifecycle")
+      assert_equal "bundle install", repo.fetch("setup")
+      assert_equal %w[ruby bundle git], repo.fetch("requires")
+      refute repo.key?("test_duration_hint_seconds"), name
+    end
   end
 
   def test_llm_response_data_is_shallow_by_default

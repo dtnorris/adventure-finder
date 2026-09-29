@@ -81,10 +81,11 @@ Normal bootstrap includes current repositories marked `default: true` in `repos.
 It does not modify repositories that are already present.
 
 Because checkout paths derive from manifest names, the current topology expects
-`af-inference-orchestrator` and `runpod-ollama-fleet` as sibling checkout names
-under the workspace root. Both participate in normal default bootstrap. AFIO is
-tagged `core`; RPOF is current/default supporting infrastructure and is therefore
-omitted by `--core`.
+`af-workloads`, `workload-orchestrator`, and `runpod-ollama-fleet` as sibling checkout
+names under the workspace root. All three participate in normal default bootstrap.
+AFW is tagged `core`. WLO is current/default supporting execution infrastructure;
+RPOF is current/default supporting remote-compute infrastructure. Both WLO and RPOF
+are omitted by `--core`. Remote compute remains optional at execution time.
 
 ```bash
 bin/af-bootstrap
@@ -234,8 +235,9 @@ The machine-readable source of truth for this table is [`repos.yml`](repos.yml).
 | `md-for-llm-book-content` | current/private | Canonical page-addressable source corpus plus `source_registry.yml` |
 | `af-data-pipeline` | current | Deterministic ingestion handoffs, AMC mutation, review, and finalization |
 | `af-cli-scoring-utility` | current | Source-grounded AFAO assessment/scoring evidence |
-| `af-inference-orchestrator` | current | AFIO local/remote inference and scoring orchestration |
-| `runpod-ollama-fleet` | current/supporting | RPOF RunPod/Ollama fleet lifecycle and generic remote dispatch |
+| `af-workloads` | current/core | AdventureFinder scoring workload construction, qualification semantics, and result interpretation |
+| `workload-orchestrator` | current/supporting | Generic plan validation, placement, readiness, scheduling, and execution state |
+| `runpod-ollama-fleet` | current/supporting | Optional RunPod/Ollama provider and fleet infrastructure |
 | `af-frontier-pack` | current | Deterministic frontier-model consumption bridge |
 | `af-cli-query-matcher` | current/supporting | AFPS parsing and deterministic filtering/ranking |
 | `pdf-to-llm-md-converter` | current | PDF → page-addressable Markdown |
@@ -247,73 +249,40 @@ The machine-readable source of truth for this table is [`repos.yml`](repos.yml).
 
 ## Architecture
 
-```text
-owned published sources
-        |
-        +----------------------------+
-        |                            |
-        | PDF / born-digital         | photographed physical pages
-        |                            |
-        |                            v
-        |                   image-to-pdf-converter
-        |                            |
-        +-------------+--------------+
-                      |
-                      v
-            pdf-to-llm-md-converter
-                      |
-                      v
-          md-for-llm-book-content
-         (canonical Markdown corpus
-          + source_registry.yml)
-                      |
-                      v
-              af-data-pipeline
-       deterministic intake / dossier
-                      |
-                      v
-        David + frontier-model review
-                      |
-                      v
-              af-data-pipeline
-       frozen boundary -> successor AMC
-                      |
-                      v
-             af-xlsx-data-sources
-        (canonical AMC + PROJECT_STATE)
-                 /            \
-                v              v
- af-cli-scoring-utility    af-frontier-pack
-          |                     |
-          v                     v
-af-inference-orchestrator frontier reasoning
-          |
-          +---- optional remote execution ----> runpod-ollama-fleet
-          |                                      |
-          <----------- generic results ----------+
-          |
-          v
-   llm-response-data
-   (evidence archive)
-          |
-          v
-    af-data-pipeline
-   review / acceptance
-          |
-          +-----------------------> canonical AMC
-
-Supporting deterministic selection path:
-
-natural-language request
-        |
-        v
-af-cli-query-matcher
-        |
-        v
-validated AFPS -> deterministic match/rank
+```mermaid
+flowchart TD
+    sources["Owned published sources"] -->|"PDF / born-digital"| pdf["pdf-to-llm-md-converter"]
+    sources -->|"Photographed pages"| photos["image-to-pdf-converter"]
+    photos --> pdf
+    pdf --> corpus["md-for-llm-book-content / source registry"]
+    corpus --> pipeline["af-data-pipeline: intake, review, AMC promotion"]
+    review["David + frontier-model adjudication"] --> pipeline
+    pipeline --> catalog["af-xlsx-data-sources: canonical AMC / PROJECT_STATE.yml"]
+    catalog --> afw["af-workloads: workload and qualification semantics"]
+    corpus --> afw
+    afw -->|"Opaque jobs / logical pools"| wlo["workload-orchestrator: generic execution"]
+    wlo -->|"Local command dispatch"| scorer["AFW scoring adapter → af-cli-scoring-utility"]
+    scorer -->|"Default inference"| local["Local Ollama worker"]
+    local -->|"Model response"| scorer
+    wlo -.->|"Readiness / guarded capacity APIs"| rpof["runpod-ollama-fleet: optional provider layer"]
+    rpof --> remote["Remote Ollama workers"]
+    scorer --> evidence["Scoring evidence / llm-response-data archive"]
+    evidence --> pipeline
+    catalog --> frontier["af-frontier-pack → frontier reasoning"]
 ```
 
+WLO treats jobs as opaque commands; Adventure IDs, dimensions, qualification policy,
+and result interpretation remain in AFW. The scoring utility owns prompt construction,
+rubrics and scoring output. The default forward path runs scoring commands locally
+against local Ollama; WLO also supports already-reachable zero-cost fixed endpoints.
+RPOF readiness and guarded capacity APIs exist, but paid RPOF job execution through
+the WLO runner is still blocked. The remote branch above is not a working paid-run path.
+
+Supporting deterministic selection remains `af-cli-query-matcher`: a natural-language
+request becomes validated AFPS and then deterministic filtering/ranking.
+
 This diagram describes responsibility and data flow, not Git dependency ownership.
+See [DIAGRAM.md](DIAGRAM.md) for the fuller ownership view.
 
 ## Authority and trust boundaries
 
