@@ -73,6 +73,30 @@ AF_PROJECT_ROOT=/another/path bin/af-status
 
 ## Commands
 
+### `bin/af-context`
+
+Resolve a registered production handle to frozen, explicit cross-repository context:
+
+```bash
+bin/af-context batch 39
+bin/af-context fleet A --json
+```
+
+The checked-in registry records explicit production roots, artifact paths, identities,
+and frozen hashes. It does not discover contexts from the current directory, shell
+variables, or numerically newest files. It only points at artifacts owned by AFW, WLO,
+RPOF, and the catalog authority; it does not replace those artifacts or their semantics.
+
+Use the read-only verifier when the production checkouts are mounted:
+
+```bash
+bin/af-context batch 39 --verify
+bin/af-context fleet A --verify
+```
+
+Verification checks path presence and the registered plan/campaign identity. It never
+starts work, creates resources, changes capacity, or writes provider state.
+
 ### `bin/af-bootstrap`
 
 Clone missing repositories into the workspace root.

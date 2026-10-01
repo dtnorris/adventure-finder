@@ -3,9 +3,11 @@
 
 require "optparse"
 require "pathname"
+require "json"
 
 $LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
 require "adventure_finder_workspace"
+require "adventure_finder_production_context"
 
 module AdventureFinderWorkspace
   class CLI
@@ -26,6 +28,7 @@ module AdventureFinderWorkspace
       when "test"      then test(manifest)
       when "doctor"    then doctor(manifest)
       when "snapshot"  then snapshot(manifest)
+      when "context"   then context
       else
         warn "Unknown command: #{command}"
         usage(2)
@@ -147,6 +150,31 @@ module AdventureFinderWorkspace
       0
     end
 
+    def context
+      options = {
+        registry: File.expand_path("../config/production_contexts.yml", __dir__),
+        json: false,
+        verify: false
+      }
+      parser = OptionParser.new do |p|
+        p.banner = "Usage: bin/af-context batch 39 [--json] [--verify]"
+        p.on("--registry PATH", "Production context registry") { |v| options[:registry] = v }
+        p.on("--json", "Emit machine-readable JSON") { options[:json] = true }
+        p.on("--verify", "Verify registered local artifacts without mutating them") { options[:verify] = true }
+      end
+      parser.parse!(@argv)
+      raise OptionParser::InvalidArgument, "expected HANDLE TYPE and NAME (for example: batch 39)" unless @argv.length == 2
+
+      type, name = @argv
+      registry = ProductionContextRegistry.new(options[:registry])
+      context = registry.resolve(type, name)
+      failures = options[:verify] ? registry.verify(type, name) : []
+      payload = context.merge("verification" => {"ok" => failures.empty?, "failures" => failures}) if options[:verify]
+      payload ||= context
+      puts(options[:json] ? JSON.pretty_generate(payload) : payload.to_yaml)
+      failures.empty? ? 0 : 1
+    end
+
     def usage(code)
       puts <<~TEXT
         AdventureFinder workspace orchestration
@@ -158,6 +186,8 @@ module AdventureFinderWorkspace
           bin/af-workspace test [-j N|--jobs N] [--fail-fast] [--core|--all]
           bin/af-workspace doctor [--strict] [--core|--all]
           bin/af-workspace snapshot [--output PATH] [--core|--all]
+          bin/af-context batch 39 [--json] [--verify]
+          bin/af-context fleet A [--json] [--verify]
 
         Defaults:
           workspace root: AF_PROJECT_ROOT, otherwise /Users/davidnorris/code

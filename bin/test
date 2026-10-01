@@ -1,4 +1,6 @@
 #!/bin/sh
 set -eu
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-exec ruby -I"$ROOT/lib" -I"$ROOT/test" "$ROOT/test/workspace_test.rb"
+exec ruby -I"$ROOT/lib" -I"$ROOT/test" -e \
+  'Dir[File.join(ARGV.fetch(0), "**", "*_test.rb")].sort.each { |path| require path }' \
+  "$ROOT/test"
