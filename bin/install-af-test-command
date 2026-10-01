@@ -2,7 +2,7 @@
 set -eu
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-TARGET="$SCRIPT_DIR/af-test-4"
+TARGET="$SCRIPT_DIR/af-test-3"
 INSTALL_DIR="${AF_USER_BIN:-$HOME/bin}"
 COMMAND="$INSTALL_DIR/af-test"
 
