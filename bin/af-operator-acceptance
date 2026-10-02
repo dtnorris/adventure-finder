@@ -1,0 +1,31 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "optparse"
+
+$LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
+require "adventure_finder_operator_acceptance"
+
+options = {root: nil, only: [], list: false}
+parser = OptionParser.new do |entry|
+  entry.banner = "Usage: bin/af-operator-acceptance [--root PATH] [--only NAME]"
+  entry.on("--root PATH", "Workspace root containing sibling component checkouts") { |value| options[:root] = value }
+  entry.on("--only NAME", "Run one named scenario (repeatable)") { |value| options[:only] << value }
+  entry.on("--list", "List scenario names without running them") { options[:list] = true }
+end
+
+begin
+  parser.parse!(ARGV)
+  raise OptionParser::InvalidArgument, "unexpected arguments: #{ARGV.join(' ')}" unless ARGV.empty?
+
+  harness = AdventureFinderWorkspace::OperatorAcceptance.new(workspace_root: options[:root])
+  if options[:list]
+    harness.scenarios.each { |scenario| puts "#{scenario.name}\t#{scenario.description}" }
+    exit 0
+  end
+
+  exit(harness.run(only: options[:only]) ? 0 : 1)
+rescue AdventureFinderWorkspace::Error, OptionParser::ParseError => e
+  warn "ERROR: #{e.message}"
+  exit 2
+end

@@ -9,3 +9,8 @@ Rake::TestTask.new do |task|
 end
 
 task default: :test
+
+desc "Run the offline cross-repository operator acceptance harness"
+task "test:operator_acceptance" do
+  sh File.expand_path("bin/af-operator-acceptance", __dir__)
+end

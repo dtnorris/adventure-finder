@@ -97,6 +97,36 @@ bin/af-context fleet A --verify
 Verification checks path presence and the registered plan/campaign identity. It never
 starts work, creates resources, changes capacity, or writes provider state.
 
+### `bin/af-operator-acceptance`
+
+Replay the production orchestration control paths with the component repositories'
+existing fake workers, fake provider, temporary state roots, and real CLI test seams:
+
+```bash
+bin/af-operator-acceptance
+```
+
+The harness resolves `adventure-finder`, `workload-orchestrator`, and
+`runpod-ollama-fleet` from the workspace root, strips provider credentials, and loads a
+TCP/HTTP network guard into every scenario process. It exercises registered production
+context resolution, dynamic READY-worker consumption, late capacity, local execution
+evidence, pause/resume behavior, observer/process-ownership boundaries, campaign
+admission and teardown, and representative fail-closed paths. It neither starts Ollama
+nor contacts RunPod or an inference endpoint.
+
+Use a different sibling-checkout root or select individual scenarios when diagnosing a
+failure:
+
+```bash
+AF_PROJECT_ROOT=/another/path bin/af-operator-acceptance
+bin/af-operator-acceptance --list
+bin/af-operator-acceptance --only wlo-rpof-publication
+```
+
+The equivalent Rake entrypoint is `rake test:operator_acceptance`. This acceptance task
+is intentionally separate from the repository's default unit suite because it requires
+the WLO and RPOF sibling checkouts and their already-installed Bundler dependencies.
+
 ### `bin/af-bootstrap`
 
 Clone missing repositories into the workspace root.
