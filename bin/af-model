@@ -1,0 +1,49 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "json"
+require "optparse"
+
+$LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
+require "adventure_finder_workspace"
+require "adventure_finder_model_preflight"
+
+options = {
+  registry: File.expand_path("../config/production_contexts.yml", __dir__),
+  root: ENV.fetch("AF_PROJECT_ROOT", "/Users/davidnorris/code"),
+  json: false
+}
+parser = OptionParser.new do |value|
+  value.banner = "Usage: bin/af-model preflight batch HANDLE ALIAS [--json]"
+  value.on("--registry PATH", "Production context registry") { |path| options[:registry] = path }
+  value.on("--root PATH", "Workspace root") { |path| options[:root] = path }
+  value.on("--json", "Emit deterministic JSON") { options[:json] = true }
+end
+
+begin
+  parser.parse!(ARGV)
+  unless ARGV.length == 4 && ARGV[0] == "preflight" && ARGV[1] == "batch"
+    raise OptionParser::InvalidArgument, "expected: preflight batch HANDLE ALIAS"
+  end
+  batch_handle, alias_name = ARGV.values_at(2, 3)
+  registry = AdventureFinderWorkspace::ProductionContextRegistry.new(options[:registry], workspace_root: options[:root])
+  result = AdventureFinderWorkspace::ModelPreflight.new(registry:).resolve(batch_handle:, alias_name:)
+  if options[:json]
+    puts JSON.pretty_generate(result)
+  else
+    ollama = result.fetch("ollama")
+    puts "Batch: #{result.fetch('batch_handle')} (#{result.fetch('production_batch_id')})"
+    puts "Pool: #{result.fetch('pool_id')}"
+    puts "Model: #{ollama.fetch('model')}"
+    puts "Digest: #{ollama.fetch('expected_digest')}"
+    puts "Context: #{ollama.fetch('required_context_length')}"
+    puts "Fully GPU resident: required"
+    puts "GPU: #{ollama.fetch('required_gpu_id', 'not constrained by plan')}"
+    puts "Plan: #{result.fetch('plan_id')}"
+    puts "Plan SHA: #{result.fetch('plan_sha256')}"
+  end
+  exit 0
+rescue AdventureFinderWorkspace::Error, OptionParser::ParseError => e
+  warn "ERROR: #{e.message}"
+  exit 2
+end

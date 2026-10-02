@@ -117,6 +117,7 @@ module AdventureFinderWorkspace
       require_nested_strings(context, "wlo", %w[repository_root output_root], "batch #{name}")
       require_nested_strings(context, "plan", %w[plan_id sha256], "batch #{name}")
       validate_sha256(context.dig("plan", "sha256"), "batch #{name} plan")
+      validate_model_aliases(context.fetch("model_aliases"), "batch #{name}") if context.key?("model_aliases")
       validate_relative_paths(context, PATH_FIELDS.fetch("batch"), "batch #{name}")
       require_string_array(context, "associated_fleets", "batch #{name}")
     end
@@ -203,6 +204,22 @@ module AdventureFinderWorkspace
       value = context[key]
       unless value.is_a?(Array) && value.all? { |item| item.is_a?(String) && !item.empty? } && value.uniq == value
         raise Error, "#{label}.#{key} must be an array of unique non-empty strings"
+      end
+    end
+
+    def validate_model_aliases(value, label)
+      require_mapping(value, "#{label}.model_aliases")
+      raise Error, "#{label}.model_aliases must not be empty" if value.empty?
+
+      value.each do |alias_name, pool_ids|
+        unless alias_name.is_a?(String) && !alias_name.empty? && alias_name == alias_name.strip
+          raise Error, "#{label}.model_aliases keys must be non-empty trimmed strings"
+        end
+        unless pool_ids.is_a?(Array) && !pool_ids.empty? &&
+               pool_ids.all? { |pool_id| pool_id.is_a?(String) && !pool_id.empty? && pool_id == pool_id.strip } &&
+               pool_ids.uniq == pool_ids
+          raise Error, "#{label}.model_aliases.#{alias_name} must name one or more unique pools"
+        end
       end
     end
 

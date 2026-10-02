@@ -15,6 +15,15 @@ contexts:
         plan_id: production-batch-039-fresh-20260930
         sha256: 0396dadb15bf0ca68238fd4f449ca99e58c3a4ee329dadc8a6e242f5da0ae5d1
         authority: af-workloads workload artifact
+      model_aliases:
+        qwen:
+          - qwen
+        qwen27:
+          - qwen27
+        gemma:
+          - gemma
+        gptoss:
+          - gptoss
       associated_fleets:
         - A
   fleet:

@@ -104,6 +104,22 @@ declaration through the campaign identity and budget declaration to the durable 
 hash. It never starts work, creates resources, changes capacity, or writes provider
 state.
 
+### `bin/af-model`
+
+Resolve a short model alias once against a frozen production plan without contacting a
+worker, provider, or inference endpoint:
+
+```bash
+bin/af-model preflight batch 39 qwen27
+bin/af-model preflight batch 39 qwen27 --json
+```
+
+Batch 39 registers `qwen`, `qwen27`, `gemma`, and `gptoss`, each pointing to the
+same-named exact AFW plan pool. The emitted artifact is bound to the batch identity,
+plan ID, plan SHA-256, and pool ID and copies the plan's exact Ollama model, digest,
+context, residency, optional GPU constraint, and labels. Aliases contain no model
+defaults and are never passed downstream for reinterpretation.
+
 ### `bin/af-operator-acceptance`
 
 Replay the production orchestration control paths with the component repositories'
