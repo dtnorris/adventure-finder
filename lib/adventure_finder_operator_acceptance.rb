@@ -53,6 +53,12 @@ module AdventureFinderWorkspace
         test_file: "test/operator_ux_test.rb"
       ),
       Scenario.new(
+        name: "wlo-foreground-cancellation",
+        description: "scoped child-tree cancellation contrasted with graceful pause draining",
+        repository: "workload-orchestrator",
+        test_file: "test/foreground_cancellation_test.rb"
+      ),
+      Scenario.new(
         name: "wlo-registry-failures",
         description: "stale, replayed, changed, and future-dated registry rejection",
         repository: "workload-orchestrator",
