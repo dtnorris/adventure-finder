@@ -82,10 +82,14 @@ bin/af-context batch 39
 bin/af-context fleet A --json
 ```
 
-The checked-in registry records explicit production roots, artifact paths, identities,
-and frozen hashes. It does not discover contexts from the current directory, shell
-variables, or numerically newest files. It only points at artifacts owned by AFW, WLO,
-RPOF, and the catalog authority; it does not replace those artifacts or their semantics.
+The checked-in registry records workspace-relative production roots, artifact paths,
+identities, and frozen hashes. Resolution uses `AF_PROJECT_ROOT`, or the manifest's
+default workspace root when the variable is unset, and returns absolute paths. It does
+not discover contexts from the current directory, shell variables other than the
+workspace-root override, or numerically newest files.
+
+Default output is a compact operator summary. Use `--json` for the complete,
+deterministic machine-readable context.
 
 Use the read-only verifier when the production checkouts are mounted:
 
@@ -94,8 +98,11 @@ bin/af-context batch 39 --verify
 bin/af-context fleet A --verify
 ```
 
-Verification checks path presence and the registered plan/campaign identity. It never
-starts work, creates resources, changes capacity, or writes provider state.
+Batch verification checks path presence plus the registered plan ID and SHA-256. Fleet
+verification follows RPOF's existing immutable chain from the normalized campaign
+declaration through the campaign identity and budget declaration to the durable binding
+hash. It never starts work, creates resources, changes capacity, or writes provider
+state.
 
 ### `bin/af-operator-acceptance`
 

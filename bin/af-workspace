@@ -28,7 +28,7 @@ module AdventureFinderWorkspace
       when "test"      then test(manifest)
       when "doctor"    then doctor(manifest)
       when "snapshot"  then snapshot(manifest)
-      when "context"   then context
+      when "context"   then context(manifest)
       else
         warn "Unknown command: #{command}"
         usage(2)
@@ -150,15 +150,17 @@ module AdventureFinderWorkspace
       0
     end
 
-    def context
+    def context(manifest)
       options = {
         registry: File.expand_path("../config/production_contexts.yml", __dir__),
+        root: common_options(manifest).fetch(:root),
         json: false,
         verify: false
       }
       parser = OptionParser.new do |p|
         p.banner = "Usage: bin/af-context batch 39 [--json] [--verify]"
         p.on("--registry PATH", "Production context registry") { |v| options[:registry] = v }
+        p.on("--root PATH", "Workspace root (default: AF_PROJECT_ROOT or manifest default)") { |v| options[:root] = v }
         p.on("--json", "Emit machine-readable JSON") { options[:json] = true }
         p.on("--verify", "Verify registered local artifacts without mutating them") { options[:verify] = true }
       end
@@ -166,13 +168,51 @@ module AdventureFinderWorkspace
       raise OptionParser::InvalidArgument, "expected HANDLE TYPE and NAME (for example: batch 39)" unless @argv.length == 2
 
       type, name = @argv
-      registry = ProductionContextRegistry.new(options[:registry])
+      registry = ProductionContextRegistry.new(options[:registry], workspace_root: options[:root])
       context = registry.resolve(type, name)
       failures = options[:verify] ? registry.verify(type, name) : []
       payload = context.merge("verification" => {"ok" => failures.empty?, "failures" => failures}) if options[:verify]
       payload ||= context
-      puts(options[:json] ? JSON.pretty_generate(payload) : payload.to_yaml)
+      if options[:json]
+        puts JSON.pretty_generate(payload)
+      else
+        render_context_human(type.downcase, name, payload)
+      end
       failures.empty? ? 0 : 1
+    end
+
+    def render_context_human(type, name, context)
+      case type
+      when "batch"
+        puts "Batch: #{name}"
+        puts "Workload: #{context.fetch('production_batch_id')}"
+        puts "AFW: #{context.dig('afw', 'repository_root')}"
+        puts "Plan: #{relative_context_path(context.dig('afw', 'plan_path'), context.dig('afw', 'repository_root'))}"
+        puts "Plan SHA: #{context.dig('plan', 'sha256')[0, 12]}…"
+        puts "WLO: #{context.dig('wlo', 'repository_root')}"
+        puts "Output: #{relative_context_path(context.dig('wlo', 'output_root'), context.dig('wlo', 'repository_root'))}"
+        puts "Fleet: #{context.fetch('associated_fleets').join(', ')}"
+      when "fleet"
+        puts "Fleet: #{name}"
+        puts "Campaign: #{context.fetch('campaign_id')}"
+        puts "RPOF: #{context.dig('rpof', 'repository_root')}"
+        puts "Campaign file: #{relative_context_path(context.dig('rpof', 'campaign_path'), context.dig('rpof', 'repository_root'))}"
+        puts "Budget: #{relative_context_path(context.dig('rpof', 'budget_path'), context.dig('rpof', 'repository_root'))}"
+        puts "State: #{relative_context_path(context.dig('rpof', 'state_root'), context.dig('rpof', 'repository_root'))}"
+        puts "Batch: #{context.fetch('associated_batches').join(', ')}"
+      end
+
+      verification = context["verification"]
+      return unless verification
+
+      puts "Verified: #{verification.fetch('ok') ? 'yes' : 'no'}"
+      verification.fetch("failures").each { |failure| puts "  - #{failure}" }
+    end
+
+    def relative_context_path(path, root)
+      Pathname(path).relative_path_from(Pathname(root)).to_s
+    rescue ArgumentError
+      path
     end
 
     def usage(code)

@@ -5,29 +5,26 @@ contexts:
     '39':
       production_batch_id: production-batch-039-fresh-20260930
       afw:
-        repository_root: /Users/davidnorris/code/af-workloads-production
-        workload_root: /Users/davidnorris/code/af-workloads-production/workloads/production-batch-039-fresh-20260930
-        plan_path: /Users/davidnorris/code/af-workloads-production/workloads/production-batch-039-fresh-20260930/execution-plan.json
+        repository_root: af-workloads-production
+        workload_root: af-workloads-production/workloads/production-batch-039-fresh-20260930
+        plan_path: af-workloads-production/workloads/production-batch-039-fresh-20260930/execution-plan.json
       wlo:
-        repository_root: /Users/davidnorris/code/workload-orchestrator-production
-        output_root: /Users/davidnorris/code/workload-orchestrator-production/output/production-batch-039-fresh-20260930
+        repository_root: workload-orchestrator-production
+        output_root: workload-orchestrator-production/output/production-batch-039-fresh-20260930
       plan:
         plan_id: production-batch-039-fresh-20260930
         sha256: 0396dadb15bf0ca68238fd4f449ca99e58c3a4ee329dadc8a6e242f5da0ae5d1
         authority: af-workloads workload artifact
-      catalog_provenance:
-        filename: 5e_Adventure_Master_Catalog_7.5.1.xlsx
-        sha256: cc75f029eda3c1b81b34223d690db2811edf81ba6c94c0f6a7bacbc94db8f73f
-        authority: af-xlsx-data-sources/PROJECT_STATE.yml catalog_head at registration
       associated_fleets:
         - A
   fleet:
     A:
       campaign_id: production-batch-039-fresh-20260930
       rpof:
-        repository_root: /Users/davidnorris/code/runpod-ollama-fleet-production
-        campaign_path: /Users/davidnorris/code/runpod-ollama-fleet-production/output/production-batch-039-fresh-20260930/campaign.json
-        budget_path: /Users/davidnorris/code/runpod-ollama-fleet-production/output/production-batch-039-fresh-20260930/budget.json
-        state_root: /Users/davidnorris/code/runpod-ollama-fleet-production/output/runpod-fleets
+        repository_root: runpod-ollama-fleet-production
+        campaign_path: runpod-ollama-fleet-production/output/production-batch-039-fresh-20260930/campaign.json
+        budget_path: runpod-ollama-fleet-production/output/production-batch-039-fresh-20260930/budget.json
+        state_root: runpod-ollama-fleet-production/output/runpod-fleets
+        binding_path: runpod-ollama-fleet-production/output/runpod-fleets/campaign-budgets/f1d7c02bf15a26d929d85e6abd34025b0f4a22d184ef9c8eeaf4f2e074323949/binding.json
       associated_batches:
         - '39'
