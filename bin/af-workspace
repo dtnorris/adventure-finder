@@ -8,6 +8,7 @@ require "json"
 $LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
 require "adventure_finder_workspace"
 require "adventure_finder_production_context"
+require "adventure_finder_diagnostics"
 
 module AdventureFinderWorkspace
   class CLI
@@ -117,6 +118,8 @@ module AdventureFinderWorkspace
     end
 
     def doctor(manifest)
+      return diagnostic_doctor(manifest) if Diagnostics::SUBJECT_TYPES.include?(@argv.first)
+
       options = common_options(manifest).merge(strict: false)
       parser = OptionParser.new do |p|
         p.banner = "Usage: bin/af-workspace doctor [options]"
@@ -128,6 +131,33 @@ module AdventureFinderWorkspace
         repos: selected(manifest, options),
         strict: options[:strict]
       ) ? 0 : 1
+    end
+
+    def diagnostic_doctor(manifest)
+      type = @argv.shift
+      options = {
+        registry: File.expand_path("../config/production_contexts.yml", __dir__),
+        root: common_options(manifest).fetch(:root), json: false, logs: false,
+        lines: nil
+      }
+      parser = OptionParser.new do |p|
+        p.banner = "Usage: bin/af-doctor job BATCH JOB|pod POD|fleet FLEET|campaign FLEET [options]"
+        p.on("--registry PATH", "Production context registry") { |v| options[:registry] = v }
+        p.on("--root PATH", "Workspace root") { |v| options[:root] = v }
+        p.on("--json", "Emit machine-readable JSON") { options[:json] = true }
+        p.on("--logs", "Show bounded retained evidence") { options[:logs] = true }
+        p.on("--lines N", Integer, "Tail N lines (maximum 200)") { |v| options[:lines] = v }
+      end
+      parser.parse!(@argv)
+      if options[:lines] && !options[:logs]
+        raise OptionParser::InvalidArgument, "--lines requires --logs"
+      end
+      diagnostics = Diagnostics.new(
+        registry_path: options[:registry], workspace_root: options[:root]
+      )
+      result = diagnostics.call(type, @argv, logs: options[:logs], lines: options[:lines])
+      options[:json] ? puts(JSON.pretty_generate(result)) : diagnostics.render(result, logs: options[:logs])
+      0
     end
 
     def snapshot(manifest)
@@ -225,6 +255,10 @@ module AdventureFinderWorkspace
           bin/af-workspace sync [--core|--all]
           bin/af-workspace test [-j N|--jobs N] [--fail-fast] [--core|--all]
           bin/af-workspace doctor [--strict] [--core|--all]
+          bin/af-doctor job 39 JOB [--logs] [--lines N] [--json]
+          bin/af-doctor pod POD [--logs] [--lines N] [--json]
+          bin/af-doctor fleet FLEET [--json]
+          bin/af-doctor campaign FLEET [--json]
           bin/af-workspace snapshot [--output PATH] [--core|--all]
           bin/af-context batch 39 [--json] [--verify]
           bin/af-context fleet A [--json] [--verify]
