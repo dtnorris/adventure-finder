@@ -7,7 +7,7 @@ require_relative "adventure_finder_workspace"
 
 module AdventureFinderWorkspace
   class OperatorAcceptance
-    Scenario = Struct.new(:name, :description, :repository, :test_file, keyword_init: true)
+    Scenario = Struct.new(:name, :description, :repository, :test_file, :bundle_repository, keyword_init: true)
     Result = Struct.new(:scenario, :output, :status, keyword_init: true) do
       def success?
         status.success?
@@ -20,6 +20,13 @@ module AdventureFinderWorkspace
         description: "registered batch/fleet resolution and fail-closed verification",
         repository: "adventure-finder",
         test_file: "test/production_context_test.rb"
+      ),
+      Scenario.new(
+        name: "operator-lifecycle",
+        description: "one coherent portable-context, campaign, publication, WLO, and teardown replay",
+        repository: "adventure-finder",
+        test_file: "test/integration/operator_lifecycle_test.rb",
+        bundle_repository: "runpod-ollama-fleet"
       ),
       Scenario.new(
         name: "wlo-dynamic-cli",
@@ -46,6 +53,12 @@ module AdventureFinderWorkspace
         test_file: "test/operator_ux_test.rb"
       ),
       Scenario.new(
+        name: "wlo-registry-failures",
+        description: "stale, replayed, changed, and future-dated registry rejection",
+        repository: "workload-orchestrator",
+        test_file: "test/worker_registry_poller_test.rb"
+      ),
+      Scenario.new(
         name: "rpof-campaign-cli",
         description: "real campaign CLI surface with stubbed lifecycle mutations",
         repository: "runpod-ollama-fleet",
@@ -62,6 +75,12 @@ module AdventureFinderWorkspace
         description: "READY/NOT_READY/UNAVAILABLE publication and identity failures",
         repository: "runpod-ollama-fleet",
         test_file: "test/dynamic_worker_registry_producer_test.rb"
+      ),
+      Scenario.new(
+        name: "rpof-teardown",
+        description: "guardian teardown retry, provider-absence proof, and final CLOSED transition",
+        repository: "runpod-ollama-fleet",
+        test_file: "test/runpod_budget_guardian_test.rb"
       ),
       Scenario.new(
         name: "process-ownership",
@@ -124,7 +143,9 @@ module AdventureFinderWorkspace
 
       passed = results.count(&:success?)
       @out.puts "Acceptance summary: #{passed}/#{results.length} scenarios passed"
-      passed == results.length
+      complete = passed == results.length
+      @out.puts "Offline proof: fake providers only; inference calls: 0; paid resources: $0" if complete
+      complete
     end
 
     private
@@ -166,9 +187,11 @@ module AdventureFinderWorkspace
         test_path = File.join(root, scenario.test_file)
         raise Error, "acceptance scenario file is missing: #{test_path}" unless File.file?(test_path)
 
-        next if scenario.repository == "adventure-finder"
+        bundle_repository = scenario.bundle_repository ||
+                            (scenario.repository unless scenario.repository == "adventure-finder")
+        next unless bundle_repository
 
-        gemfile = File.join(root, "Gemfile")
+        gemfile = File.join(roots.fetch(bundle_repository), "Gemfile")
         raise Error, "component Gemfile is missing: #{gemfile}" unless File.file?(gemfile)
       end
     end
@@ -182,7 +205,9 @@ module AdventureFinderWorkspace
 
     def scenario_argv(scenario)
       ruby = RbConfig.ruby
-      return [ruby, "-Ilib", "-Itest", scenario.test_file] if scenario.repository == "adventure-finder"
+      unless scenario.bundle_repository || scenario.repository != "adventure-finder"
+        return [ruby, "-Ilib", "-Itest", scenario.test_file]
+      end
 
       ["bundle", "exec", ruby, "-Ilib", "-Itest", scenario.test_file]
     end
@@ -192,13 +217,16 @@ module AdventureFinderWorkspace
       rubyopt = ["-r#{@network_guard}", inherited_rubyopt].reject(&:empty?).join(" ")
       environment = CREDENTIAL_NAMES.to_h { |name| [name, nil] }.merge(
         "AF_OPERATOR_ACCEPTANCE_OFFLINE" => "1",
+        "WLO_REPO_ROOT" => roots.fetch("workload-orchestrator"),
         "RPOF_REPO_ROOT" => roots.fetch("runpod-ollama-fleet"),
         "RUBYOPT" => rubyopt
       )
-      if scenario.repository == "adventure-finder"
+      bundle_repository = scenario.bundle_repository ||
+                          (scenario.repository unless scenario.repository == "adventure-finder")
+      if bundle_repository.nil?
         environment["BUNDLE_GEMFILE"] = nil
       else
-        environment["BUNDLE_GEMFILE"] = File.join(roots.fetch(scenario.repository), "Gemfile")
+        environment["BUNDLE_GEMFILE"] = File.join(roots.fetch(bundle_repository), "Gemfile")
       end
       environment
     end

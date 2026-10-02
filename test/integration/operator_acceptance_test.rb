@@ -38,12 +38,14 @@ class OperatorAcceptanceTest < Minitest::Test
       test/dynamic_local_dispatch_test.rb
       test/dw28_late_capacity_integration_test.rb
       test/operator_ux_test.rb
+      test/worker_registry_poller_test.rb
     ])
     build_component(@rpof, %w[
       test/campaign_lifecycle_test.rb
       test/dynamic_worker_registry_producer_test.rb
       test/operator_process_ownership_test.rb
       test/rpof_campaign_cli_test.rb
+      test/runpod_budget_guardian_test.rb
     ])
   end
 
@@ -59,12 +61,14 @@ class OperatorAcceptanceTest < Minitest::Test
     assert harness.run
     assert_equal AdventureFinderWorkspace::OperatorAcceptance::SCENARIOS.length, runner.calls.length
     assert_includes out.string, "Network/provider/inference access: blocked"
-    assert_includes out.string, "Acceptance summary: 9/9 scenarios passed"
+    assert_includes out.string, "Acceptance summary: 12/12 scenarios passed"
+    assert_includes out.string, "Offline proof: fake providers only; inference calls: 0; paid resources: $0"
     runner.calls.each do |call|
       assert_nil call.dig(:env, "RUNPOD_API_KEY")
       assert_nil call.dig(:env, "OPENAI_API_KEY")
       assert_equal "1", call.dig(:env, "AF_OPERATOR_ACCEPTANCE_OFFLINE")
       assert_includes call.dig(:env, "RUBYOPT"), "offline_network_guard.rb"
+      assert_equal @wlo, call.dig(:env, "WLO_REPO_ROOT")
       assert_equal @rpof, call.dig(:env, "RPOF_REPO_ROOT")
     end
   end
@@ -81,6 +85,15 @@ class OperatorAcceptanceTest < Minitest::Test
     assert_equal File.join(@wlo, "Gemfile"), call.dig(:env, "BUNDLE_GEMFILE")
   end
 
+  def test_operator_lifecycle_is_a_named_listable_scenario
+    scenario = AdventureFinderWorkspace::OperatorAcceptance::SCENARIOS.find do |entry|
+      entry.name == "operator-lifecycle"
+    end
+
+    refute_nil scenario
+    assert_equal "test/integration/operator_lifecycle_test.rb", scenario.test_file
+  end
+
   def test_aggregates_failure_without_skipping_later_scenarios
     runner = Runner.new(fail: "campaign_lifecycle")
     out = StringIO.new
@@ -90,7 +103,18 @@ class OperatorAcceptanceTest < Minitest::Test
     refute harness.run
     assert_equal AdventureFinderWorkspace::OperatorAcceptance::SCENARIOS.length, runner.calls.length
     assert_includes err.string, "FAIL rpof-campaign-lifecycle"
-    assert_includes out.string, "Acceptance summary: 8/9 scenarios passed"
+    assert_includes out.string, "Acceptance summary: 11/12 scenarios passed"
+  end
+
+  def test_operator_lifecycle_uses_rpof_bundle_while_running_from_workspace_repo
+    runner = Runner.new
+    harness = build_harness(runner:)
+
+    assert harness.run(only: ["operator-lifecycle"])
+    call = runner.calls.fetch(0)
+    assert_equal File.expand_path("../..", __dir__), call.fetch(:chdir)
+    assert_equal ["bundle", "exec"], call.fetch(:argv).first(2)
+    assert_equal File.join(@rpof, "Gemfile"), call.dig(:env, "BUNDLE_GEMFILE")
   end
 
   def test_unknown_scenario_and_missing_component_fail_closed_before_execution

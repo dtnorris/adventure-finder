@@ -1,0 +1,63 @@
+# Offline operator acceptance
+
+`bin/af-operator-acceptance` is the FO-03 acceptance entrypoint. Every selected
+scenario runs with provider credentials removed and the injected TCP, UDP, socket,
+and HTTP guard from `test/support/offline_network_guard.rb`. Scenario state is kept in
+temporary directories. The harness neither starts Ollama nor makes inference or cloud
+provider calls.
+
+Run the complete surface or the coherent lifecycle alone:
+
+```bash
+bin/af-operator-acceptance
+bin/af-operator-acceptance --only operator-lifecycle
+```
+
+## Coherent lifecycle replay
+
+`OperatorLifecycleTest#test_offline_operator_lifecycle_from_context_to_verified_teardown`
+performs one ordered replay:
+
+1. Resolve the checked-in production-style batch and fleet registrations beneath a
+   temporary `AF_PROJECT_ROOT` with the FO-01 portable context resolver.
+2. Create a WLO v0.3 plan with two pools and two fake jobs. WLO starts with no workers
+   and retains both jobs as pending without invoking an executor or provider fallback.
+3. Start an RPOF campaign through `CampaignLifecycle` and
+   `CampaignCapacityAdmission`; injected provider, guardian, process, and health fakes
+   make every mutation local and deterministic.
+4. Publish a new registry revision with bootstrap-incomplete `NOT_READY` workers, then
+   a later revision with two compatible `READY` workers.
+5. Let WLO consume only those READY workers. The fake command executor records the
+   exact `AF_OLLAMA_BASE_URL`; WLO retains worker, generation, endpoint, capability,
+   registry-revision, attempt, stdout, and exit evidence with no legacy provider
+   request.
+6. Read the WLO report and RPOF campaign status and prove those observer actions do
+   not mutate their durable evidence.
+7. Request campaign stop. The campaign remains `TEARDOWN_REQUIRED`; a simulated
+   provider probe failure remains retryable and cannot claim absence. A later guardian
+   tick deletes the fake pods, verifies provider absence, and reaches `CLOSED` without
+   changing completed WLO evidence.
+
+## Acceptance coverage map
+
+The methods below are the assertion sites, not merely suggestive filenames.
+
+| ID | Acceptance case | Harness scenario and assertion evidence |
+|---|---|---|
+| HP-01 | Portable production-style context resolution | `production-context`: `ProductionContextTest#test_workspace_override_resolves_the_same_context_beneath_temporary_root`, plus lifecycle phase `portable context` |
+| HP-02 | WLO starts with zero capacity and waits without provider fallback | `operator-lifecycle` phase `WLO waiting`; `wlo-ready-workers`: `DynamicLocalDispatchTest#test_no_workers_means_polling_without_provider_fallback` |
+| HP-03 | RPOF admission publishes later READY capacity consumed by WLO | `operator-lifecycle` phases `campaign start`, `NOT_READY publication`, and `WLO completion` (which asserts registry revision 3 and exact bindings); `wlo-rpof-publication`: `Dw28LateCapacityIntegrationTest#test_capacity_published_after_start_launches_pending_job_without_resume` |
+| HP-04 | WLO pause/resume owns workload dispatch, not paid capacity | `wlo-dynamic-cli`: `DynamicCliTest#test_detached_start_keeps_polling_after_parent_exit_and_resume_reuses_checkpoint`; `wlo-process-ownership`: `OperatorUxTest#test_detachment_duplicate_exclusion_pause_resume_and_retained_launch_evidence` |
+| HP-05 | Status/observer paths are read-only and distinct from pause/teardown | lifecycle phase `read-only observers`; `process-ownership`: both `OperatorProcessOwnershipTest` methods; `rpof-campaign-lifecycle`: `CampaignLifecycleTest#test_status_exposes_guardian_limits_capacity_and_pending_liability` |
+| HP-06 | Stop is a teardown request; closure requires verified provider absence | lifecycle phases `teardown requested`, `teardown retry`, and `verified close`; `rpof-teardown`: `RunpodBudgetGuardianTest#test_teardown_destroys_committed_and_pending_slots_then_closes_budget` |
+| FP-01 | Missing/malformed dynamic source fails closed without legacy fallback | `wlo-dynamic-cli`: `DynamicCliTest#test_source_failure_and_malformed_registry_halt_without_legacy_fallback` |
+| FP-02 | Incompatible or NOT_READY workers do not run jobs | lifecycle phase `NOT_READY publication`; `wlo-rpof-publication` waiting assertions; `rpof-worker-publication`: bootstrap/unhealthy/tunnel tests |
+| FP-03 | Stale, replayed, changed, or future-dated registry data fails closed | `wlo-registry-failures`: `WorkerRegistryPollerTest#test_revision_rollback_fails_closed`, `#test_same_revision_with_changed_bytes_fails_closed`, `#test_expired_snapshot_fails_closed`, and `#test_future_dated_snapshot_still_fails_closed` |
+| FP-04 | Job failure and circuit breaker preserve attempt evidence and stop dispatch | `wlo-ready-workers`: `DynamicLocalDispatchTest#test_heterogeneous_commands_and_all_results_stay_local_with_exact_evidence`; `wlo-process-ownership`: `OperatorUxTest#test_detached_failure_and_post_acknowledgement_error_are_recorded` |
+| FP-05 | Provider/bootstrap/capability failures do not publish false READY state | `rpof-campaign-lifecycle`: partial and ambiguous start tests; `rpof-worker-publication`: bootstrap incomplete, missing capability, unhealthy, stale provider identity, and conflicting model evidence tests |
+| FP-06 | Teardown failure remains retryable and cannot claim provider absence | lifecycle phase `teardown retry`; `rpof-teardown`: `RunpodBudgetGuardianTest#test_failed_provider_teardown_remains_in_progress_without_absence_claim` |
+| FP-07 | Ctrl-C/help semantics do not conflate request interruption, WLO pause, or provider teardown | `process-ownership`: `OperatorProcessOwnershipTest#test_top_level_help_distinguishes_observation_work_and_teardown` and `#test_campaign_help_states_short_lived_cli_and_verified_teardown_rule`; `wlo-process-ownership`: `OperatorUxTest#test_start_output_says_detached_work_outlives_the_invoking_cli` |
+
+On complete success the summary is evidence that all listed tests ran behind the hard
+network guard with fake-only provider access, zero inference calls, and zero paid
+resources.

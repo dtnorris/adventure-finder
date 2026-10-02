@@ -121,13 +121,21 @@ evidence, pause/resume behavior, observer/process-ownership boundaries, campaign
 admission and teardown, and representative fail-closed paths. It neither starts Ollama
 nor contacts RunPod or an inference endpoint.
 
+`operator-lifecycle` is the explicit end-to-end replay: it resolves the portable
+production context beneath a temporary workspace, starts a fake-backed campaign,
+publishes NOT_READY then READY workers through RPOF's real registry producer, lets WLO
+complete two locally executed jobs, observes the durable evidence without mutation,
+and drives guardian-owned teardown through retry and verified provider absence to
+`CLOSED`. See [`docs/operator-acceptance.md`](docs/operator-acceptance.md) for the
+HP/FP evidence map.
+
 Use a different sibling-checkout root or select individual scenarios when diagnosing a
 failure:
 
 ```bash
 AF_PROJECT_ROOT=/another/path bin/af-operator-acceptance
 bin/af-operator-acceptance --list
-bin/af-operator-acceptance --only wlo-rpof-publication
+bin/af-operator-acceptance --only operator-lifecycle
 ```
 
 The equivalent Rake entrypoint is `rake test:operator_acceptance`. This acceptance task
