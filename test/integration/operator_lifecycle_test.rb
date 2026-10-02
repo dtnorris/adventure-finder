@@ -47,6 +47,8 @@ class OperatorLifecycleTest < Minitest::Test
 
     def status(budget:)
       {
+        "budget_id" => budget.budget_id,
+        "plan_sha256" => budget.plan_sha256,
         "enabled" => true,
         "launchd_loaded" => true,
         "ready" => true,

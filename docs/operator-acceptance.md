@@ -58,6 +58,15 @@ The methods below are the assertion sites, not merely suggestive filenames.
 | FP-06 | Teardown failure remains retryable and cannot claim provider absence | lifecycle phase `teardown retry`; `rpof-teardown`: `RunpodBudgetGuardianTest#test_failed_provider_teardown_remains_in_progress_without_absence_claim` |
 | FP-07 | Ctrl-C/help semantics do not conflate request interruption, WLO pause, or provider teardown | `process-ownership`: `OperatorProcessOwnershipTest#test_top_level_help_distinguishes_observation_work_and_teardown` and `#test_campaign_help_states_short_lived_cli_and_verified_teardown_rule`; `wlo-process-ownership`: `OperatorUxTest#test_start_output_says_detached_work_outlives_the_invoking_cli` |
 
+FO-08 adds `rpof-safety-gate` to the same hard-offline harness. Its
+`CampaignSafetyGateTest` proves that a finite compute-liability report is emitted
+before the first fake provider mutation; invalid cumulative/runtime bounds,
+guardian arm/health/identity failures, expired durable deadlines, and excessive
+projected liability fail before creation; pending ambiguous reservations remain
+in the liability calculation; and billing output labels the cap as RunPod pod
+compute only. The scenario runs with credentials removed and the same socket and
+HTTP guard, so its expected provider/inference cost remains `$0`.
+
 On complete success the summary is evidence that all listed tests ran behind the hard
 network guard with fake-only provider access, zero inference calls, and zero paid
 resources.

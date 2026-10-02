@@ -71,6 +71,12 @@ module AdventureFinderWorkspace
         test_file: "test/campaign_lifecycle_test.rb"
       ),
       Scenario.new(
+        name: "rpof-safety-gate",
+        description: "finite crash liability, guardian identity, billing scope, and fail-closed paid start",
+        repository: "runpod-ollama-fleet",
+        test_file: "test/campaign_safety_gate_test.rb"
+      ),
+      Scenario.new(
         name: "rpof-worker-publication",
         description: "READY/NOT_READY/UNAVAILABLE publication and identity failures",
         repository: "runpod-ollama-fleet",

@@ -42,6 +42,7 @@ class OperatorAcceptanceTest < Minitest::Test
     ])
     build_component(@rpof, %w[
       test/campaign_lifecycle_test.rb
+      test/campaign_safety_gate_test.rb
       test/dynamic_worker_registry_producer_test.rb
       test/operator_process_ownership_test.rb
       test/rpof_campaign_cli_test.rb
@@ -61,7 +62,7 @@ class OperatorAcceptanceTest < Minitest::Test
     assert harness.run
     assert_equal AdventureFinderWorkspace::OperatorAcceptance::SCENARIOS.length, runner.calls.length
     assert_includes out.string, "Network/provider/inference access: blocked"
-    assert_includes out.string, "Acceptance summary: 12/12 scenarios passed"
+    assert_includes out.string, "Acceptance summary: 13/13 scenarios passed"
     assert_includes out.string, "Offline proof: fake providers only; inference calls: 0; paid resources: $0"
     runner.calls.each do |call|
       assert_nil call.dig(:env, "RUNPOD_API_KEY")
@@ -94,6 +95,16 @@ class OperatorAcceptanceTest < Minitest::Test
     assert_equal "test/integration/operator_lifecycle_test.rb", scenario.test_file
   end
 
+  def test_rpof_safety_gate_is_a_named_network_guarded_scenario
+    scenario = AdventureFinderWorkspace::OperatorAcceptance::SCENARIOS.find do |entry|
+      entry.name == "rpof-safety-gate"
+    end
+
+    refute_nil scenario
+    assert_equal "runpod-ollama-fleet", scenario.repository
+    assert_equal "test/campaign_safety_gate_test.rb", scenario.test_file
+  end
+
   def test_aggregates_failure_without_skipping_later_scenarios
     runner = Runner.new(fail: "campaign_lifecycle")
     out = StringIO.new
@@ -103,7 +114,7 @@ class OperatorAcceptanceTest < Minitest::Test
     refute harness.run
     assert_equal AdventureFinderWorkspace::OperatorAcceptance::SCENARIOS.length, runner.calls.length
     assert_includes err.string, "FAIL rpof-campaign-lifecycle"
-    assert_includes out.string, "Acceptance summary: 11/12 scenarios passed"
+    assert_includes out.string, "Acceptance summary: 12/13 scenarios passed"
   end
 
   def test_operator_lifecycle_uses_rpof_bundle_while_running_from_workspace_repo

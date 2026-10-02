@@ -121,6 +121,10 @@ evidence, pause/resume behavior, observer/process-ownership boundaries, campaign
 admission and teardown, and representative fail-closed paths. It neither starts Ollama
 nor contacts RunPod or an inference endpoint.
 
+The named `rpof-safety-gate` scenario adds FO-08's finite crash-liability,
+guardian identity/failure-domain, compute-only billing-scope, and pre-mutation
+refusal proofs using the same offline fake-provider boundary.
+
 `operator-lifecycle` is the explicit end-to-end replay: it resolves the portable
 production context beneath a temporary workspace, starts a fake-backed campaign,
 publishes NOT_READY then READY workers through RPOF's real registry producer, lets WLO
