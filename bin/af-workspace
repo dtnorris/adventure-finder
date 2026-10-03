@@ -262,6 +262,8 @@ module AdventureFinderWorkspace
           bin/af-workspace snapshot [--output PATH] [--core|--all]
           bin/af-context batch 39 [--json] [--verify]
           bin/af-context fleet A [--json] [--verify]
+          bin/af-batch start 39
+          bin/af-batch resume 39
 
         Defaults:
           workspace root: AF_PROJECT_ROOT, otherwise /Users/davidnorris/code
@@ -269,6 +271,8 @@ module AdventureFinderWorkspace
           clone protocol: AF_GIT_PROTOCOL, otherwise ssh
 
         Safety:
+          af-batch start/resume are foreground WLO owners; Ctrl-C cancels only
+          that execution and never tears down or changes provider capacity.
           sync always fetches first, skips pull on dirty/detached/no-upstream repos,
           and only uses `git pull --ff-only`. It never resets, stashes, commits, or pushes.
       TEXT

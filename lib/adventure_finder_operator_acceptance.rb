@@ -16,6 +16,12 @@ module AdventureFinderWorkspace
 
     SCENARIOS = [
       Scenario.new(
+        name: "batch-front-door",
+        description: "frozen Batch 39 foreground start/resume with no remanifest or provider mutation",
+        repository: "adventure-finder",
+        test_file: "test/batch_front_door_test.rb"
+      ),
+      Scenario.new(
         name: "production-context",
         description: "registered batch/fleet resolution and fail-closed verification",
         repository: "adventure-finder",

@@ -61,6 +61,44 @@ class OperatorLifecycleTest < Minitest::Test
     end
   end
 
+  class ControllerSupervisor
+    attr_accessor :lifecycle
+    attr_reader :ensure_calls, :disable_calls
+
+    def initialize
+      @running = false
+      @ensure_calls = 0
+      @disable_calls = 0
+    end
+
+    def ensure_running!(binding:, ssh_public_key_path:, heartbeat_timeout_seconds:)
+      @ensure_calls += 1
+      unless @running
+        @running = true
+        binding.parent_budget.heartbeat!(source: "orchestrator")
+        lifecycle.reconcile_once(ssh_public_key_path:)
+      end
+      status(binding:).merge("heartbeat_timeout_seconds" => heartbeat_timeout_seconds)
+    rescue RunpodOllamaFleet::CampaignLifecycle::Error => e
+      raise RunpodOllamaFleet::CampaignControllerSupervisor::Error, e.message
+    end
+
+    def status(binding:)
+      {
+        "state" => (@running ? "RUNNING" : "STOPPED"),
+        "generation_id" => "operator-lifecycle-controller-1",
+        "pid" => Process.pid + 1,
+        "binding_sha256" => binding.binding_sha256
+      }
+    end
+
+    def disable!(binding:)
+      @disable_calls += 1
+      @running = false
+      status(binding:)
+    end
+  end
+
   class FakeProvider
     attr_accessor :list_error
     attr_reader :create_calls
@@ -263,6 +301,8 @@ class OperatorLifecycleTest < Minitest::Test
           assert_equal "ARMED", started.fetch("budget_state")
           assert_equal 6, started.fetch("active_workers")
           assert_equal 6, @provider.create_calls
+          assert_equal "RUNNING", started.dig("controller", "state")
+          assert_equal 1, @controller.ensure_calls
           publish_fleets(bootstrap_status: "running")
         end
       when 2
@@ -327,6 +367,8 @@ class OperatorLifecycleTest < Minitest::Test
       stopped = lifecycle.stop
       assert_equal "TEARDOWN_REQUIRED", stopped.fetch("budget_state")
       refute stopped.fetch("provider_absence_verified")
+      assert_equal "STOPPED", stopped.dig("controller", "state")
+      assert_equal 1, @controller.disable_calls
       assert_equal wlo_evidence, evidence_sha256(@output)
     end
 
@@ -396,13 +438,16 @@ class OperatorLifecycleTest < Minitest::Test
       runtime.admission = admission
       runtime
     end
+    @controller = ControllerSupervisor.new
     lifecycle = RunpodOllamaFleet::CampaignLifecycle.new(
       campaign:,
       binding:,
       runtime_factory: factory,
       price_resolver: ->(*) { 0.5 },
-      wall_clock: -> { @now }
+      wall_clock: -> { @now },
+      controller_supervisor: @controller
     )
+    @controller.lifecycle = lifecycle
     [lifecycle, binding]
   end
 

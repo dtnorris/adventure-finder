@@ -120,6 +120,22 @@ plan ID, plan SHA-256, and pool ID and copies the plan's exact Ollama model, dig
 context, residency, optional GPU constraint, and labels. Aliases contain no model
 defaults and are never passed downstream for reinterpretation.
 
+### `bin/af-batch`
+
+Open the exact registered production batch as WLO's foreground work owner:
+
+```bash
+bin/af-batch start 39
+bin/af-batch resume 39
+```
+
+`start` never remanifests AFW work, clears pause, retries terminal attempts, or
+acknowledges a breaker. `resume` requires retained execution state and delegates
+to WLO's explicit foreground resume. Both verify the registered plan ID and
+SHA-256 first, use WLO's compact live dashboard, and preserve FO-06 Ctrl-C
+cancellation. Provider capacity is unchanged. See
+[`docs/batch-foreground.md`](docs/batch-foreground.md).
+
 ### `bin/af-operator-acceptance`
 
 Replay the production orchestration control paths with the component repositories'

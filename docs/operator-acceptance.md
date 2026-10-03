@@ -11,6 +11,7 @@ Run the complete surface or the coherent lifecycle alone:
 ```bash
 bin/af-operator-acceptance
 bin/af-operator-acceptance --only operator-lifecycle
+bin/af-operator-acceptance --only batch-front-door
 ```
 
 ## Coherent lifecycle replay
@@ -51,6 +52,7 @@ The methods below are the assertion sites, not merely suggestive filenames.
 | HP-05 | Status/observer paths are read-only and distinct from pause/teardown | lifecycle phase `read-only observers`; `process-ownership`: both `OperatorProcessOwnershipTest` methods; `rpof-campaign-lifecycle`: `CampaignLifecycleTest#test_status_exposes_guardian_limits_capacity_and_pending_liability` |
 | HP-06 | Stop is a teardown request; closure requires verified provider absence | lifecycle phases `teardown requested`, `teardown retry`, and `verified close`; `rpof-teardown`: `RunpodBudgetGuardianTest#test_teardown_destroys_committed_and_pending_slots_then_closes_budget` |
 | HP-07 | Foreground Ctrl-C cancels only WLO-owned child trees while pause drains | `wlo-foreground-cancellation`: `ForegroundCancellationTest`, including child/grandchild termination, unrelated-sentinel survival, TERM-to-KILL escalation, partial evidence, explicit retry, and pause/resume cases |
+| HP-08 | Batch 39 front door verifies the frozen plan and delegates safe start/resume without remanifest, replay, recovery authorization, or provider mutation | `batch-front-door`: `BatchFrontDoorTest`, including first start, completed/failed/interrupted evidence preservation, pause/resume separation, breaker/halt refusal, duplicate-owner locking, direct foreground exec, unknown handle, and portable-root cases |
 | FP-01 | Missing/malformed dynamic source fails closed without legacy fallback | `wlo-dynamic-cli`: `DynamicCliTest#test_source_failure_and_malformed_registry_halt_without_legacy_fallback` |
 | FP-02 | Incompatible or NOT_READY workers do not run jobs | lifecycle phase `NOT_READY publication`; `wlo-rpof-publication` waiting assertions; `rpof-worker-publication`: bootstrap/unhealthy/tunnel tests |
 | FP-03 | Stale, replayed, changed, or future-dated registry data fails closed | `wlo-registry-failures`: `WorkerRegistryPollerTest#test_revision_rollback_fails_closed`, `#test_same_revision_with_changed_bytes_fails_closed`, `#test_expired_snapshot_fails_closed`, and `#test_future_dated_snapshot_still_fails_closed` |
