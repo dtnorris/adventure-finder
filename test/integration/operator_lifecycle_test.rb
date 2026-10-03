@@ -176,6 +176,12 @@ class OperatorLifecycleTest < Minitest::Test
       end
     end
 
+    def reconcile_bringup!(desired_workers:, transition_guard:)
+      transition_guard.call
+      Integer(desired_workers)
+      []
+    end
+
     def status
       {
         "current_workers" => @count,

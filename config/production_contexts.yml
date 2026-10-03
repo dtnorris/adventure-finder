@@ -13,6 +13,9 @@ contexts:
         output_root: workload-orchestrator-production/output/production-batch-039-fresh-20260930
       local_workers:
         repository_root: local-ollama-workers
+      worker_sources:
+        - local
+        - remote
       plan:
         plan_id: production-batch-039-fresh-20260930
         sha256: 0396dadb15bf0ca68238fd4f449ca99e58c3a4ee329dadc8a6e242f5da0ae5d1

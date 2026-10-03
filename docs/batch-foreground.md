@@ -32,12 +32,14 @@ Retained-state decisions are conservative:
 | identity or plan drift | fail closed | fail closed |
 
 `AF_PROJECT_ROOT` relocates every registered repository and runtime path. The
-worker source is AdventureFinder's provider-neutral registry merger. It combines
-the observational `rpof workers --json` and `low workers --json` snapshots and
-performs no provider mutation or local bootstrap. A child-source failure or
-identity/revision conflict fails closed instead of being presented as zero capacity.
-The merged publisher keeps one durable identity and monotonic revision beneath the
-WLO output root.
+Batch context selects `local`, `remote`, or both in `worker_sources`.
+AdventureFinder writes a strict `wlo-worker-sources/v0.1` configuration and
+hands it to WLO; it does not poll, merge, deduplicate or republish registry
+snapshots. WLO invokes the observational `low workers --json` and/or
+`rpof workers --json` publishers directly, preserves each registry namespace
+and checkpoint, and schedules across their union. Source failure or identity
+and revision conflict fails closed instead of being presented as zero capacity.
+This handoff performs no provider mutation or local bootstrap.
 
 Local capability establishment is a separate explicit operator action:
 

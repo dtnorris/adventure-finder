@@ -1,10 +1,11 @@
 # frozen_string_literal: true
 
 require "digest"
+require "fileutils"
 require "json"
 require "open3"
 require "pathname"
-require "rbconfig"
+require "yaml"
 require_relative "adventure_finder_workspace"
 require_relative "adventure_finder_production_context"
 
@@ -17,6 +18,7 @@ module AdventureFinderWorkspace
     EXECUTION_ACTIONS = %w[start resume].freeze
     RECOVERY_ACTIONS = %w[retry recovery repair].freeze
     ACTIONS = (EXECUTION_ACTIONS + RECOVERY_ACTIONS).freeze
+    WORKER_SOURCES_CONTRACT_VERSION = "wlo-worker-sources/v0.1"
 
     class ForegroundExecutor
       def call(environment, argv, chdir:)
@@ -55,12 +57,13 @@ module AdventureFinderWorkspace
 
       context = @registry.resolve("batch", handle)
       plan = verify_frozen_plan!(context)
-      fleet = resolve_worker_registry!(context)
-      verify_component_paths!(context, fleet)
+      sources = selected_worker_sources(context)
+      fleet = sources.include?("remote") ? resolve_remote_registry!(context) : nil
+      verify_component_paths!(context, fleet, sources)
       retained = retained_execution(context, plan)
       if RECOVERY_ACTIONS.include?(action)
         return run_recovery_action(
-          action, handle.to_s, context, plan, fleet, retained,
+          action, handle.to_s, context, plan, retained,
           jobs:, reason:, dry_run:, acknowledge_circuit_breaker:
         )
       end
@@ -69,7 +72,8 @@ module AdventureFinderWorkspace
       return disposition if disposition.is_a?(Integer)
 
       print_handoff(handle.to_s, context)
-      @executor.call(execution_environment(fleet), wlo_argv(action, handle.to_s, context),
+      source_config = write_worker_sources_config!(context, fleet, sources)
+      @executor.call({}, wlo_argv(action, context, source_config),
                      chdir: context.dig("wlo", "repository_root"))
       0
     end
@@ -101,7 +105,21 @@ module AdventureFinderWorkspace
       raise Error, "registered frozen plan is invalid JSON: #{e.message}"
     end
 
-    def resolve_worker_registry!(context)
+    def selected_worker_sources(context)
+      sources = if context.key?("worker_sources")
+                  context.fetch("worker_sources")
+                else
+                  [].tap do |fallback|
+                    fallback << "local" if context.key?("local_workers")
+                    fallback << "remote" unless context.fetch("associated_fleets").empty?
+                  end
+                end
+      raise Error, "Batch has no configured worker sources" if sources.empty?
+
+      sources
+    end
+
+    def resolve_remote_registry!(context)
       names = context.fetch("associated_fleets")
       raise Error, "Batch has no registered worker-registry fleet" if names.empty?
 
@@ -114,30 +132,44 @@ module AdventureFinderWorkspace
       fleets.first
     end
 
-    def verify_component_paths!(context, fleet)
-      unless context.dig("local_workers", "repository_root")
-        raise Error, "Batch has no registered LOW worker source"
-      end
+    def verify_component_paths!(context, fleet, sources)
       required_directories = {
         "AFW production root" => context.dig("afw", "repository_root"),
         "AFW workload root" => context.dig("afw", "workload_root"),
-        "WLO production root" => context.dig("wlo", "repository_root"),
-        "RPOF production root" => fleet.dig("rpof", "repository_root"),
-        "LOW production root" => context.dig("local_workers", "repository_root")
+        "WLO production root" => context.dig("wlo", "repository_root")
       }
+      if sources.include?("local")
+        required_directories["LOW production root"] = context.dig("local_workers", "repository_root")
+      end
+      if sources.include?("remote")
+        required_directories["RPOF production root"] = fleet.dig("rpof", "repository_root")
+      end
       required_directories.each do |label, path|
         raise Error, "#{label} is not a directory: #{path}" unless File.directory?(path)
       end
       required_executables = {
-        "WLO foreground executable" => File.join(context.dig("wlo", "repository_root"), "bin", "wlo"),
-        "RPOF worker-registry executable" => File.join(fleet.dig("rpof", "repository_root"), "bin", "rpof"),
-        "LOW worker-registry executable" => File.join(context.dig("local_workers", "repository_root"), "bin", "low")
+        "WLO foreground executable" => File.join(context.dig("wlo", "repository_root"), "bin", "wlo")
       }
+      if sources.include?("local")
+        required_executables["LOW worker-registry executable"] =
+          File.join(context.dig("local_workers", "repository_root"), "bin", "low")
+      end
+      if sources.include?("remote")
+        required_executables["RPOF worker-registry executable"] =
+          File.join(fleet.dig("rpof", "repository_root"), "bin", "rpof")
+      end
       required_executables.each do |label, path|
         raise Error, "#{label} is not executable: #{path}" unless File.executable?(path)
       end
-      worker_source = File.expand_path("../bin/af-workers", __dir__)
-      raise Error, "AdventureFinder merged worker-registry command is not a file: #{worker_source}" unless File.file?(worker_source)
+      sources.each do |source|
+        root = if source == "local"
+                 context.dig("local_workers", "repository_root")
+               else
+                 fleet.dig("rpof", "repository_root")
+               end
+        gemfile = File.join(root, "Gemfile")
+        raise Error, "#{source} worker-source Gemfile is not a file: #{gemfile}" unless File.file?(gemfile)
+      end
       find_executable!("bundle", @bundle_executable)
     end
 
@@ -206,7 +238,7 @@ module AdventureFinderWorkspace
       nil
     end
 
-    def run_recovery_action(action, handle, context, plan, fleet, retained, jobs:, reason:, dry_run:,
+    def run_recovery_action(action, handle, context, plan, retained, jobs:, reason:, dry_run:,
                             acknowledge_circuit_breaker:)
       raise Error, "Batch #{handle} has no retained execution; there is nothing to recover" unless retained
 
@@ -222,18 +254,18 @@ module AdventureFinderWorkspace
         arguments.concat(["--reason", reason.strip])
         arguments << "--acknowledge-circuit-breaker" if acknowledge_circuit_breaker
         arguments << "--dry-run" if dry_run
-        delegate_recovery(context, fleet, "retry-failed", arguments)
+        delegate_recovery(context, "retry-failed", arguments)
       when "recovery"
         raise Error, "recovery does not accept job handles or --reason" unless jobs.empty? && reason.nil?
         raise Error, "recovery does not accept mutation flags" if dry_run || acknowledge_circuit_breaker
-        delegate_recovery(context, fleet, "recovery", [])
+        delegate_recovery(context, "recovery", [])
       when "repair"
         raise Error, "repair does not accept job handles" unless jobs.empty?
         raise Error, "repair requires a nonblank --reason" if reason.to_s.strip.empty?
         raise Error, "repair cannot acknowledge a circuit breaker" if acknowledge_circuit_breaker
         arguments = ["--reason", reason.strip]
         arguments << "--dry-run" if dry_run
-        delegate_recovery(context, fleet, "repair", arguments)
+        delegate_recovery(context, "repair", arguments)
       end
     end
 
@@ -264,7 +296,7 @@ module AdventureFinderWorkspace
       raise Error, "job handle #{handle.inspect} returned invalid WLO diagnostics: #{e.message}"
     end
 
-    def delegate_recovery(context, fleet, command, arguments)
+    def delegate_recovery(context, command, arguments)
       root = context.dig("wlo", "repository_root")
       argv = [
         find_executable!("bundle", @bundle_executable), "exec", File.join(root, "bin", "wlo"),
@@ -272,7 +304,7 @@ module AdventureFinderWorkspace
         "--workdir", context.dig("afw", "repository_root"),
         "--output", context.dig("wlo", "output_root"), *arguments
       ]
-      @executor.call(execution_environment(fleet), argv, chdir: root)
+      @executor.call({}, argv, chdir: root)
       0
     end
 
@@ -309,32 +341,61 @@ module AdventureFinderWorkspace
       @out.flush if @out.respond_to?(:flush)
     end
 
-    def wlo_argv(action, handle, context)
+    def wlo_argv(action, context, source_config)
       wlo_root = context.dig("wlo", "repository_root")
-      worker_source = File.expand_path("../bin/af-workers", __dir__)
       [
         File.join(wlo_root, "bin", "wlo"), action == "start" ? "run" : "resume",
         context.dig("afw", "plan_path"),
         "--workdir", context.dig("afw", "repository_root"),
         "--output", context.dig("wlo", "output_root"),
-        "--worker-source-command", RbConfig.ruby,
-        "--worker-source-arg", worker_source,
-        "--worker-source-arg", "batch",
-        "--worker-source-arg", handle,
-        "--worker-source-arg", "--root",
-        "--worker-source-arg", @registry.workspace_root.to_s,
-        "--worker-source-arg", "--registry",
-        "--worker-source-arg", @registry.path.to_s,
-        "--worker-source-arg", "--state-root",
-        "--worker-source-arg", File.join(context.dig("wlo", "output_root"), "worker-registry-merge"),
-        "--worker-source-arg=--json"
+        "--worker-sources-config", source_config
       ]
     end
 
-    def execution_environment(fleet)
+    def write_worker_sources_config!(context, fleet, sources)
+      bundle = find_executable!("bundle", @bundle_executable)
+      entries = sources.map { |source| worker_source_entry(source, context, fleet, bundle) }
+      bytes = YAML.dump("contract_version" => WORKER_SOURCES_CONTRACT_VERSION, "sources" => entries)
+      root = File.join(File.dirname(context.dig("wlo", "output_root")), "worker-sources")
+      basename = File.basename(context.dig("wlo", "output_root"))
+      path = File.join(root, "#{basename}-#{Digest::SHA256.hexdigest(bytes)[0, 12]}.yml")
+      FileUtils.mkdir_p(root)
+      if File.file?(path)
+        raise Error, "worker-source configuration content mismatch: #{path}" unless File.binread(path) == bytes
+        return path
+      end
+
+      temporary = "#{path}.tmp-#{Process.pid}"
+      File.open(temporary, "wb", 0o600) do |file|
+        file.write(bytes)
+        file.flush
+        file.fsync
+      end
+      File.rename(temporary, path)
+      path
+    ensure
+      FileUtils.rm_f(temporary) if temporary && File.exist?(temporary)
+    end
+
+    def worker_source_entry(source, context, fleet, bundle)
+      root, executable, environment =
+        if source == "local"
+          local_root = context.dig("local_workers", "repository_root")
+          [local_root, "low", { "BUNDLE_GEMFILE" => File.join(local_root, "Gemfile") }]
+        else
+          remote_root = fleet.dig("rpof", "repository_root")
+          [remote_root, "rpof", {
+            "BUNDLE_GEMFILE" => File.join(remote_root, "Gemfile"),
+            "RPOF_STATE_ROOT" => fleet.dig("rpof", "state_root"),
+            "RPOF_STATE_REPO_ROOT" => remote_root
+          }]
+        end
       {
-        "RPOF_STATE_ROOT" => fleet.dig("rpof", "state_root"),
-        "RPOF_STATE_REPO_ROOT" => fleet.dig("rpof", "repository_root")
+        "name" => source,
+        "command" => bundle,
+        "args" => ["exec", File.join(root, "bin", executable), "workers", "--json"],
+        "environment" => environment,
+        "workdir" => root
       }
     end
 

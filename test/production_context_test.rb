@@ -31,6 +31,7 @@ class ProductionContextTest < Minitest::Test
                  context.dig("plan", "sha256")
     assert_equal File.join(manifest.workspace_root_default, "local-ollama-workers"),
                  context.dig("local_workers", "repository_root")
+    assert_equal %w[local remote], context.fetch("worker_sources")
   end
 
   def test_workspace_override_resolves_the_same_context_beneath_temporary_root

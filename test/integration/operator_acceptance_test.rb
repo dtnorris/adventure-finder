@@ -38,6 +38,7 @@ class OperatorAcceptanceTest < Minitest::Test
       test/dynamic_local_dispatch_test.rb
       test/dw28_late_capacity_integration_test.rb
       test/foreground_cancellation_test.rb
+      test/multi_source_worker_test.rb
       test/operator_ux_test.rb
       test/retry_test.rb
       test/worker_registry_poller_test.rb
@@ -115,6 +116,16 @@ class OperatorAcceptanceTest < Minitest::Test
     refute_nil scenario
     assert_equal "workload-orchestrator", scenario.repository
     assert_equal "test/retry_test.rb", scenario.test_file
+  end
+
+  def test_multi_source_registry_is_a_named_offline_scenario
+    scenario = AdventureFinderWorkspace::OperatorAcceptance::SCENARIOS.find do |entry|
+      entry.name == "wlo-multi-source-registry"
+    end
+
+    refute_nil scenario
+    assert_equal "workload-orchestrator", scenario.repository
+    assert_equal "test/multi_source_worker_test.rb", scenario.test_file
   end
 
   def test_foreground_cancellation_is_a_named_offline_scenario

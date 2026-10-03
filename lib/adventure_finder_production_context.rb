@@ -10,6 +10,7 @@ module AdventureFinderWorkspace
 
   class ProductionContextRegistry
     HANDLE_TYPES = %w[batch fleet].freeze
+    WORKER_SOURCE_TYPES = %w[local remote].freeze
     PATH_FIELDS = {
       "batch" => %w[
         afw.repository_root afw.workload_root afw.plan_path
@@ -80,7 +81,8 @@ module AdventureFinderWorkspace
         verify_file(context.dig("afw", "plan_path"), "AFW execution plan", failures)
         verify_directory(context.dig("wlo", "repository_root"), "WLO production root", failures)
         verify_directory(context.dig("wlo", "output_root"), "WLO output root", failures)
-        if context.key?("local_workers")
+        sources = context.fetch("worker_sources", context.key?("local_workers") ? ["local"] : [])
+        if sources.include?("local")
           verify_directory(context.dig("local_workers", "repository_root"), "LOW production root", failures)
         end
         verify_plan(context, failures)
@@ -131,6 +133,19 @@ module AdventureFinderWorkspace
       end
       validate_relative_paths(context, path_fields, "batch #{name}")
       require_string_array(context, "associated_fleets", "batch #{name}")
+      return unless context.key?("worker_sources")
+
+      require_string_array(context, "worker_sources", "batch #{name}")
+      sources = context.fetch("worker_sources")
+      raise Error, "batch #{name}.worker_sources must not be empty" if sources.empty?
+      unknown = sources - WORKER_SOURCE_TYPES
+      raise Error, "batch #{name}.worker_sources contains unsupported values: #{unknown.join(', ')}" unless unknown.empty?
+      if sources.include?("local") && !context.key?("local_workers")
+        raise Error, "batch #{name}.worker_sources selects local without local_workers"
+      end
+      if sources.include?("remote") && context.fetch("associated_fleets").empty?
+        raise Error, "batch #{name}.worker_sources selects remote without an associated fleet"
+      end
     end
 
     def validate_fleet(name, context)

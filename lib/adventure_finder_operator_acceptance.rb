@@ -22,10 +22,10 @@ module AdventureFinderWorkspace
         test_file: "test/batch_front_door_test.rb"
       ),
       Scenario.new(
-        name: "local-worker-registry",
-        description: "RPOF plus LOW merge, exact deduplication, monotonic publication, and fail-closed sources",
-        repository: "adventure-finder",
-        test_file: "test/worker_registry_merge_test.rb"
+        name: "wlo-multi-source-registry",
+        description: "local-only, remote-only, mixed, namespace-preserving scheduling and scoped loss",
+        repository: "workload-orchestrator",
+        test_file: "test/multi_source_worker_test.rb"
       ),
       Scenario.new(
         name: "local-capacity-bootstrap",

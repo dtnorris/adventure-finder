@@ -84,21 +84,44 @@ class BatchFrontDoorTest < Minitest::Test
     assert_equal @plan_path, argv.fetch(2)
     assert_option argv, "--workdir", @afw
     assert_option argv, "--output", @output
-    assert_option argv, "--worker-source-command", RbConfig.ruby
-    assert_includes argv, File.expand_path("../bin/af-workers", __dir__)
-    assert_includes argv, "batch"
-    assert_includes argv, "39"
-    assert_includes argv, @registry
-    assert_includes argv, File.join(@output, "worker-registry-merge")
-    assert_includes argv, "--worker-source-arg=--json"
-    refute_includes argv, File.join(@low, "bin", "low")
+    config_path = argv.fetch(argv.index("--worker-sources-config") + 1)
+    config = YAML.safe_load_file(config_path, aliases: false)
+    assert_equal "wlo-worker-sources/v0.1", config.fetch("contract_version")
+    assert_equal %w[local remote], config.fetch("sources").map { |source| source.fetch("name") }
+    local, remote = config.fetch("sources")
+    assert_equal [@bundle, "exec", File.join(@low, "bin", "low"), "workers", "--json"],
+                 [local.fetch("command"), *local.fetch("args")]
+    assert_equal [@bundle, "exec", File.join(@rpof, "bin", "rpof"), "workers", "--json"],
+                 [remote.fetch("command"), *remote.fetch("args")]
+    assert_equal File.join(@rpof, "output", "runpod-fleets"),
+                 remote.dig("environment", "RPOF_STATE_ROOT")
+    refute argv.any? { |value| value.include?("af-workers") }
     refute_includes argv, "bootstrap"
     refute argv.any? { |value| value.match?(/build|compile|manifest|retry-failed|acknowledge|campaign|desired/) }
     assert_equal @wlo, call.fetch(:chdir)
-    assert_equal File.join(@rpof, "output", "runpod-fleets"),
-                 call.dig(:environment, "RPOF_STATE_ROOT")
+    assert_empty call.fetch(:environment)
     assert_includes @out.string, "Ctrl-C: cancel this foreground WLO execution"
     refute_includes @out.string, "[="
+  end
+
+  def test_local_only_source_does_not_require_remote_checkout
+    write_registry(worker_sources: ["local"])
+    FileUtils.rm_rf(@rpof)
+
+    assert_equal 0, front_door.run("start", "39")
+    config = launched_worker_config
+    assert_equal ["local"], config.fetch("sources").map { |source| source.fetch("name") }
+    assert_equal @low, config.dig("sources", 0, "workdir")
+  end
+
+  def test_remote_only_source_does_not_require_local_checkout
+    write_registry(worker_sources: ["remote"])
+    FileUtils.rm_rf(@low)
+
+    assert_equal 0, front_door.run("start", "39")
+    config = launched_worker_config
+    assert_equal ["remote"], config.fetch("sources").map { |source| source.fetch("name") }
+    assert_equal @rpof, config.dig("sources", 0, "workdir")
   end
 
   def test_bs02_plan_sha_drift_fails_before_wlo_launch
@@ -368,7 +391,7 @@ class BatchFrontDoorTest < Minitest::Test
     File.write(@plan_path, JSON.generate(document))
   end
 
-  def write_registry
+  def write_registry(worker_sources: %w[local remote])
     @registry = File.join(@root, "production_contexts.yml")
     data = {
       "schema_version" => "adventurefinder-production-context/v0.1",
@@ -382,6 +405,7 @@ class BatchFrontDoorTest < Minitest::Test
             "wlo" => { "repository_root" => "workload-orchestrator-production",
                        "output_root" => "workload-orchestrator-production/output/#{PLAN_ID}" },
             "local_workers" => { "repository_root" => "local-ollama-workers" },
+            "worker_sources" => worker_sources,
             "plan" => { "plan_id" => PLAN_ID, "sha256" => Digest::SHA256.file(@plan_path).hexdigest },
             "associated_fleets" => ["A"]
           }
@@ -456,5 +480,11 @@ class BatchFrontDoorTest < Minitest::Test
     index = argv.index(name)
     refute_nil index, "missing #{name}"
     assert_equal value, argv.fetch(index + 1)
+  end
+
+  def launched_worker_config
+    argv = @executor.calls.last.fetch(:argv)
+    path = argv.fetch(argv.index("--worker-sources-config") + 1)
+    YAML.safe_load_file(path, aliases: false)
   end
 end

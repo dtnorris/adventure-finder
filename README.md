@@ -130,10 +130,11 @@ bin/af-batch start 39
 ```
 
 `af-local bootstrap` persists the exact plan-derived requirement and explicitly
-hands it to LOW. `af-batch` never bootstraps a model. Its worker-source command
-merges observational `rpof workers --json` and `low workers --json` snapshots
-into one versioned provider-neutral registry for WLO. One logical worker is one
-registry record even when it proves compatibility with several pools.
+hands it to LOW. `af-batch` never bootstraps a model. It writes WLO's strict
+named-source configuration for the independently selected `low workers --json`
+and/or `rpof workers --json` publishers. WLO consumes those registries directly,
+preserves their namespaces and checkpoints, and schedules over their union.
+AdventureFinder creates no synthetic registry identity.
 
 ### `bin/af-batch`
 
