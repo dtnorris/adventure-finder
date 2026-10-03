@@ -8,29 +8,44 @@ require "adventure_finder_batch"
 
 options = {
   registry: File.expand_path("../config/production_contexts.yml", __dir__),
-  root: ENV.fetch("AF_PROJECT_ROOT", "/Users/davidnorris/code")
+  root: ENV.fetch("AF_PROJECT_ROOT", "/Users/davidnorris/code"),
+  reason: nil,
+  dry_run: false,
+  acknowledge_circuit_breaker: false
 }
 parser = OptionParser.new do |entry|
-  entry.banner = "Usage: bin/af-batch start|resume HANDLE [--root PATH] [--registry PATH]"
+  entry.banner = "Usage: bin/af-batch ACTION HANDLE [JOB ...] [options]"
   entry.on("--root PATH", "Workspace root (default: AF_PROJECT_ROOT)") { |value| options[:root] = value }
   entry.on("--registry PATH", "Production context registry") { |value| options[:registry] = value }
+  entry.on("--reason TEXT", "Required human reason for retry or repair") { |value| options[:reason] = value }
+  entry.on("--dry-run", "Preview retry or repair without mutation") { options[:dry_run] = true }
+  entry.on("--acknowledge-circuit-breaker", "Explicitly acknowledge a tripped breaker during retry") do
+    options[:acknowledge_circuit_breaker] = true
+  end
   entry.separator ""
   entry.separator "Process ownership:"
   entry.separator "  start   FOREGROUND WORK OWNER; opens the frozen batch without resume/retry."
   entry.separator "  resume  FOREGROUND WORK OWNER; explicitly clears WLO pause only."
+  entry.separator "  retry   CONTROL REQUEST; authorizes only selected reviewed jobs."
+  entry.separator "  recovery READ-ONLY INSPECTION; displays retained recovery actions."
+  entry.separator "  repair  CONTROL REQUEST; currently refuses unsupported retained-state repair."
   entry.separator "  Ctrl-C cancels this WLO execution via scoped FO-06 process-group handling."
   entry.separator "  Neither command creates, changes, or tears down provider capacity."
 end
 
 begin
   parser.parse!(ARGV)
-  raise OptionParser::InvalidArgument, "expected start|resume HANDLE" unless ARGV.length == 2
+  action = ARGV.shift
+  handle = ARGV.shift
+  raise OptionParser::InvalidArgument, "expected ACTION HANDLE" unless action && handle
 
-  action, handle = ARGV
   front_door = AdventureFinderWorkspace::BatchFrontDoor.new(
     registry_path: options.fetch(:registry), workspace_root: options.fetch(:root)
   )
-  exit front_door.run(action, handle)
+  exit front_door.run(
+    action, handle, jobs: ARGV, reason: options.fetch(:reason), dry_run: options.fetch(:dry_run),
+    acknowledge_circuit_breaker: options.fetch(:acknowledge_circuit_breaker)
+  )
 rescue AdventureFinderWorkspace::Error, OptionParser::ParseError => e
   warn "ERROR: #{e.message}"
   exit 2

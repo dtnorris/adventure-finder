@@ -264,6 +264,8 @@ module AdventureFinderWorkspace
           bin/af-context fleet A [--json] [--verify]
           bin/af-batch start 39
           bin/af-batch resume 39
+          bin/af-batch retry 39 JOB [JOB ...] --reason TEXT [--dry-run]
+          bin/af-batch recovery 39
 
         Defaults:
           workspace root: AF_PROJECT_ROOT, otherwise /Users/davidnorris/code
@@ -272,7 +274,8 @@ module AdventureFinderWorkspace
 
         Safety:
           af-batch start/resume are foreground WLO owners; Ctrl-C cancels only
-          that execution and never tears down or changes provider capacity.
+          that execution. Retry is selected/audited; recovery is read-only.
+          None tears down or changes provider capacity.
           sync always fetches first, skips pull on dirty/detached/no-upstream repos,
           and only uses `git pull --ff-only`. It never resets, stashes, commits, or pushes.
       TEXT

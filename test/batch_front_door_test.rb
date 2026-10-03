@@ -29,6 +29,23 @@ class BatchFrontDoorTest < Minitest::Test
     end
   end
 
+  Status = Struct.new(:successful) { def success? = successful }
+  Result = Struct.new(:stdout, :stderr, :status, keyword_init: true)
+
+  class ComponentRunner
+    attr_reader :calls
+
+    def initialize(*results)
+      @results = results
+      @calls = []
+    end
+
+    def capture(environment, argv, chdir:)
+      @calls << { environment:, argv:, chdir: }
+      @results.shift || raise("unexpected component call")
+    end
+  end
+
   def setup
     @root = Dir.mktmpdir("af-batch-front-door-")
     @afw = File.join(@root, "af-workloads-production")
@@ -201,7 +218,82 @@ class BatchFrontDoorTest < Minitest::Test
   def test_bs12_foreground_executor_is_a_true_exec_handoff
     source = File.read(File.expand_path("../lib/adventure_finder_batch.rb", __dir__))
     assert_includes source, "Kernel.exec(environment, *argv, chdir:)"
-    refute_match(/Process\.spawn|Open3|system\(/, source)
+    refute_match(/Process\.spawn|system\(/, source)
+  end
+
+  def test_ar_batch_retry_resolves_exact_short_handles_and_delegates_selected_jobs
+    write_plan("jobs" => [
+                 { "job_id" => "production-batch-039-adv0946-structural-openness",
+                   "pool_id" => "qwen", "argv" => ["bin/afw-score-job"] },
+                 { "job_id" => "production-batch-039-adv0946-ee",
+                   "pool_id" => "qwen", "argv" => ["bin/afw-score-job"] }
+               ])
+    update_registered_sha
+    prepare_retained(
+      status: "workload_failed",
+      jobs: [{ "status" => "failed", "attempt" => 1 }, { "status" => "failed", "attempt" => 1 }]
+    )
+    before = evidence
+    runner = ComponentRunner.new(
+      diagnostic_result("0946-openness", "production-batch-039-adv0946-structural-openness"),
+      diagnostic_result("0946-ee", "production-batch-039-adv0946-ee")
+    )
+
+    assert_equal 0, front_door(component_runner: runner).run(
+      "retry", "39", jobs: %w[0946-openness 0946-ee], reason: "confirmed transient timeout",
+      dry_run: true, acknowledge_circuit_breaker: true
+    )
+
+    argv = @executor.calls.fetch(0).fetch(:argv)
+    assert_equal [@bundle, "exec", File.join(@wlo, "bin", "wlo"), "retry-failed"], argv.first(4)
+    assert_equal 2, argv.count("--job")
+    assert_includes argv, "production-batch-039-adv0946-structural-openness"
+    assert_includes argv, "production-batch-039-adv0946-ee"
+    assert_option argv, "--reason", "confirmed transient timeout"
+    assert_includes argv, "--dry-run"
+    assert_includes argv, "--acknowledge-circuit-breaker"
+    refute_includes argv, "--all"
+    refute_includes argv, File.join(@rpof, "bin", "rpof")
+    assert_equal before, evidence
+    assert_equal 2, runner.calls.length
+  end
+
+  def test_ar_retry_requires_reason_and_fails_closed_on_ambiguous_or_duplicate_handles
+    prepare_retained(status: "workload_failed", jobs: [{ "status" => "failed", "attempt" => 1 }])
+    assert_raises(AdventureFinderWorkspace::Error) do
+      front_door.run("retry", "39", jobs: ["job-1"], reason: " ")
+    end
+    assert_raises(AdventureFinderWorkspace::Error) do
+      front_door.run("retry", "39", jobs: %w[job-1 job-1], reason: "reviewed")
+    end
+
+    failed = Result.new(stdout: "", stderr: "ERROR: ambiguous job handle", status: Status.new(false))
+    runner = ComponentRunner.new(failed)
+    error = assert_raises(AdventureFinderWorkspace::Error) do
+      front_door(component_runner: runner).run("retry", "39", jobs: ["0946-openness"], reason: "reviewed")
+    end
+    assert_includes error.message, "ambiguous"
+    assert_empty @executor.calls
+  end
+
+  def test_ar_recovery_is_read_only_and_repair_is_a_distinct_fail_closed_delegation
+    prepare_retained(status: "workload_failed", jobs: [{ "status" => "failed", "attempt" => 1 }])
+    before = evidence
+
+    assert_equal 0, front_door.run("recovery", "39")
+    recovery = @executor.calls.pop.fetch(:argv)
+    assert_equal "recovery", recovery.fetch(3)
+    refute_includes recovery, "retry-failed"
+
+    assert_equal 0, front_door.run(
+      "repair", "39", reason: "reviewed retained metadata", dry_run: true
+    )
+    repair = @executor.calls.pop.fetch(:argv)
+    assert_equal "repair", repair.fetch(3)
+    assert_option repair, "--reason", "reviewed retained metadata"
+    assert_includes repair, "--dry-run"
+    refute_includes repair, "retry-failed"
+    assert_equal before, evidence
   end
 
   def test_bs14_unknown_handle_fails_closed
@@ -243,10 +335,17 @@ class BatchFrontDoorTest < Minitest::Test
 
   private
 
-  def front_door
+  def front_door(component_runner: ComponentRunner.new)
     AdventureFinderWorkspace::BatchFrontDoor.new(
       registry_path: @registry, workspace_root: @root, executor: @executor,
-      env_executable: @env, bundle_executable: @bundle, out: @out
+      component_runner:, env_executable: @env, bundle_executable: @bundle, out: @out
+    )
+  end
+
+  def diagnostic_result(handle, id)
+    Result.new(
+      stdout: JSON.generate("subject" => { "handle" => handle, "id" => id }), stderr: "",
+      status: Status.new(true)
     )
   end
 
@@ -306,8 +405,10 @@ class BatchFrontDoorTest < Minitest::Test
       execution_state(status, breaker:).merge(extra)
     ))
     FileUtils.cp(@plan_path, File.join(@output, "plan.json"))
+    plan_jobs = JSON.parse(File.read(@plan_path)).fetch("jobs")
     normalized = jobs.each_with_index.map do |job, index|
-      { "job_id" => "job-#{index + 1}", "pool_id" => "qwen" }.merge(job)
+      id = plan_jobs[index]&.fetch("job_id") || "job-#{index + 1}"
+      { "job_id" => id, "pool_id" => "qwen" }.merge(job)
     end
     File.write(File.join(@output, "jobs.json"), JSON.generate("jobs" => normalized))
     File.write(File.join(@output, "retained.log"), "retained evidence\n")

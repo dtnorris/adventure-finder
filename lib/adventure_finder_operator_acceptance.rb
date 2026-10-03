@@ -22,6 +22,12 @@ module AdventureFinderWorkspace
         test_file: "test/batch_front_door_test.rb"
       ),
       Scenario.new(
+        name: "audited-recovery",
+        description: "selected retry preview, evidence archive, durable audit, and fail-closed repair",
+        repository: "workload-orchestrator",
+        test_file: "test/retry_test.rb"
+      ),
+      Scenario.new(
         name: "production-context",
         description: "registered batch/fleet resolution and fail-closed verification",
         repository: "adventure-finder",

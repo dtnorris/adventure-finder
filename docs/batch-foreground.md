@@ -34,3 +34,24 @@ Retained-state decisions are conservative:
 `AF_PROJECT_ROOT` relocates every registered repository and runtime path. The
 worker source is only `rpof workers --json`, the provider-neutral registry
 publication path; it performs no provider mutation.
+
+## Audited recovery
+
+Repair, resume, and selected retry are separate actions:
+
+```bash
+bin/af-batch retry 39 0946-openness --reason "confirmed transient model timeout" --dry-run
+bin/af-batch retry 39 0946-openness --reason "confirmed transient model timeout"
+bin/af-batch recovery 39
+bin/af-batch resume 39
+```
+
+Retry requires exact canonical IDs or unambiguous FO-07 short handles. WLO
+archives prior attempt evidence, records hashes and the human reason, and queues
+only selected failed/interrupted jobs. It never starts execution. Resume later
+runs pending work; unrelated terminal jobs remain terminal. Breaker
+acknowledgement is available only as an explicit retry/resume flag.
+
+`bin/af-batch repair 39 --reason TEXT --dry-run` reports the current repair
+boundary. There is no deterministic generic repair today, so an actual repair
+request fails closed without changing retained evidence.

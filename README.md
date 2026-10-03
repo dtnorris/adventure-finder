@@ -127,6 +127,8 @@ Open the exact registered production batch as WLO's foreground work owner:
 ```bash
 bin/af-batch start 39
 bin/af-batch resume 39
+bin/af-batch retry 39 0946-openness --reason "confirmed transient model timeout" --dry-run
+bin/af-batch recovery 39
 ```
 
 `start` never remanifests AFW work, clears pause, retries terminal attempts, or
@@ -135,6 +137,11 @@ to WLO's explicit foreground resume. Both verify the registered plan ID and
 SHA-256 first, use WLO's compact live dashboard, and preserve FO-06 Ctrl-C
 cancellation. Provider capacity is unchanged. See
 [`docs/batch-foreground.md`](docs/batch-foreground.md).
+
+`retry` resolves FO-07 short handles through WLO diagnostics, requires an
+operator reason, and delegates exact selected authorization to WLO. `recovery`
+is read-only. `repair` is a separate fail-closed command; WLO currently exposes
+no safe generic retained-state repair transformation.
 
 ### `bin/af-operator-acceptance`
 

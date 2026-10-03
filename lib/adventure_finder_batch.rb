@@ -2,6 +2,7 @@
 
 require "digest"
 require "json"
+require "open3"
 require "pathname"
 require_relative "adventure_finder_workspace"
 require_relative "adventure_finder_production_context"
@@ -12,7 +13,9 @@ module AdventureFinderWorkspace
   class BatchFrontDoor
     PLAN_CONTRACT_VERSION = "wlo-execution-plan/v0.3"
     EXECUTION_CONTRACT_VERSION = "wlo-execution-state/v0.1"
-    ACTIONS = %w[start resume].freeze
+    EXECUTION_ACTIONS = %w[start resume].freeze
+    RECOVERY_ACTIONS = %w[retry recovery repair].freeze
+    ACTIONS = (EXECUTION_ACTIONS + RECOVERY_ACTIONS).freeze
 
     class ForegroundExecutor
       def call(environment, argv, chdir:)
@@ -20,24 +23,47 @@ module AdventureFinderWorkspace
       end
     end
 
+    class ComponentRunner
+      Result = Struct.new(:stdout, :stderr, :status, keyword_init: true)
+
+      def capture(environment, argv, chdir:)
+        stdout, stderr, status = Open3.capture3(environment, *argv, chdir:)
+        Result.new(stdout:, stderr:, status:)
+      end
+    end
+
     def initialize(registry_path:, workspace_root:, executor: ForegroundExecutor.new,
-                   env_executable: nil, bundle_executable: nil, out: $stdout)
+                   component_runner: ComponentRunner.new, env_executable: nil,
+                   bundle_executable: nil, out: $stdout)
       @registry = ProductionContextRegistry.new(registry_path, workspace_root:)
       @executor = executor
+      @component_runner = component_runner
       @env_executable = env_executable
       @bundle_executable = bundle_executable
       @out = out
     end
 
-    def run(action, handle)
+    def run(action, handle, jobs: [], reason: nil, dry_run: false,
+            acknowledge_circuit_breaker: false)
       action = action.to_s
-      raise Error, "batch action must be start or resume" unless ACTIONS.include?(action)
+      raise Error, "batch action must be start, resume, retry, recovery, or repair" unless ACTIONS.include?(action)
+      if EXECUTION_ACTIONS.include?(action) &&
+         (!jobs.empty? || reason || dry_run || acknowledge_circuit_breaker)
+        raise Error, "#{action} does not accept recovery jobs or flags"
+      end
 
       context = @registry.resolve("batch", handle)
       plan = verify_frozen_plan!(context)
       fleet = resolve_worker_registry!(context)
       verify_component_paths!(context, fleet)
       retained = retained_execution(context, plan)
+      if RECOVERY_ACTIONS.include?(action)
+        return run_recovery_action(
+          action, handle.to_s, context, plan, fleet, retained,
+          jobs:, reason:, dry_run:, acknowledge_circuit_breaker:
+        )
+      end
+
       disposition = retained_disposition!(action, handle.to_s, retained)
       return disposition if disposition.is_a?(Integer)
 
@@ -68,7 +94,8 @@ module AdventureFinderWorkspace
         raise Error, "unsupported foreground plan contract #{document['contract_version'].inspect}"
       end
 
-      { "bytes" => bytes, "sha256" => actual_sha, "id" => document.fetch("plan_id") }
+      { "bytes" => bytes, "sha256" => actual_sha, "id" => document.fetch("plan_id"),
+        "document" => document }
     rescue JSON::ParserError => e
       raise Error, "registered frozen plan is invalid JSON: #{e.message}"
     end
@@ -170,6 +197,76 @@ module AdventureFinderWorkspace
         raise Error, "Batch #{handle} is paused. Next: bin/af-batch resume #{handle}"
       end
       nil
+    end
+
+    def run_recovery_action(action, handle, context, plan, fleet, retained, jobs:, reason:, dry_run:,
+                            acknowledge_circuit_breaker:)
+      raise Error, "Batch #{handle} has no retained execution; there is nothing to recover" unless retained
+
+      case action
+      when "retry"
+        raise Error, "retry requires one or more explicit job handles" if jobs.empty?
+        raise Error, "retry requires a nonblank --reason" if reason.to_s.strip.empty?
+        raise Error, "duplicate job handles" unless jobs.uniq == jobs
+
+        canonical = jobs.map { |job| resolve_job_id!(context, plan, job) }
+        raise Error, "selected job handles resolve to duplicate jobs" unless canonical.uniq == canonical
+        arguments = canonical.flat_map { |job_id| ["--job", job_id] }
+        arguments.concat(["--reason", reason.strip])
+        arguments << "--acknowledge-circuit-breaker" if acknowledge_circuit_breaker
+        arguments << "--dry-run" if dry_run
+        delegate_recovery(context, fleet, "retry-failed", arguments)
+      when "recovery"
+        raise Error, "recovery does not accept job handles or --reason" unless jobs.empty? && reason.nil?
+        raise Error, "recovery does not accept mutation flags" if dry_run || acknowledge_circuit_breaker
+        delegate_recovery(context, fleet, "recovery", [])
+      when "repair"
+        raise Error, "repair does not accept job handles" unless jobs.empty?
+        raise Error, "repair requires a nonblank --reason" if reason.to_s.strip.empty?
+        raise Error, "repair cannot acknowledge a circuit breaker" if acknowledge_circuit_breaker
+        arguments = ["--reason", reason.strip]
+        arguments << "--dry-run" if dry_run
+        delegate_recovery(context, fleet, "repair", arguments)
+      end
+    end
+
+    def resolve_job_id!(context, plan, handle)
+      root = context.dig("wlo", "repository_root")
+      argv = [
+        find_executable!("bundle", @bundle_executable), "exec", File.join(root, "bin", "wlo"),
+        "doctor", context.dig("afw", "plan_path"), handle.to_s,
+        "--output", context.dig("wlo", "output_root"), "--json"
+      ]
+      result = @component_runner.capture(
+        { "BUNDLE_GEMFILE" => File.join(root, "Gemfile") }, argv, chdir: root
+      )
+      unless result.status.success?
+        detail = result.stderr.to_s.strip
+        detail = result.stdout.to_s.strip if detail.empty?
+        raise Error, "job handle #{handle.inspect} could not be resolved: #{detail}"
+      end
+      document = JSON.parse(result.stdout)
+      id = document.dig("subject", "id")
+      job_ids = plan.fetch("document").fetch("jobs").map { |job| job.fetch("job_id") }
+      unless job_ids.include?(id)
+        raise Error, "job handle #{handle.inspect} resolved outside the frozen Batch plan"
+      end
+
+      id
+    rescue JSON::ParserError, KeyError => e
+      raise Error, "job handle #{handle.inspect} returned invalid WLO diagnostics: #{e.message}"
+    end
+
+    def delegate_recovery(context, fleet, command, arguments)
+      root = context.dig("wlo", "repository_root")
+      argv = [
+        find_executable!("bundle", @bundle_executable), "exec", File.join(root, "bin", "wlo"),
+        command, context.dig("afw", "plan_path"),
+        "--workdir", context.dig("afw", "repository_root"),
+        "--output", context.dig("wlo", "output_root"), *arguments
+      ]
+      @executor.call(execution_environment(fleet), argv, chdir: root)
+      0
     end
 
     def execution_locked?(output)
