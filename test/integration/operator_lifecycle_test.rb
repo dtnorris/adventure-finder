@@ -350,7 +350,7 @@ class OperatorLifecycleTest < Minitest::Test
       assert_equal({ "complete" => 2 }, runner.store.counts)
       assert_equal 2, observed.length
       assert_equal %w[http://127.0.0.1:11441 http://127.0.0.1:11442],
-                   observed.map { |row| row.dig("environment", "AF_OLLAMA_BASE_URL") }.sort
+                   observed.map { |row| row.dig("environment", "WLO_WORKER_ENDPOINT") }.sort
       observed.each do |row|
         metadata = row.fetch("metadata")
         assert_equal @workdir, row.fetch("chdir")
@@ -358,7 +358,7 @@ class OperatorLifecycleTest < Minitest::Test
         assert_equal 1, metadata.fetch("attempt")
         assert_equal 3, metadata.dig("worker_registry_binding", "registry_revision")
         assert_equal metadata.dig("worker_execution_identity", "endpoint"),
-                     row.dig("environment", "AF_OLLAMA_BASE_URL")
+                     row.dig("environment", "WLO_WORKER_ENDPOINT")
         refute metadata.key?("remote_request")
         refute metadata.key?("provider_job_id")
         refute Dir.exist?(File.join(@output, "runs", row.fetch("job_id"), "provider-attempt-1"))

@@ -4,6 +4,7 @@ require "json"
 require "open3"
 require_relative "adventure_finder_workspace"
 require_relative "adventure_finder_production_context"
+require_relative "adventure_finder_job_handle_resolver"
 
 module AdventureFinderWorkspace
   # FO-07 workspace front door. Classification remains in WLO/RPOF; this class
@@ -59,11 +60,13 @@ module AdventureFinderWorkspace
       batch, handle = exact_arguments!(arguments, 2, "job BATCH JOB")
       context = @registry.resolve("batch", batch)
       root = context.dig("wlo", "repository_root")
+      canonical_id = JobHandleResolver.load(context.dig("afw", "plan_path")).resolve(handle)
       command = ["bundle", "exec", "bin/wlo", logs ? "logs" : "doctor",
-                 context.dig("afw", "plan_path"), handle,
+                 context.dig("afw", "plan_path"), canonical_id,
                  "--output", context.dig("wlo", "output_root"), "--json"]
       command.concat(["--lines", Integer(lines).to_s]) if logs && lines
       result = run_component(command, root)
+      result.fetch("subject")["handle"] = handle
       translate_job_action!(result, batch, context) unless logs
       result
     rescue ArgumentError, TypeError
@@ -136,7 +139,7 @@ module AdventureFinderWorkspace
       case action.fetch("action")
       when "inspect_job_logs"
         action["command"] = "bin/af-doctor job #{batch} #{handle} --logs"
-      when "inspect_pod"
+      when "inspect_worker"
         fleets = context.fetch("associated_fleets")
         return result unless action["worker_id"] && fleets.length == 1
 

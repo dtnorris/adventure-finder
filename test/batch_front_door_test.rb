@@ -287,6 +287,8 @@ class BatchFrontDoorTest < Minitest::Test
     refute_includes argv, File.join(@rpof, "bin", "rpof")
     assert_equal before, evidence
     assert_equal 2, runner.calls.length
+    assert_includes runner.calls.fetch(0).fetch(:argv), "production-batch-039-adv0946-structural-openness"
+    assert_includes runner.calls.fetch(1).fetch(:argv), "production-batch-039-adv0946-ee"
   end
 
   def test_ar_retry_requires_reason_and_fails_closed_on_ambiguous_or_duplicate_handles
@@ -298,12 +300,23 @@ class BatchFrontDoorTest < Minitest::Test
       front_door.run("retry", "39", jobs: %w[job-1 job-1], reason: "reviewed")
     end
 
-    failed = Result.new(stdout: "", stderr: "ERROR: ambiguous job handle", status: Status.new(false))
-    runner = ComponentRunner.new(failed)
+    write_plan("jobs" => [
+                 { "job_id" => "first-adv0946-structural-openness", "group_id" => "ADV-0946",
+                   "pool_id" => "qwen", "argv" => ["bin/afw-score-job"] },
+                 { "job_id" => "second-adv0946-visual-openness", "group_id" => "ADV-0946",
+                   "pool_id" => "qwen", "argv" => ["bin/afw-score-job"] }
+    ])
+    update_registered_sha
+    prepare_retained(
+      status: "workload_failed",
+      jobs: [{ "status" => "failed", "attempt" => 1 }, { "status" => "failed", "attempt" => 1 }]
+    )
+    runner = ComponentRunner.new
     error = assert_raises(AdventureFinderWorkspace::Error) do
       front_door(component_runner: runner).run("retry", "39", jobs: ["0946-openness"], reason: "reviewed")
     end
     assert_includes error.message, "ambiguous"
+    assert_empty runner.calls
     assert_empty @executor.calls
   end
 

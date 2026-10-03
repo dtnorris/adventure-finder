@@ -8,6 +8,7 @@ require "pathname"
 require "yaml"
 require_relative "adventure_finder_workspace"
 require_relative "adventure_finder_production_context"
+require_relative "adventure_finder_job_handle_resolver"
 
 module AdventureFinderWorkspace
   # FO-17 foreground front door. AdventureFinder resolves and verifies the
@@ -271,9 +272,10 @@ module AdventureFinderWorkspace
 
     def resolve_job_id!(context, plan, handle)
       root = context.dig("wlo", "repository_root")
+      id = JobHandleResolver.new(plan.fetch("document")).resolve(handle)
       argv = [
         find_executable!("bundle", @bundle_executable), "exec", File.join(root, "bin", "wlo"),
-        "doctor", context.dig("afw", "plan_path"), handle.to_s,
+        "doctor", context.dig("afw", "plan_path"), id,
         "--output", context.dig("wlo", "output_root"), "--json"
       ]
       result = @component_runner.capture(
@@ -285,7 +287,10 @@ module AdventureFinderWorkspace
         raise Error, "job handle #{handle.inspect} could not be resolved: #{detail}"
       end
       document = JSON.parse(result.stdout)
-      id = document.dig("subject", "id")
+      diagnosed_id = document.dig("subject", "id")
+      unless diagnosed_id == id
+        raise Error, "job handle #{handle.inspect} resolved to inconsistent WLO diagnostics"
+      end
       job_ids = plan.fetch("document").fetch("jobs").map { |job| job.fetch("job_id") }
       unless job_ids.include?(id)
         raise Error, "job handle #{handle.inspect} resolved outside the frozen Batch plan"

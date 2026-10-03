@@ -154,10 +154,11 @@ SHA-256 first, use WLO's compact live dashboard, and preserve FO-06 Ctrl-C
 cancellation. Provider capacity is unchanged. See
 [`docs/batch-foreground.md`](docs/batch-foreground.md).
 
-`retry` resolves FO-07 short handles through WLO diagnostics, requires an
-operator reason, and delegates exact selected authorization to WLO. `recovery`
-is read-only. `repair` is a separate fail-closed command; WLO currently exposes
-no safe generic retained-state repair transformation.
+`retry` resolves FO-07 short handles against the frozen AFW plan, verifies the
+canonical job through WLO diagnostics, requires an operator reason, and
+delegates exact selected authorization to WLO. `recovery` is read-only. `repair`
+is a separate fail-closed command; WLO currently exposes no safe generic
+retained-state repair transformation.
 
 ### `bin/af-operator-acceptance`
 

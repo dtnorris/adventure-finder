@@ -30,7 +30,7 @@ performs one ordered replay:
 4. Publish a new registry revision with bootstrap-incomplete `NOT_READY` workers, then
    a later revision with two compatible `READY` workers.
 5. Let WLO consume only those READY workers. The fake command executor records the
-   exact `AF_OLLAMA_BASE_URL`; WLO retains worker, generation, endpoint, capability,
+   exact `WLO_WORKER_ENDPOINT`; WLO retains worker, generation, endpoint, capability,
    registry-revision, attempt, stdout, and exit evidence with no legacy provider
    request.
 6. Read the WLO report and RPOF campaign status and prove those observer actions do
