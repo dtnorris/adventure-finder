@@ -22,6 +22,18 @@ module AdventureFinderWorkspace
         test_file: "test/batch_front_door_test.rb"
       ),
       Scenario.new(
+        name: "local-worker-registry",
+        description: "RPOF plus LOW merge, exact deduplication, monotonic publication, and fail-closed sources",
+        repository: "adventure-finder",
+        test_file: "test/worker_registry_merge_test.rb"
+      ),
+      Scenario.new(
+        name: "local-capacity-bootstrap",
+        description: "explicit frozen-plan requirement handoff to LOW with no implicit bootstrap",
+        repository: "adventure-finder",
+        test_file: "test/local_capacity_test.rb"
+      ),
+      Scenario.new(
         name: "audited-recovery",
         description: "selected retry preview, evidence archive, durable audit, and fail-closed repair",
         repository: "workload-orchestrator",

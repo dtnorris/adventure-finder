@@ -51,14 +51,17 @@ class BatchFrontDoorTest < Minitest::Test
     @afw = File.join(@root, "af-workloads-production")
     @wlo = File.join(@root, "workload-orchestrator-production")
     @rpof = File.join(@root, "runpod-ollama-fleet-production")
+    @low = File.join(@root, "local-ollama-workers")
     @workload = File.join(@afw, "workloads", PLAN_ID)
     @plan_path = File.join(@workload, "execution-plan.json")
     @output = File.join(@wlo, "output", PLAN_ID)
-    [@workload, File.join(@wlo, "bin"), File.join(@rpof, "bin"),
+    [@workload, File.join(@wlo, "bin"), File.join(@rpof, "bin"), File.join(@low, "bin"),
      File.join(@rpof, "output", "runpod-fleets")].each { |path| FileUtils.mkdir_p(path) }
     write_executable(File.join(@wlo, "bin", "wlo"), "exit 0")
     write_executable(File.join(@rpof, "bin", "rpof"), "exit 0")
+    write_executable(File.join(@low, "bin", "low"), "exit 0")
     File.write(File.join(@rpof, "Gemfile"), "source 'https://example.invalid'\n")
+    File.write(File.join(@low, "Gemfile"), "source 'https://example.invalid'\n")
     write_plan
     write_registry
     @env = write_executable(File.join(@root, "env"), "exit 0")
@@ -81,10 +84,15 @@ class BatchFrontDoorTest < Minitest::Test
     assert_equal @plan_path, argv.fetch(2)
     assert_option argv, "--workdir", @afw
     assert_option argv, "--output", @output
-    assert_option argv, "--worker-source-command", @env
-    assert_includes argv, File.join(@rpof, "bin", "rpof")
-    assert_includes argv, "workers"
+    assert_option argv, "--worker-source-command", RbConfig.ruby
+    assert_includes argv, File.expand_path("../bin/af-workers", __dir__)
+    assert_includes argv, "batch"
+    assert_includes argv, "39"
+    assert_includes argv, @registry
+    assert_includes argv, File.join(@output, "worker-registry-merge")
     assert_includes argv, "--worker-source-arg=--json"
+    refute_includes argv, File.join(@low, "bin", "low")
+    refute_includes argv, "bootstrap"
     refute argv.any? { |value| value.match?(/build|compile|manifest|retry-failed|acknowledge|campaign|desired/) }
     assert_equal @wlo, call.fetch(:chdir)
     assert_equal File.join(@rpof, "output", "runpod-fleets"),
@@ -373,6 +381,7 @@ class BatchFrontDoorTest < Minitest::Test
                        "plan_path" => "af-workloads-production/workloads/#{PLAN_ID}/execution-plan.json" },
             "wlo" => { "repository_root" => "workload-orchestrator-production",
                        "output_root" => "workload-orchestrator-production/output/#{PLAN_ID}" },
+            "local_workers" => { "repository_root" => "local-ollama-workers" },
             "plan" => { "plan_id" => PLAN_ID, "sha256" => Digest::SHA256.file(@plan_path).hexdigest },
             "associated_fleets" => ["A"]
           }

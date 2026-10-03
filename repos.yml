@@ -95,6 +95,19 @@ repositories:
       - Current/default supporting infrastructure; intentionally not tagged core.
       - Owns provider mechanics only; AdventureFinder inference intent remains outside this repository.
 
+  - name: local-ollama-workers
+    github: dtnorris/local-ollama-workers
+    role: Explicit local Ollama capability bootstrap and provider-neutral worker publication.
+    groups: [code, scoring, infrastructure]
+    lifecycle: current
+    visibility: public
+    default: true
+    setup: bundle install
+    test: bundle exec rake
+    requires: [ruby, bundle, git]
+    notes:
+      - Publishes observed local capacity; it does not schedule work or resolve workload aliases.
+
   - name: af-frontier-pack
     github: dtnorris/af-frontier-pack
     role: Deterministic consumption bridge from canonical artifacts to frontier-model reasoning packs.

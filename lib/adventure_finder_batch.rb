@@ -4,6 +4,7 @@ require "digest"
 require "json"
 require "open3"
 require "pathname"
+require "rbconfig"
 require_relative "adventure_finder_workspace"
 require_relative "adventure_finder_production_context"
 
@@ -68,7 +69,7 @@ module AdventureFinderWorkspace
       return disposition if disposition.is_a?(Integer)
 
       print_handoff(handle.to_s, context)
-      @executor.call(execution_environment(fleet), wlo_argv(action, context, fleet),
+      @executor.call(execution_environment(fleet), wlo_argv(action, handle.to_s, context),
                      chdir: context.dig("wlo", "repository_root"))
       0
     end
@@ -114,23 +115,29 @@ module AdventureFinderWorkspace
     end
 
     def verify_component_paths!(context, fleet)
+      unless context.dig("local_workers", "repository_root")
+        raise Error, "Batch has no registered LOW worker source"
+      end
       required_directories = {
         "AFW production root" => context.dig("afw", "repository_root"),
         "AFW workload root" => context.dig("afw", "workload_root"),
         "WLO production root" => context.dig("wlo", "repository_root"),
-        "RPOF production root" => fleet.dig("rpof", "repository_root")
+        "RPOF production root" => fleet.dig("rpof", "repository_root"),
+        "LOW production root" => context.dig("local_workers", "repository_root")
       }
       required_directories.each do |label, path|
         raise Error, "#{label} is not a directory: #{path}" unless File.directory?(path)
       end
       required_executables = {
         "WLO foreground executable" => File.join(context.dig("wlo", "repository_root"), "bin", "wlo"),
-        "RPOF worker-registry executable" => File.join(fleet.dig("rpof", "repository_root"), "bin", "rpof")
+        "RPOF worker-registry executable" => File.join(fleet.dig("rpof", "repository_root"), "bin", "rpof"),
+        "LOW worker-registry executable" => File.join(context.dig("local_workers", "repository_root"), "bin", "low")
       }
       required_executables.each do |label, path|
         raise Error, "#{label} is not executable: #{path}" unless File.executable?(path)
       end
-      find_executable!("env", @env_executable)
+      worker_source = File.expand_path("../bin/af-workers", __dir__)
+      raise Error, "AdventureFinder merged worker-registry command is not a file: #{worker_source}" unless File.file?(worker_source)
       find_executable!("bundle", @bundle_executable)
     end
 
@@ -302,20 +309,24 @@ module AdventureFinderWorkspace
       @out.flush if @out.respond_to?(:flush)
     end
 
-    def wlo_argv(action, context, fleet)
+    def wlo_argv(action, handle, context)
       wlo_root = context.dig("wlo", "repository_root")
-      rpof_root = fleet.dig("rpof", "repository_root")
+      worker_source = File.expand_path("../bin/af-workers", __dir__)
       [
         File.join(wlo_root, "bin", "wlo"), action == "start" ? "run" : "resume",
         context.dig("afw", "plan_path"),
         "--workdir", context.dig("afw", "repository_root"),
         "--output", context.dig("wlo", "output_root"),
-        "--worker-source-command", find_executable!("env", @env_executable),
-        "--worker-source-arg", "BUNDLE_GEMFILE=#{File.join(rpof_root, 'Gemfile')}",
-        "--worker-source-arg", find_executable!("bundle", @bundle_executable),
-        "--worker-source-arg", "exec",
-        "--worker-source-arg", File.join(rpof_root, "bin", "rpof"),
-        "--worker-source-arg", "workers",
+        "--worker-source-command", RbConfig.ruby,
+        "--worker-source-arg", worker_source,
+        "--worker-source-arg", "batch",
+        "--worker-source-arg", handle,
+        "--worker-source-arg", "--root",
+        "--worker-source-arg", @registry.workspace_root.to_s,
+        "--worker-source-arg", "--registry",
+        "--worker-source-arg", @registry.path.to_s,
+        "--worker-source-arg", "--state-root",
+        "--worker-source-arg", File.join(context.dig("wlo", "output_root"), "worker-registry-merge"),
         "--worker-source-arg=--json"
       ]
     end

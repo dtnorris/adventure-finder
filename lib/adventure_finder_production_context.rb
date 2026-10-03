@@ -13,7 +13,7 @@ module AdventureFinderWorkspace
     PATH_FIELDS = {
       "batch" => %w[
         afw.repository_root afw.workload_root afw.plan_path
-        wlo.repository_root wlo.output_root
+        wlo.repository_root wlo.output_root local_workers.repository_root
       ],
       "fleet" => %w[
         rpof.repository_root rpof.campaign_path rpof.budget_path
@@ -61,6 +61,8 @@ module AdventureFinderWorkspace
       end
       context = Marshal.load(Marshal.dump(registered))
       PATH_FIELDS.fetch(type).each do |field|
+        next if field.start_with?("local_workers.") && !context.key?("local_workers")
+
         assign_nested(context, field, resolve_path(fetch_nested(context, field), "#{type} #{name}.#{field}").to_s)
       end
       {"handle" => "#{type} #{name}"}.merge(context)
@@ -78,6 +80,9 @@ module AdventureFinderWorkspace
         verify_file(context.dig("afw", "plan_path"), "AFW execution plan", failures)
         verify_directory(context.dig("wlo", "repository_root"), "WLO production root", failures)
         verify_directory(context.dig("wlo", "output_root"), "WLO output root", failures)
+        if context.key?("local_workers")
+          verify_directory(context.dig("local_workers", "repository_root"), "LOW production root", failures)
+        end
         verify_plan(context, failures)
       when "fleet"
         verify_directory(context.dig("rpof", "repository_root"), "RPOF production root", failures)
@@ -116,9 +121,15 @@ module AdventureFinderWorkspace
       require_nested_strings(context, "afw", %w[repository_root workload_root plan_path], "batch #{name}")
       require_nested_strings(context, "wlo", %w[repository_root output_root], "batch #{name}")
       require_nested_strings(context, "plan", %w[plan_id sha256], "batch #{name}")
+      if context.key?("local_workers")
+        require_nested_strings(context, "local_workers", %w[repository_root], "batch #{name}")
+      end
       validate_sha256(context.dig("plan", "sha256"), "batch #{name} plan")
       validate_model_aliases(context.fetch("model_aliases"), "batch #{name}") if context.key?("model_aliases")
-      validate_relative_paths(context, PATH_FIELDS.fetch("batch"), "batch #{name}")
+      path_fields = PATH_FIELDS.fetch("batch").reject do |field|
+        field.start_with?("local_workers.") && !context.key?("local_workers")
+      end
+      validate_relative_paths(context, path_fields, "batch #{name}")
       require_string_array(context, "associated_fleets", "batch #{name}")
     end
 

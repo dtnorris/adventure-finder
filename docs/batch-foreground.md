@@ -32,8 +32,23 @@ Retained-state decisions are conservative:
 | identity or plan drift | fail closed | fail closed |
 
 `AF_PROJECT_ROOT` relocates every registered repository and runtime path. The
-worker source is only `rpof workers --json`, the provider-neutral registry
-publication path; it performs no provider mutation.
+worker source is AdventureFinder's provider-neutral registry merger. It combines
+the observational `rpof workers --json` and `low workers --json` snapshots and
+performs no provider mutation or local bootstrap. A child-source failure or
+identity/revision conflict fails closed instead of being presented as zero capacity.
+The merged publisher keeps one durable identity and monotonic revision beneath the
+WLO output root.
+
+Local capability establishment is a separate explicit operator action:
+
+```bash
+bin/af-local bootstrap batch 39 qwen35
+```
+
+The command resolves the alias against the frozen plan and invokes LOW only with the
+resulting exact `adventurefinder-model-requirement/v0.1` artifact. A local worker that
+advertises multiple compatible models remains one worker and therefore one WLO busy
+slot across all pools.
 
 ## Audited recovery
 

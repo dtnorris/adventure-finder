@@ -121,6 +121,20 @@ the batch identity, plan ID, plan SHA-256, and pool ID and copies the plan's exa
 Ollama model, digest, context, residency, optional GPU constraint, and labels.
 Aliases contain no model defaults and are never passed downstream for reinterpretation.
 
+Deliberately bootstrap one exact local capability, then use the ordinary batch
+workflow:
+
+```bash
+bin/af-local bootstrap batch 39 qwen35
+bin/af-batch start 39
+```
+
+`af-local bootstrap` persists the exact plan-derived requirement and explicitly
+hands it to LOW. `af-batch` never bootstraps a model. Its worker-source command
+merges observational `rpof workers --json` and `low workers --json` snapshots
+into one versioned provider-neutral registry for WLO. One logical worker is one
+registry record even when it proves compatibility with several pools.
+
 ### `bin/af-batch`
 
 Open the exact registered production batch as WLO's foreground work owner:

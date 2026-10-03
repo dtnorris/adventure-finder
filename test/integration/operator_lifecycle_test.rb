@@ -63,12 +63,20 @@ class OperatorLifecycleTest < Minitest::Test
 
   class ControllerSupervisor
     attr_accessor :lifecycle
-    attr_reader :ensure_calls, :disable_calls
+    attr_reader :validate_calls, :ensure_calls, :disable_calls
 
     def initialize
       @running = false
+      @validate_calls = 0
       @ensure_calls = 0
       @disable_calls = 0
+    end
+
+    def validate_requirements!(binding:)
+      @validate_calls += 1
+      raise "controller received the wrong campaign binding" unless binding
+
+      true
     end
 
     def ensure_running!(binding:, ssh_public_key_path:, heartbeat_timeout_seconds:)
@@ -302,6 +310,7 @@ class OperatorLifecycleTest < Minitest::Test
           assert_equal 6, started.fetch("active_workers")
           assert_equal 6, @provider.create_calls
           assert_equal "RUNNING", started.dig("controller", "state")
+          assert_equal 1, @controller.validate_calls
           assert_equal 1, @controller.ensure_calls
           publish_fleets(bootstrap_status: "running")
         end
@@ -516,6 +525,8 @@ class OperatorLifecycleTest < Minitest::Test
         "index" => 1,
         "name" => "#{profile_id}-worker",
         "pod_id" => "fake-#{profile_id}-pod-1",
+        "worker_id" => "fake-#{profile_id}-fleet-worker-1",
+        "generation_id" => "fake-#{profile_id}-fleet-generation-1",
         "generation" => 1,
         "created_at_utc" => "2029-12-31T23:59:00Z",
         "status" => "active",
@@ -544,6 +555,8 @@ class OperatorLifecycleTest < Minitest::Test
       "workers" => [{
         "index" => 1,
         "pod_id" => worker.fetch("pod_id"),
+        "worker_id" => worker.fetch("worker_id"),
+        "generation_id" => worker.fetch("generation_id"),
         # Capability evidence is already complete while the aggregate bootstrap
         # remains in progress, so RPOF can publish the worker as NOT_READY rather
         # than omitting it.
@@ -570,6 +583,8 @@ class OperatorLifecycleTest < Minitest::Test
       "workers" => [{
         "index" => 1,
         "pod_id" => worker.fetch("pod_id"),
+        "worker_id" => worker.fetch("worker_id"),
+        "generation_id" => worker.fetch("generation_id"),
         "pid" => 12_345,
         "endpoint" => "http://127.0.0.1:#{port}",
         "process_identity" => { "forward" => "fixture", "ssh_port" => 22_001,

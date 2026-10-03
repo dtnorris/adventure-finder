@@ -29,6 +29,8 @@ class ProductionContextTest < Minitest::Test
     ), context.dig("afw", "plan_path")
     assert_equal "0396dadb15bf0ca68238fd4f449ca99e58c3a4ee329dadc8a6e242f5da0ae5d1",
                  context.dig("plan", "sha256")
+    assert_equal File.join(manifest.workspace_root_default, "local-ollama-workers"),
+                 context.dig("local_workers", "repository_root")
   end
 
   def test_workspace_override_resolves_the_same_context_beneath_temporary_root
@@ -213,6 +215,7 @@ class ProductionContextTest < Minitest::Test
     fleet = data.dig("contexts", "fleet", "A")
     %w[repository_root workload_root plan_path].map { |key| batch.dig("afw", key) } +
       %w[repository_root output_root].map { |key| batch.dig("wlo", key) } +
+      [batch.dig("local_workers", "repository_root")] +
       %w[repository_root campaign_path budget_path state_root binding_path].map do |key|
         fleet.dig("rpof", key)
       end
