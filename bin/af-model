@@ -33,6 +33,7 @@ begin
   else
     ollama = result.fetch("ollama")
     puts "Batch: #{result.fetch('batch_handle')} (#{result.fetch('production_batch_id')})"
+    puts "Alias: #{result.fetch('alias')}"
     puts "Pool: #{result.fetch('pool_id')}"
     puts "Model: #{ollama.fetch('model')}"
     puts "Digest: #{ollama.fetch('expected_digest')}"

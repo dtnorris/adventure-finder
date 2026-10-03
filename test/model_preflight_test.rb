@@ -16,6 +16,9 @@ require "adventure_finder_model_preflight"
 class ModelPreflightTest < Minitest::Test
   ROOT = File.expand_path("..", __dir__)
   DIGEST = "a" * 64
+  MODEL_ALIASES = {
+    "qwen35" => ["qwen"], "qwen27" => ["qwen27"], "gemma" => ["gemma"], "gptoss" => ["gptoss"]
+  }.freeze
 
   def test_known_alias_preserves_exact_pool_requirement_and_plan_binding
     with_fixture do |fixture|
@@ -36,7 +39,7 @@ class ModelPreflightTest < Minitest::Test
     with_fixture do |fixture|
       argv = [
         {"AF_PROJECT_ROOT" => fixture.fetch(:root)}, RbConfig.ruby, File.join(ROOT, "bin", "af-model"),
-        "preflight", "batch", "39", "qwen27", "--json", "--registry", fixture.fetch(:registry)
+        "preflight", "batch", "39", "qwen35", "--json", "--registry", fixture.fetch(:registry)
       ]
       first, first_error, first_status = Open3.capture3(*argv, chdir: ROOT)
       second, second_error, second_status = Open3.capture3(*argv, chdir: ROOT)
@@ -44,19 +47,33 @@ class ModelPreflightTest < Minitest::Test
       assert first_status.success?, first_error
       assert second_status.success?, second_error
       assert_equal first, second
-      assert_equal exact_ollama, JSON.parse(first).fetch("ollama")
+      parsed = JSON.parse(first)
+      assert_equal ["qwen35", "qwen"], parsed.values_at("alias", "pool_id")
+      assert_equal qwen35_ollama, parsed.fetch("ollama")
     end
   end
 
   def test_human_output_is_compact
     with_fixture do |fixture|
-      stdout, stderr, status = run_cli(fixture, "qwen27")
+      stdout, stderr, status = run_cli(fixture, "qwen35")
 
       assert status.success?, stderr
-      assert_equal 9, stdout.lines.length
-      assert_includes stdout, "Pool: qwen27\n"
-      assert_includes stdout, "Model: qwen3.6:27b\n"
+      assert_equal 10, stdout.lines.length
+      assert_includes stdout, "Alias: qwen35\nPool: qwen\nModel: qwen3.6:35b-a3b\n"
       assert_includes stdout, "Plan SHA: #{fixture.fetch(:plan_sha256)}\n"
+    end
+  end
+
+  def test_qwen35_preserves_frozen_pool_requirement_and_plan_binding
+    with_fixture do |fixture|
+      result = resolve(fixture, "qwen35")
+      assert_equal MODEL_ALIASES, YAML.safe_load(File.read(File.join(ROOT, "config", "production_contexts.yml")))
+                                      .dig("contexts", "batch", "39", "model_aliases")
+      assert_equal ["qwen35", "qwen"], result.values_at("alias", "pool_id")
+      assert_equal qwen35_ollama, result.fetch("ollama")
+      assert_equal ["production-batch-039", fixture.fetch(:plan_sha256)],
+                   result.values_at("plan_id", "plan_sha256")
+      assert_raises(AdventureFinderWorkspace::Error) { resolve(fixture, "qwen") }
     end
   end
 
@@ -129,7 +146,7 @@ class ModelPreflightTest < Minitest::Test
     AdventureFinderWorkspace::ModelPreflight.new(registry:).resolve(batch_handle: "39", alias_name:)
   end
 
-  def with_fixture(aliases: {"qwen27" => ["qwen27"]}, plan_id: "production-batch-039", requirement_mutation: nil)
+  def with_fixture(aliases: MODEL_ALIASES, plan_id: "production-batch-039", requirement_mutation: nil)
     Dir.mktmpdir("af-model-preflight-") do |root|
       plan_path = File.join(root, "af-workloads-production", "workloads", "production-batch-039", "execution-plan.json")
       FileUtils.mkdir_p(File.dirname(plan_path))
@@ -140,6 +157,7 @@ class ModelPreflightTest < Minitest::Test
         "plan_id" => plan_id,
         "failure_policy" => {"max_consecutive_failures" => 2, "max_total_failures" => 3},
         "pools" => [
+          {"pool_id" => "qwen", "required_labels" => ["inference"], "requirements" => {"ollama" => qwen35_ollama}},
           {"pool_id" => "qwen27", "required_labels" => ["inference"], "requirements" => {"ollama" => requirement}},
           {"pool_id" => "backup", "requirements" => {"ollama" => exact_ollama}}
         ],
@@ -180,6 +198,10 @@ class ModelPreflightTest < Minitest::Test
       "require_fully_gpu_resident" => true,
       "required_gpu_id" => "NVIDIA A40"
     }
+  end
+
+  def qwen35_ollama
+    exact_ollama.merge("model" => "qwen3.6:35b-a3b")
   end
 
   def run_cli(fixture, alias_name)
