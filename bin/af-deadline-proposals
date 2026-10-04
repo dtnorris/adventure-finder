@@ -1,0 +1,44 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "json"
+require "optparse"
+require_relative "../lib/adventure_finder_deadline_proposals"
+
+options = { evidence: {}, json: false }
+parser = OptionParser.new do |o|
+  o.banner = "Usage: bin/af-deadline-proposals --measurements FILE --association FILE --deadline TIMESTAMP " \
+    "--baseline-workers N --as-of TIMESTAMP --max-evidence-age-seconds N [--max-workers N] [--rpof-evidence WORKERS=FILE] [--json]"
+  o.on("--measurements FILE", "Public WLO measurements JSON") { |v| options[:measurements] = v }
+  o.on("--association FILE", "Explicit campaign/profile/binding/capability identity JSON") { |v| options[:association] = v }
+  o.on("--deadline TIMESTAMP", "Target workload completion, not campaign expiry") { |v| options[:deadline] = v }
+  o.on("--baseline-workers N", Integer) { |v| options[:baseline_workers] = v }
+  o.on("--max-workers N", Integer) { |v| options[:max_workers] = v }
+  o.on("--as-of TIMESTAMP", "Explicit planning time; no implicit clock") { |v| options[:as_of] = v }
+  o.on("--max-evidence-age-seconds N", Integer, "Caller-selected freshness tolerance for WLO and RPOF") { |v| options[:max_evidence_age_seconds] = v }
+  o.on("--rpof-evidence WORKERS=FILE", "Repeat for each FO-21A candidate count") do |v|
+    count, separator, path = v.partition("=")
+    raise OptionParser::InvalidArgument, "expected positive WORKERS=FILE" unless count.match?(/\A[1-9]\d{0,15}\z/) && separator == "=" && !path.empty?
+    key = Integer(count, 10)
+    raise OptionParser::InvalidArgument, "duplicate RPOF evidence for #{key}" if options[:evidence].key?(key)
+    options[:evidence][key] = path
+  end
+  o.on("--json") { options[:json] = true }
+end
+begin
+  parser.parse!(ARGV)
+  raise OptionParser::InvalidArgument, "unexpected arguments" unless ARGV.empty?
+  %i[measurements association deadline baseline_workers as_of max_evidence_age_seconds].each do |key|
+    raise OptionParser::MissingArgument, "--#{key.to_s.tr('_', '-')}" if options[key].nil?
+  end
+  read_document = ->(path) { JSON.parse(File.binread(File.expand_path(path))) }
+  result = AdventureFinderDeadlineProposals.compose(
+    wlo: read_document.call(options.fetch(:measurements)), association: read_document.call(options.fetch(:association)),
+    rpof_evidence: options.fetch(:evidence).transform_values { |path| read_document.call(path) },
+    **options.slice(:deadline, :baseline_workers, :max_workers, :as_of, :max_evidence_age_seconds)
+  )
+  puts(options[:json] ? JSON.pretty_generate(result) : AdventureFinderDeadlineProposals.render(result))
+rescue JSON::ParserError, SystemCallError, OptionParser::ParseError => e
+  warn "ERROR: #{e.message}"
+  exit 1
+end
