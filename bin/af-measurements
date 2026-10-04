@@ -1,0 +1,28 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "json"
+require "optparse"
+require_relative "../lib/adventure_finder_measurements"
+
+options = { wlo: nil, rpof: nil, json: false }
+parser = OptionParser.new do |o|
+  o.banner = "Usage: bin/af-measurements --wlo FILE [--rpof FILE] [--json]"
+  o.on("--wlo FILE", "WLO execution measurement JSON") { |value| options[:wlo] = value }
+  o.on("--rpof FILE", "Explicitly associated RPOF provider/cost measurement JSON") { |value| options[:rpof] = value }
+  o.on("--json", "Emit composed machine-readable JSON") { options[:json] = true }
+end
+
+begin
+  parser.parse!(ARGV)
+  raise OptionParser::InvalidArgument, "unexpected arguments: #{ARGV.join(' ')}" unless ARGV.empty?
+  raise OptionParser::MissingArgument, "--wlo FILE" if options[:wlo].to_s.empty?
+  wlo = JSON.parse(File.binread(File.expand_path(options.fetch(:wlo))))
+  rpof = options[:rpof] && JSON.parse(File.binread(File.expand_path(options.fetch(:rpof))))
+  composition = AdventureFinderMeasurements::Composition.new(wlo:, rpof:)
+  puts(options[:json] ? JSON.pretty_generate(composition.document) : composition.render)
+rescue JSON::ParserError, SystemCallError, OptionParser::ParseError,
+       AdventureFinderMeasurements::Error => e
+  warn "ERROR: #{e.message}"
+  exit 1
+end
