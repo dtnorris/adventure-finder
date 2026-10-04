@@ -1,0 +1,38 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "optparse"
+
+$LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
+require "adventure_finder_review"
+
+options = {
+  registry: File.expand_path("../config/production_contexts.yml", __dir__),
+  manifest: File.expand_path("../repos.yml", __dir__),
+  root: ENV.fetch("AF_PROJECT_ROOT", "/Users/davidnorris/code")
+}
+parser = OptionParser.new do |entry|
+  entry.banner = "Usage: bin/af-review prepare BATCH JOB [options]"
+  entry.on("--root PATH", "Workspace root (default: AF_PROJECT_ROOT)") { |value| options[:root] = value }
+  entry.on("--registry PATH", "Production context registry") { |value| options[:registry] = value }
+  entry.on("--manifest PATH", "AdventureFinder workspace manifest") { |value| options[:manifest] = value }
+end
+
+begin
+  parser.parse!(ARGV)
+  action = ARGV.shift
+  batch = ARGV.shift
+  job = ARGV.shift
+  unless action == "prepare" && batch && job && ARGV.empty?
+    raise OptionParser::InvalidArgument, "expected prepare BATCH JOB"
+  end
+
+  front_door = AdventureFinderWorkspace::ReviewFrontDoor.new(
+    registry_path: options.fetch(:registry), manifest_path: options.fetch(:manifest),
+    workspace_root: options.fetch(:root)
+  )
+  exit front_door.prepare(batch, job)
+rescue AdventureFinderWorkspace::Error, OptionParser::ParseError => e
+  warn "ERROR: #{e.message}"
+  exit 2
+end

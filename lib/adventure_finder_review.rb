@@ -1,0 +1,179 @@
+# frozen_string_literal: true
+
+require "json"
+require "open3"
+require "pathname"
+require_relative "adventure_finder_workspace"
+require_relative "adventure_finder_production_context"
+require_relative "adventure_finder_job_handle_resolver"
+
+module AdventureFinderWorkspace
+  # Composes the public AFW evidence-binding and pipeline review-preparation
+  # commands for one exact frozen AdventureFinder batch/job context.
+  class ReviewFrontDoor
+    PLAN_CONTRACT_VERSION = "wlo-execution-plan/v0.3"
+    PIPELINE_REPOSITORY = "af-data-pipeline"
+    SAFE_PATH_SEGMENT = /\A[A-Za-z0-9][A-Za-z0-9._-]*\z/
+
+    class ComponentRunner
+      Result = Struct.new(:stdout, :stderr, :status, keyword_init: true)
+
+      def capture(environment, argv, chdir:)
+        stdout, stderr, status = Open3.capture3(environment, *argv, chdir:)
+        Result.new(stdout:, stderr:, status:)
+      end
+    end
+
+    def initialize(registry_path:, manifest_path:, workspace_root:,
+                   component_runner: ComponentRunner.new, out: $stdout)
+      @registry = ProductionContextRegistry.new(registry_path, workspace_root:)
+      @manifest = Manifest.new(manifest_path)
+      @workspace_root = Pathname(workspace_root).expand_path.cleanpath
+      @component_runner = component_runner
+      @out = out
+    end
+
+    def prepare(batch_handle, job_handle)
+      context = verified_batch_context(batch_handle)
+      plan = load_frozen_plan(context)
+      job_id = JobHandleResolver.new(plan).resolve(job_handle)
+      plan_id = context.fetch("production_batch_id")
+      safe_path_segment!(plan_id, "registered plan ID")
+      safe_path_segment!(job_id, "canonical job ID")
+
+      afw_root = context.dig("afw", "repository_root")
+      receipt_path = bind_evidence(context, plan_id, job_id)
+      receipt_id = receipt_identity(receipt_path)
+      pipeline_root = pipeline_repository_root
+      review_dir = File.join(pipeline_root, "output", "adventure-finder-review", plan_id, job_id)
+      audit_dir = File.join(pipeline_root, "audits", "adventure-finder-review", plan_id, job_id)
+      pipeline_output = prepare_review_package(
+        pipeline_root:, receipt_path:, afw_root:, review_dir:, audit_dir:
+      )
+
+      @out.puts "Batch: #{batch_handle} (#{plan_id})"
+      @out.puts "Job: #{job_handle} -> #{job_id}"
+      @out.puts "AFW receipt: #{receipt_path}"
+      @out.puts "AFW receipt ID: #{receipt_id}"
+      @out.puts pipeline_output
+      0
+    end
+
+    private
+
+    def verified_batch_context(handle)
+      context = @registry.resolve("batch", handle)
+      failures = @registry.verify("batch", handle)
+      unless failures.empty?
+        raise Error, "registered batch context is invalid: #{failures.join('; ')}"
+      end
+
+      context
+    end
+
+    def load_frozen_plan(context)
+      path = context.dig("afw", "plan_path")
+      document = JSON.parse(File.binread(path))
+      raise Error, "registered frozen plan must be a JSON object" unless document.is_a?(Hash)
+
+      expected_id = context.dig("plan", "plan_id")
+      unless document["plan_id"] == expected_id && expected_id == context.fetch("production_batch_id")
+        raise Error, "registered frozen plan identity does not match Batch context"
+      end
+      unless document["contract_version"] == PLAN_CONTRACT_VERSION
+        raise Error, "unsupported frozen plan contract #{document['contract_version'].inspect}"
+      end
+      document
+    rescue Errno::ENOENT, JSON::ParserError => e
+      raise Error, "registered frozen plan is invalid: #{e.message}"
+    end
+
+    def pipeline_repository_root
+      matches = @manifest.repositories.select { |repo| repo["name"] == PIPELINE_REPOSITORY }
+      unless matches.length == 1
+        raise Error, "workspace manifest must contain exactly one #{PIPELINE_REPOSITORY} repository"
+      end
+
+      root = (@workspace_root / matches.first.fetch("name")).cleanpath
+      prefix = "#{@workspace_root}#{File::SEPARATOR}"
+      raise Error, "pipeline repository resolves outside workspace root" unless root.to_s.start_with?(prefix)
+      raise Error, "pipeline repository is not a directory: #{root}" unless root.directory?
+
+      root.to_s
+    end
+
+    def bind_evidence(context, workload_id, job_id)
+      root = context.dig("afw", "repository_root")
+      executable = File.join(root, "bin", "afw-bind-scoring-evidence")
+      raise Error, "AFW evidence-binding command is not executable: #{executable}" unless File.executable?(executable)
+
+      result = @component_runner.capture(
+        {}, [executable, workload_id, context.dig("wlo", "output_root"), job_id], chdir: root
+      )
+      unless result.status.success?
+        component_failure!(
+          "AFW evidence binding", result,
+          "resolve the reported evidence/execution problem, then rerun bin/af-review prepare"
+        )
+      end
+      match = result.stdout.to_s.match(/^Evidence receipt: (.+)$/)
+      raise Error, "AFW evidence binding did not report a receipt path" unless match
+
+      path = File.expand_path(match[1].strip)
+      afw_root = File.realpath(root)
+      unless File.file?(path) && File.realpath(path).start_with?("#{afw_root}#{File::SEPARATOR}")
+        raise Error, "AFW evidence binding reported an invalid receipt path: #{path}"
+      end
+      path
+    rescue Errno::ENOENT => e
+      raise Error, "AFW evidence binding reported an invalid receipt path: #{e.message}"
+    end
+
+    def receipt_identity(path)
+      document = JSON.parse(File.binread(path))
+      identity = document["receipt_id"]
+      unless identity.is_a?(String) && identity.match?(ProductionContextRegistry::SHA256_PATTERN)
+        raise Error, "AFW receipt did not expose a valid receipt identity"
+      end
+      identity
+    rescue JSON::ParserError => e
+      raise Error, "AFW receipt is invalid JSON: #{e.message}"
+    end
+
+    def prepare_review_package(pipeline_root:, receipt_path:, afw_root:, review_dir:, audit_dir:)
+      executable = File.join(pipeline_root, "bin", "af-data")
+      raise Error, "pipeline review command is not executable: #{executable}" unless File.executable?(executable)
+
+      argv = [
+        executable, "prepare-review", receipt_path,
+        "--afw-root", afw_root,
+        "--review-dir", review_dir,
+        "--audit-dir", audit_dir
+      ]
+      result = @component_runner.capture({}, argv, chdir: pipeline_root)
+      unless result.status.success?
+        component_failure!(
+          "pipeline review preparation", result,
+          "resolve the reported review package/ledger problem, then rerun bin/af-review prepare"
+        )
+      end
+      output = result.stdout.to_s.strip
+      raise Error, "pipeline review preparation did not report package status" if output.empty?
+
+      output
+    end
+
+    def component_failure!(label, result, next_action)
+      detail = result.stderr.to_s.strip
+      detail = result.stdout.to_s.strip if detail.empty?
+      detail = "component exited without an error message" if detail.empty?
+      raise Error, "#{label} failed: #{detail}. Next: #{next_action}."
+    end
+
+    def safe_path_segment!(value, label)
+      return if value.is_a?(String) && SAFE_PATH_SEGMENT.match?(value) && !%w[. ..].include?(value)
+
+      raise Error, "#{label} is unsafe for deterministic review storage: #{value.inspect}"
+    end
+  end
+end
