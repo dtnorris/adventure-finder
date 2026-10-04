@@ -30,7 +30,7 @@ module AdventureFinderWorkspace
       gemfile = File.join(low_root, "Gemfile")
       raise Error, "LOW Gemfile is not a file: #{gemfile}" unless File.file?(gemfile)
 
-      requirement = ModelPreflight.new(registry: @registry).resolve(
+      requirement = ModelPreflight.new(registry: @registry).resolve_legacy_requirement(
         batch_handle: batch_handle.to_s, alias_name: alias_name.to_s
       )
       path = write_requirement(batch, alias_name.to_s, requirement)

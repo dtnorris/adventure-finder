@@ -13,6 +13,12 @@ require "adventure_finder_workspace"
 require "adventure_finder_production_context"
 require "adventure_finder_model_preflight"
 
+WLO_ROOT = ENV.fetch(
+  "WLO_REPOSITORY_ROOT", File.expand_path("../../workload-orchestrator", __dir__)
+) unless defined?(WLO_ROOT)
+$LOAD_PATH.unshift(File.join(WLO_ROOT, "lib"))
+require "workload_orchestrator/ollama_capability_request"
+
 class ModelPreflightTest < Minitest::Test
   ROOT = File.expand_path("..", __dir__)
   DIGEST = "a" * 64
@@ -24,21 +30,34 @@ class ModelPreflightTest < Minitest::Test
     with_fixture do |fixture|
       result = resolve(fixture, "qwen27")
 
-      assert_equal "adventurefinder-model-requirement/v0.1", result.fetch("contract_version")
-      assert_equal "39", result.fetch("batch_handle")
-      assert_equal "production-batch-039", result.fetch("production_batch_id")
-      assert_equal "production-batch-039", result.fetch("plan_id")
-      assert_equal fixture.fetch(:plan_sha256), result.fetch("plan_sha256")
-      assert_equal "qwen27", result.fetch("pool_id")
-      assert_equal %w[inference], result.fetch("required_labels")
-      assert_equal exact_ollama, result.fetch("ollama")
+      request = result.fetch("capability_request")
+      provenance = result.fetch("provenance")
+      identity = provenance.fetch("capability_request")
+
+      assert_equal "ollama-capability-request/v0.1", request.fetch("contract_version")
+      assert_equal exact_ollama, request.fetch("ollama")
+      assert_equal "adventurefinder-capability-provenance/v0.1", provenance.fetch("contract_version")
+      assert_equal "39", provenance.fetch("batch_handle")
+      assert_equal "production-batch-039", provenance.fetch("production_batch_id")
+      assert_equal "production-batch-039", provenance.fetch("plan_id")
+      assert_equal fixture.fetch(:plan_sha256), provenance.fetch("plan_sha256")
+      assert_equal "qwen27", provenance.fetch("operator_alias")
+      assert_equal "qwen27", provenance.fetch("pool_id")
+      parsed = WorkloadOrchestrator::OllamaCapabilityRequest.new(JSON.generate(request))
+      assert_equal parsed.fingerprint, identity.fetch("fingerprint")
+      assert_equal Digest::SHA256.hexdigest(JSON.generate(request)), identity.fetch("artifact_sha256")
     end
   end
 
   def test_af_project_root_override_and_json_output_are_deterministic
     with_fixture do |fixture|
       argv = [
-        {"AF_PROJECT_ROOT" => fixture.fetch(:root)}, RbConfig.ruby, File.join(ROOT, "bin", "af-model"),
+        {
+          "AF_PROJECT_ROOT" => fixture.fetch(:root),
+          "RUBYLIB" => File.join(WLO_ROOT, "lib"),
+          "RUBYOPT" => "-rworkload_orchestrator/ollama_capability_request"
+        },
+        RbConfig.ruby, File.join(ROOT, "bin", "af-model"),
         "preflight", "batch", "39", "qwen35", "--json", "--registry", fixture.fetch(:registry)
       ]
       first, first_error, first_status = Open3.capture3(*argv, chdir: ROOT)
@@ -48,8 +67,9 @@ class ModelPreflightTest < Minitest::Test
       assert second_status.success?, second_error
       assert_equal first, second
       parsed = JSON.parse(first)
-      assert_equal ["qwen35", "qwen"], parsed.values_at("alias", "pool_id")
-      assert_equal qwen35_ollama, parsed.fetch("ollama")
+      assert_equal ["qwen35", "qwen"],
+                   parsed.fetch("provenance").values_at("operator_alias", "pool_id")
+      assert_equal qwen35_ollama, parsed.dig("capability_request", "ollama")
     end
   end
 
@@ -58,9 +78,11 @@ class ModelPreflightTest < Minitest::Test
       stdout, stderr, status = run_cli(fixture, "qwen35")
 
       assert status.success?, stderr
-      assert_equal 10, stdout.lines.length
+      assert_equal 12, stdout.lines.length
       assert_includes stdout, "Alias: qwen35\nPool: qwen\nModel: qwen3.6:35b-a3b\n"
       assert_includes stdout, "Plan SHA: #{fixture.fetch(:plan_sha256)}\n"
+      assert_includes stdout, "Capability fingerprint: "
+      assert_includes stdout, "Capability artifact SHA: "
     end
   end
 
@@ -69,10 +91,11 @@ class ModelPreflightTest < Minitest::Test
       result = resolve(fixture, "qwen35")
       assert_equal MODEL_ALIASES, YAML.safe_load(File.read(File.join(ROOT, "config", "production_contexts.yml")))
                                       .dig("contexts", "batch", "39", "model_aliases")
-      assert_equal ["qwen35", "qwen"], result.values_at("alias", "pool_id")
-      assert_equal qwen35_ollama, result.fetch("ollama")
+      assert_equal ["qwen35", "qwen"],
+                   result.fetch("provenance").values_at("operator_alias", "pool_id")
+      assert_equal qwen35_ollama, result.dig("capability_request", "ollama")
       assert_equal ["production-batch-039", fixture.fetch(:plan_sha256)],
-                   result.values_at("plan_id", "plan_sha256")
+                   result.fetch("provenance").values_at("plan_id", "plan_sha256")
       assert_raises(AdventureFinderWorkspace::Error) { resolve(fixture, "qwen") }
     end
   end
@@ -143,7 +166,9 @@ class ModelPreflightTest < Minitest::Test
     registry = AdventureFinderWorkspace::ProductionContextRegistry.new(
       fixture.fetch(:registry), workspace_root: fixture.fetch(:root)
     )
-    AdventureFinderWorkspace::ModelPreflight.new(registry:).resolve(batch_handle: "39", alias_name:)
+    AdventureFinderWorkspace::ModelPreflight.new(
+      registry:, capability_request_class: WorkloadOrchestrator::OllamaCapabilityRequest
+    ).resolve(batch_handle: "39", alias_name:)
   end
 
   def with_fixture(aliases: MODEL_ALIASES, plan_id: "production-batch-039", requirement_mutation: nil)
@@ -206,7 +231,12 @@ class ModelPreflightTest < Minitest::Test
 
   def run_cli(fixture, alias_name)
     Open3.capture3(
-      {"AF_PROJECT_ROOT" => fixture.fetch(:root)}, RbConfig.ruby, File.join(ROOT, "bin", "af-model"),
+      {
+        "AF_PROJECT_ROOT" => fixture.fetch(:root),
+        "RUBYLIB" => File.join(WLO_ROOT, "lib"),
+        "RUBYOPT" => "-rworkload_orchestrator/ollama_capability_request"
+      },
+      RbConfig.ruby, File.join(ROOT, "bin", "af-model"),
       "preflight", "batch", "39", alias_name, "--registry", fixture.fetch(:registry), chdir: ROOT
     )
   end

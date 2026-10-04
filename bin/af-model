@@ -31,17 +31,22 @@ begin
   if options[:json]
     puts JSON.pretty_generate(result)
   else
-    ollama = result.fetch("ollama")
-    puts "Batch: #{result.fetch('batch_handle')} (#{result.fetch('production_batch_id')})"
-    puts "Alias: #{result.fetch('alias')}"
-    puts "Pool: #{result.fetch('pool_id')}"
+    capability_request = result.fetch("capability_request")
+    provenance = result.fetch("provenance")
+    ollama = capability_request.fetch("ollama")
+    capability_identity = provenance.fetch("capability_request")
+    puts "Batch: #{provenance.fetch('batch_handle')} (#{provenance.fetch('production_batch_id')})"
+    puts "Alias: #{provenance.fetch('operator_alias')}"
+    puts "Pool: #{provenance.fetch('pool_id')}"
     puts "Model: #{ollama.fetch('model')}"
     puts "Digest: #{ollama.fetch('expected_digest')}"
     puts "Context: #{ollama.fetch('required_context_length')}"
     puts "Fully GPU resident: required"
     puts "GPU: #{ollama.fetch('required_gpu_id', 'not constrained by plan')}"
-    puts "Plan: #{result.fetch('plan_id')}"
-    puts "Plan SHA: #{result.fetch('plan_sha256')}"
+    puts "Plan: #{provenance.fetch('plan_id')}"
+    puts "Plan SHA: #{provenance.fetch('plan_sha256')}"
+    puts "Capability fingerprint: #{capability_identity.fetch('fingerprint')}"
+    puts "Capability artifact SHA: #{capability_identity.fetch('artifact_sha256')}"
   end
   exit 0
 rescue AdventureFinderWorkspace::Error, OptionParser::ParseError => e

@@ -3,22 +3,65 @@
 require "digest"
 require "json"
 require_relative "adventure_finder_workspace"
+require_relative "adventure_finder_capability_artifacts"
 require_relative "adventure_finder_production_context"
 
 module AdventureFinderWorkspace
   class ModelPreflight
-    CONTRACT_VERSION = "adventurefinder-model-requirement/v0.1"
+    LEGACY_CONTRACT_VERSION = "adventurefinder-model-requirement/v0.1"
     PLAN_CONTRACT_VERSION = "wlo-execution-plan/v0.3"
     DIGEST = /\A[0-9a-f]{64}\z/
     OLLAMA_KEYS = %w[
       model expected_digest required_context_length require_fully_gpu_resident required_gpu_id
     ].freeze
 
-    def initialize(registry:)
+    Source = Struct.new(
+      :batch_handle, :alias_name, :batch, :plan, :pool_id, :pool,
+      :requirement, :required_labels,
+      keyword_init: true
+    )
+
+    def initialize(registry:, capability_request_class: nil)
       @registry = registry
+      @capability_request_class = capability_request_class
     end
 
     def resolve(batch_handle:, alias_name:)
+      source = resolve_source(batch_handle:, alias_name:)
+      CapabilityArtifacts.new(
+        ollama_requirement: source.requirement,
+        provenance: {
+          operator_alias: source.alias_name,
+          batch_handle: source.batch_handle,
+          production_batch_id: source.batch.fetch("production_batch_id"),
+          plan_id: source.plan.fetch("plan_id"),
+          plan_sha256: source.batch.dig("plan", "sha256"),
+          pool_id: source.pool_id
+        },
+        capability_request_class: capability_request_class!(source.batch)
+      ).to_h
+    end
+
+    # Transitional compatibility for the existing LOW handoff. New
+    # AdventureFinder artifact generation uses #resolve and the split contracts.
+    def resolve_legacy_requirement(batch_handle:, alias_name:)
+      source = resolve_source(batch_handle:, alias_name:)
+      {
+        "contract_version" => LEGACY_CONTRACT_VERSION,
+        "batch_handle" => source.batch_handle,
+        "production_batch_id" => source.batch.fetch("production_batch_id"),
+        "plan_id" => source.plan.fetch("plan_id"),
+        "plan_sha256" => source.batch.dig("plan", "sha256"),
+        "alias" => source.alias_name,
+        "pool_id" => source.pool_id,
+        "required_labels" => source.required_labels,
+        "ollama" => source.requirement
+      }.freeze
+    end
+
+    private
+
+    def resolve_source(batch_handle:, alias_name:)
       batch = @registry.resolve("batch", batch_handle)
       verify_plan_bytes!(batch)
       plan = load_plan(batch.dig("afw", "plan_path"))
@@ -27,20 +70,33 @@ module AdventureFinderWorkspace
       pool = exact_pool!(plan, pool_id)
       requirement = exact_requirement!(pool)
 
-      {
-        "contract_version" => CONTRACT_VERSION,
-        "batch_handle" => batch_handle.to_s,
-        "production_batch_id" => batch.fetch("production_batch_id"),
-        "plan_id" => plan.fetch("plan_id"),
-        "plan_sha256" => batch.dig("plan", "sha256"),
-        "alias" => alias_name.to_s,
-        "pool_id" => pool_id,
-        "required_labels" => exact_labels!(pool.fetch("required_labels", [])),
-        "ollama" => requirement
-      }.freeze
+      Source.new(
+        batch_handle: batch_handle.to_s,
+        alias_name: alias_name.to_s,
+        batch:,
+        plan:,
+        pool_id:,
+        pool:,
+        requirement:,
+        required_labels: exact_labels!(pool.fetch("required_labels", []))
+      ).freeze
     end
 
-    private
+    def capability_request_class!(batch)
+      return @capability_request_class if @capability_request_class
+      return WorkloadOrchestrator::OllamaCapabilityRequest if defined?(WorkloadOrchestrator::OllamaCapabilityRequest)
+
+      path = File.join(
+        batch.dig("wlo", "repository_root"), "lib", "workload_orchestrator",
+        "ollama_capability_request.rb"
+      )
+      raise Error, "WLO capability-request contract is unavailable: #{path}" unless File.file?(path)
+
+      require path
+      WorkloadOrchestrator::OllamaCapabilityRequest
+    rescue LoadError, NameError => e
+      raise Error, "WLO capability-request contract could not be loaded: #{e.message}"
+    end
 
     def verify_plan_bytes!(batch)
       path = batch.dig("afw", "plan_path")
