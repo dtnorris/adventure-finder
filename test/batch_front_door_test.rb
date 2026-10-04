@@ -34,14 +34,21 @@ class BatchFrontDoorTest < Minitest::Test
 
   class ComponentRunner
     attr_reader :calls
+    attr_accessor :action_result
 
-    def initialize(*results)
+    def initialize(*results, action_result: nil)
       @results = results
+      self.action_result = action_result
       @calls = []
     end
 
     def capture(environment, argv, chdir:)
       @calls << { environment:, argv:, chdir: }
+      if argv.include?("action-check")
+        raise "missing action-check result" unless action_result
+
+        return action_result.respond_to?(:call) ? action_result.call(argv) : action_result
+      end
       @results.shift || raise("unexpected component call")
     end
   end
@@ -62,12 +69,14 @@ class BatchFrontDoorTest < Minitest::Test
     write_executable(File.join(@low, "bin", "low"), "exit 0")
     File.write(File.join(@rpof, "Gemfile"), "source 'https://example.invalid'\n")
     File.write(File.join(@low, "Gemfile"), "source 'https://example.invalid'\n")
+    File.write(File.join(@wlo, "Gemfile"), "source 'https://example.invalid'\n")
     write_plan
     write_registry
     @env = write_executable(File.join(@root, "env"), "exit 0")
     @bundle = write_executable(File.join(@root, "bundle"), "exit 0")
     @executor = Executor.new
     @out = StringIO.new
+    @action_checks = {}
   end
 
   def teardown
@@ -231,12 +240,9 @@ class BatchFrontDoorTest < Minitest::Test
 
   def test_bs11_active_executor_lock_prevents_second_foreground_owner
     prepare_retained(status: "running", jobs: [{ "status" => "running", "attempt" => 1 }])
-    lock_path = File.join(@output, ".execution.lock")
-    File.open(lock_path, File::RDWR) do |lock|
-      lock.flock(File::LOCK_EX | File::LOCK_NB)
-      error = assert_raises(AdventureFinderWorkspace::Error) { front_door.run("start", "39") }
-      assert_includes error.message, "active executor"
-    end
+    set_action_check("run", "blocked", "executor_active", "already has an active executor")
+    error = assert_raises(AdventureFinderWorkspace::Error) { front_door.run("start", "39") }
+    assert_includes error.message, "active executor"
     assert_empty @executor.calls
   end
 
@@ -249,6 +255,10 @@ class BatchFrontDoorTest < Minitest::Test
   def test_bs12_foreground_executor_is_a_true_exec_handoff
     source = File.read(File.expand_path("../lib/adventure_finder_batch.rb", __dir__))
     assert_includes source, "Kernel.exec(environment, *argv, chdir:)"
+    assert_includes source, '"action-check"'
+    %w[execution.json jobs.json .execution.lock].each { |internal| refute_includes source, internal }
+    refute_includes source, "retained_disposition!"
+    refute_match(/def retained_(execution|disposition)/, source)
     refute_match(/Process\.spawn|system\(/, source)
   end
 
@@ -286,9 +296,9 @@ class BatchFrontDoorTest < Minitest::Test
     refute_includes argv, "--all"
     refute_includes argv, File.join(@rpof, "bin", "rpof")
     assert_equal before, evidence
-    assert_equal 2, runner.calls.length
-    assert_includes runner.calls.fetch(0).fetch(:argv), "production-batch-039-adv0946-structural-openness"
-    assert_includes runner.calls.fetch(1).fetch(:argv), "production-batch-039-adv0946-ee"
+    assert_equal 3, runner.calls.length
+    assert_includes runner.calls.fetch(1).fetch(:argv), "production-batch-039-adv0946-structural-openness"
+    assert_includes runner.calls.fetch(2).fetch(:argv), "production-batch-039-adv0946-ee"
   end
 
   def test_ar_retry_requires_reason_and_fails_closed_on_ambiguous_or_duplicate_handles
@@ -316,7 +326,8 @@ class BatchFrontDoorTest < Minitest::Test
       front_door(component_runner: runner).run("retry", "39", jobs: ["0946-openness"], reason: "reviewed")
     end
     assert_includes error.message, "ambiguous"
-    assert_empty runner.calls
+    assert_equal 1, runner.calls.length
+    assert_includes runner.calls.fetch(0).fetch(:argv), "action-check"
     assert_empty @executor.calls
   end
 
@@ -350,6 +361,17 @@ class BatchFrontDoorTest < Minitest::Test
     recorder = File.join(@root, "wlo-argv.json")
     write_executable(File.join(@wlo, "bin", "wlo"), <<~RUBY)
       require "json"
+      if ARGV.fetch(0) == "action-check"
+        action = ARGV.fetch(ARGV.index("--action") + 1)
+        puts JSON.generate(
+          "contract_version" => "wlo-execution-action-check/v0.1",
+          "action" => action,
+          "disposition" => "execute",
+          "reason" => "new_execution",
+          "execution_status" => nil
+        )
+        exit 0
+      end
       File.write(#{recorder.dump}, JSON.generate(ARGV))
       exit 0
     RUBY
@@ -365,21 +387,31 @@ class BatchFrontDoorTest < Minitest::Test
     assert_includes argv, @output
   end
 
-  def test_retained_identity_and_plan_copy_mismatch_fail_before_launch
-    prepare_retained(status: "pending", jobs: [{ "status" => "pending" }])
-    state_path = File.join(@output, "execution.json")
-    state = JSON.parse(File.read(state_path)).merge("plan_sha256" => "0" * 64)
-    File.write(state_path, JSON.generate(state))
-    assert_raises(AdventureFinderWorkspace::Error) { front_door.run("start", "39") }
-    File.write(state_path, JSON.generate(execution_state("pending")))
-    File.write(File.join(@output, "plan.json"), "changed")
-    assert_raises(AdventureFinderWorkspace::Error) { front_door.run("start", "39") }
+  def test_wlo_action_check_failure_or_invalid_result_fails_before_launch
+    failed = Result.new(stdout: "", stderr: "retained execution identity mismatch", status: Status.new(false))
+    runner = ComponentRunner.new(action_result: failed)
+    error = assert_raises(AdventureFinderWorkspace::Error) do
+      front_door(component_runner: runner).run("start", "39")
+    end
+    assert_includes error.message, "WLO action check failed"
+
+    invalid = Result.new(stdout: JSON.generate("disposition" => "execute"), stderr: "", status: Status.new(true))
+    runner = ComponentRunner.new(action_result: invalid)
+    assert_raises(AdventureFinderWorkspace::Error) do
+      front_door(component_runner: runner).run("start", "39")
+    end
     assert_empty @executor.calls
   end
 
   private
 
-  def front_door(component_runner: ComponentRunner.new)
+  def front_door(component_runner: nil)
+    action_result = lambda do |argv|
+      action = argv.fetch(argv.index("--action") + 1)
+      @action_checks.fetch(action) { default_action_check(action) }
+    end
+    component_runner ||= ComponentRunner.new(action_result:)
+    component_runner.action_result ||= action_result if component_runner.respond_to?(:action_result=)
     AdventureFinderWorkspace::BatchFrontDoor.new(
       registry_path: @registry, workspace_root: @root, executor: @executor,
       component_runner:, env_executable: @env, bundle_executable: @bundle, out: @out
@@ -391,6 +423,30 @@ class BatchFrontDoorTest < Minitest::Test
       stdout: JSON.generate("subject" => { "handle" => handle, "id" => id }), stderr: "",
       status: Status.new(true)
     )
+  end
+
+  def action_check_result(action, disposition, reason, message = nil, status: nil)
+    document = {
+      "contract_version" => "wlo-execution-action-check/v0.1",
+      "action" => action,
+      "disposition" => disposition,
+      "reason" => reason,
+      "execution_status" => status
+    }
+    document["message"] = message if message
+    Result.new(stdout: JSON.generate(document), stderr: "", status: Status.new(true))
+  end
+
+  def set_action_check(action, disposition, reason, message = nil, status: nil)
+    @action_checks[action] = action_check_result(action, disposition, reason, message, status:)
+  end
+
+  def default_action_check(action)
+    if action == "run"
+      action_check_result(action, "execute", "new_execution")
+    else
+      action_check_result(action, "blocked", "no_retained_execution", "has no retained execution")
+    end
   end
 
   def write_plan(overrides = {})
@@ -463,6 +519,44 @@ class BatchFrontDoorTest < Minitest::Test
       File.write(File.join(@output, "control", "pause"), "requested\n")
     end
     FileUtils.touch(File.join(@output, ".execution.lock"))
+    configure_retained_action_checks(status:, jobs:, paused:, breaker:, extra:)
+  end
+
+  def configure_retained_action_checks(status:, jobs:, paused:, breaker:, extra:)
+    %w[retry-failed recovery repair].each do |action|
+      set_action_check(action, "execute", "retained_execution", status:)
+    end
+    disposition, reason, message = retained_execution_check(status:, jobs:, paused:, breaker:, extra:)
+    %w[run resume].each do |action|
+      action_disposition, action_reason, action_message = disposition, reason, message
+      if reason == "paused" && action == "resume"
+        action_disposition, action_reason, action_message = "execute", "resume_paused_execution", nil
+      end
+      set_action_check(action, action_disposition, action_reason, action_message, status:)
+    end
+  end
+
+  def retained_execution_check(status:, jobs:, paused:, breaker:, extra:)
+    if breaker&.fetch("tripped", false)
+      return ["blocked", "circuit_breaker", "circuit breaker is tripped; explicit reviewed recovery is required"]
+    end
+    if extra.key?("dispatch_halt")
+      return ["blocked", "dispatch_halt", "dispatch is halted; explicit reviewed recovery is required"]
+    end
+    if jobs.any? { |job| job["status"] == "interrupted" }
+      return ["blocked", "interrupted_attempts", "has interrupted work; explicit retry authorization is required"]
+    end
+    return ["already_complete", "completed", nil] if status == "completed"
+    if status == "workload_failed"
+      return ["blocked", "workload_failed", "has failed work; review evidence and use retry-failed explicitly"]
+    end
+    if status == "running"
+      return ["blocked", "inactive_running_state",
+              "retains running state without an active executor; review before recovery"]
+    end
+    return ["blocked", "paused", "is paused"] if status == "paused" || paused
+
+    ["execute", "retained_pending_execution", nil]
   end
 
   def execution_state(status, breaker: nil)

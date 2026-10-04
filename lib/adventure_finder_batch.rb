@@ -15,7 +15,7 @@ module AdventureFinderWorkspace
   # frozen production context; WLO remains the sole execution-state owner.
   class BatchFrontDoor
     PLAN_CONTRACT_VERSION = "wlo-execution-plan/v0.3"
-    EXECUTION_CONTRACT_VERSION = "wlo-execution-state/v0.1"
+    ACTION_CHECK_CONTRACT_VERSION = "wlo-execution-action-check/v0.1"
     EXECUTION_ACTIONS = %w[start resume].freeze
     RECOVERY_ACTIONS = %w[retry recovery repair].freeze
     ACTIONS = (EXECUTION_ACTIONS + RECOVERY_ACTIONS).freeze
@@ -61,16 +61,20 @@ module AdventureFinderWorkspace
       sources = selected_worker_sources(context)
       fleet = sources.include?("remote") ? resolve_remote_registry!(context) : nil
       verify_component_paths!(context, fleet, sources)
-      retained = retained_execution(context, plan)
+      disposition = execution_action_disposition(action, context)
+      if disposition.fetch("disposition") == "blocked"
+        raise Error, blocked_action_message(action, handle.to_s, disposition)
+      end
+      if disposition.fetch("disposition") == "already_complete"
+        @out.puts "Batch #{handle} is complete; retained scoring evidence is unchanged."
+        return 0
+      end
       if RECOVERY_ACTIONS.include?(action)
         return run_recovery_action(
-          action, handle.to_s, context, plan, retained,
+          action, context, plan,
           jobs:, reason:, dry_run:, acknowledge_circuit_breaker:
         )
       end
-
-      disposition = retained_disposition!(action, handle.to_s, retained)
-      return disposition if disposition.is_a?(Integer)
 
       print_handoff(handle.to_s, context)
       source_config = write_worker_sources_config!(context, fleet, sources)
@@ -174,75 +178,58 @@ module AdventureFinderWorkspace
       find_executable!("bundle", @bundle_executable)
     end
 
-    def retained_execution(context, plan)
-      output = context.dig("wlo", "output_root")
-      state_path = File.join(output, "execution.json")
-      unless File.file?(state_path)
-        if File.directory?(output) && !(Dir.children(output) - %w[.execution.lock .state.lock]).empty?
-          raise Error, "Batch output exists without retained WLO execution state"
-        end
-        return nil
+    def execution_action_disposition(action, context)
+      root = context.dig("wlo", "repository_root")
+      wlo_action = { "start" => "run", "resume" => "resume", "retry" => "retry-failed",
+                     "recovery" => "recovery", "repair" => "repair" }.fetch(action)
+      argv = [
+        find_executable!("bundle", @bundle_executable), "exec", File.join(root, "bin", "wlo"),
+        "action-check", context.dig("afw", "plan_path"),
+        "--workdir", context.dig("afw", "repository_root"),
+        "--output", context.dig("wlo", "output_root"), "--action", wlo_action, "--json"
+      ]
+      result = @component_runner.capture(
+        { "BUNDLE_GEMFILE" => File.join(root, "Gemfile") }, argv, chdir: root
+      )
+      unless result.status.success?
+        detail = result.stderr.to_s.strip
+        detail = result.stdout.to_s.strip if detail.empty?
+        raise Error, "WLO action check failed: #{detail}"
       end
-      raise Error, "Batch already has an active executor. Next: inspect with bin/af-doctor job" if execution_locked?(output)
 
-      state = read_json(state_path, "retained execution state")
-      expected = [EXECUTION_CONTRACT_VERSION, plan.fetch("id"), plan.fetch("sha256"),
-                  File.expand_path(context.dig("afw", "repository_root"))]
-      actual = [state["contract_version"], state["plan_id"], state["plan_sha256"], state["workdir"]]
-      raise Error, "retained execution identity does not match the registered Batch context" unless actual == expected
-
-      retained_plan = File.join(output, "plan.json")
-      unless File.file?(retained_plan) && File.binread(retained_plan) == plan.fetch("bytes")
-        raise Error, "retained WLO plan is missing or differs from the registered frozen plan"
+      document = JSON.parse(result.stdout)
+      unless document["contract_version"] == ACTION_CHECK_CONTRACT_VERSION &&
+             document["action"] == wlo_action &&
+             %w[execute already_complete blocked].include?(document["disposition"]) &&
+             document["reason"].is_a?(String) && !document["reason"].empty?
+        raise Error, "WLO action check returned an invalid result"
       end
-      jobs = read_json(File.join(output, "jobs.json"), "retained job state").fetch("jobs")
-      raise Error, "retained job state must contain a jobs array" unless jobs.is_a?(Array)
+      if document["disposition"] == "blocked" && document["message"].to_s.strip.empty?
+        raise Error, "WLO action check returned a blocked result without detail"
+      end
 
-      { "state" => state, "jobs" => jobs, "output" => output }
-    rescue KeyError => e
-      raise Error, "retained execution evidence is incomplete: #{e.message}"
+      document
+    rescue JSON::ParserError, KeyError => e
+      raise Error, "WLO action check returned invalid JSON: #{e.message}"
     end
 
-    def retained_disposition!(action, handle, retained)
-      if retained.nil?
-        raise Error, "Batch #{handle} has no retained execution. Next: bin/af-batch start #{handle}" if action == "resume"
-        return nil
+    def blocked_action_message(action, handle, disposition)
+      reason = disposition.fetch("reason")
+      if reason == "no_retained_execution" && action == "resume"
+        return "Batch #{handle} has no retained execution. Next: bin/af-batch start #{handle}"
+      end
+      if reason == "paused" && action == "start"
+        return "Batch #{handle} is paused. Next: bin/af-batch resume #{handle}"
+      end
+      if reason == "executor_active"
+        return "Batch #{handle} already has an active executor. Next: inspect with bin/af-doctor job"
       end
 
-      state = retained.fetch("state")
-      jobs = retained.fetch("jobs")
-      if state.dig("circuit_breaker", "tripped")
-        raise Error, "Batch #{handle} circuit breaker is tripped; explicit reviewed recovery is required"
-      end
-      if state.key?("dispatch_halt")
-        raise Error, "Batch #{handle} dispatch is halted; explicit reviewed recovery is required"
-      end
-      if state["interruption"] || jobs.any? { |job| job["status"] == "interrupted" }
-        raise Error, "Batch #{handle} has interrupted work; explicit retry authorization is required"
-      end
-
-      status = state.fetch("status").to_s
-      case status
-      when "completed"
-        @out.puts "Batch #{handle} is complete; retained scoring evidence is unchanged."
-        return 0
-      when "workload_failed"
-        raise Error, "Batch #{handle} has failed work; review evidence and use WLO retry-failed explicitly"
-      when "interrupted", "circuit_broken", "infrastructure_failed", "cleanup_failed"
-        raise Error, "Batch #{handle} requires explicit reviewed recovery (#{status})"
-      when "running"
-        raise Error, "Batch #{handle} retains running state without an active executor; review before recovery"
-      end
-      if (status == "paused" || paused?(retained.fetch("output"))) && action == "start"
-        raise Error, "Batch #{handle} is paused. Next: bin/af-batch resume #{handle}"
-      end
-      nil
+      "Batch #{handle} #{disposition.fetch('message')}"
     end
 
-    def run_recovery_action(action, handle, context, plan, retained, jobs:, reason:, dry_run:,
+    def run_recovery_action(action, context, plan, jobs:, reason:, dry_run:,
                             acknowledge_circuit_breaker:)
-      raise Error, "Batch #{handle} has no retained execution; there is nothing to recover" unless retained
-
       case action
       when "retry"
         raise Error, "retry requires one or more explicit job handles" if jobs.empty?
@@ -311,30 +298,6 @@ module AdventureFinderWorkspace
       ]
       @executor.call({}, argv, chdir: root)
       0
-    end
-
-    def execution_locked?(output)
-      path = File.join(output, ".execution.lock")
-      return false unless File.file?(path)
-
-      File.open(path, File::RDWR) do |file|
-        locked = !file.flock(File::LOCK_EX | File::LOCK_NB)
-        file.flock(File::LOCK_UN) unless locked
-        locked
-      end
-    end
-
-    def paused?(output)
-      File.file?(File.join(output, "control", "pause"))
-    end
-
-    def read_json(path, label)
-      value = JSON.parse(File.binread(path))
-      raise Error, "#{label} must be a JSON object: #{path}" unless value.is_a?(Hash)
-
-      value
-    rescue Errno::ENOENT, JSON::ParserError => e
-      raise Error, "invalid #{label} #{path}: #{e.message}"
     end
 
     def print_handoff(handle, context)
