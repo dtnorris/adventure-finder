@@ -7,7 +7,12 @@ require "minitest/autorun"
 require "tmpdir"
 require "yaml"
 
+ROOT = File.expand_path("..", __dir__) unless defined?(ROOT)
+WLO_ROOT = ENV.fetch("WLO_REPOSITORY_ROOT", File.expand_path("../workload-orchestrator", ROOT)) unless defined?(WLO_ROOT)
+$LOAD_PATH.unshift(File.join(WLO_ROOT, "lib"))
+
 require "adventure_finder_local_capacity"
+require "workload_orchestrator/ollama_capability_request"
 
 class LocalCapacityTest < Minitest::Test
   class Executor
@@ -61,20 +66,24 @@ class LocalCapacityTest < Minitest::Test
     FileUtils.remove_entry(@root)
   end
 
-  def test_bootstrap_is_explicit_and_passes_exact_plan_derived_requirement_to_low
+  def test_bootstrap_passes_exact_generic_capability_request_to_low
     registry = AdventureFinderWorkspace::ProductionContextRegistry.new(@registry_path, workspace_root: @root)
     executor = Executor.new
     action = AdventureFinderWorkspace::LocalCapacity.new(
-      registry:, executor:, bundle_executable: @bundle
+      registry:, executor:, bundle_executable: @bundle,
+      capability_request_class: WorkloadOrchestrator::OllamaCapabilityRequest
     )
 
     assert_equal 0, action.bootstrap(batch_handle: "39", alias_name: "qwen35")
     call = executor.calls.fetch(0)
-    path = call.fetch(:argv).fetch(call.fetch(:argv).index("--requirement") + 1)
+    path = call.fetch(:argv).fetch(call.fetch(:argv).index("--capability-request") + 1)
     refute path.start_with?(File.join(@wlo, "output", "batch-39", ""))
-    artifact = JSON.parse(File.read(path))
-    assert_equal "adventurefinder-model-requirement/v0.1", artifact.fetch("contract_version")
+    bytes = File.binread(path)
+    artifact = JSON.parse(bytes)
+    assert_equal "ollama-capability-request/v0.1", artifact.fetch("contract_version")
     assert_equal @requirement, artifact.fetch("ollama")
+    assert_equal JSON.generate(artifact), bytes
+    refute_includes call.fetch(:argv), "--requirement"
     assert_equal [@bundle, "exec", File.join(@low, "bin", "low"), "bootstrap"], call.fetch(:argv).first(4)
     assert_equal "--json", call.fetch(:argv).last
     assert_equal({ "BUNDLE_GEMFILE" => File.join(@low, "Gemfile") }, call.fetch(:environment))
@@ -85,7 +94,8 @@ class LocalCapacityTest < Minitest::Test
     registry = AdventureFinderWorkspace::ProductionContextRegistry.new(@registry_path, workspace_root: @root)
     executor = Executor.new
     action = AdventureFinderWorkspace::LocalCapacity.new(
-      registry:, executor:, bundle_executable: @bundle
+      registry:, executor:, bundle_executable: @bundle,
+      capability_request_class: WorkloadOrchestrator::OllamaCapabilityRequest
     )
     assert_raises(AdventureFinderWorkspace::Error) do
       action.bootstrap(batch_handle: "39", alias_name: "not-a-pool")

@@ -117,9 +117,12 @@ bin/af-model preflight batch 39 qwen35 --json
 Batch 39 registers `qwen35`, `qwen27`, `gemma`, and `gptoss`. The current Qwen
 aliases resolve as `qwen35 -> frozen pool qwen -> qwen3.6:35b-a3b` and
 `qwen27 -> frozen pool qwen27 -> qwen3.6:27b`. The emitted artifact is bound to
-the batch identity, plan ID, plan SHA-256, and pool ID and copies the plan's exact
-Ollama model, digest, context, residency, optional GPU constraint, and labels.
-Aliases contain no model defaults and are never passed downstream for reinterpretation.
+the batch identity, plan ID, plan SHA-256, and pool ID. Its separate generic
+capability request copies the plan's exact Ollama model, digest, context,
+residency, and optional GPU constraint. Aliases contain no model defaults and
+are never passed downstream for reinterpretation. AdventureFinder production
+currently requires `require_fully_gpu_resident` to be exactly `true`; preflight
+rejects a frozen plan that disables or omits that requirement.
 
 Deliberately bootstrap one exact local capability, then use the ordinary batch
 workflow:
@@ -129,8 +132,9 @@ bin/af-local bootstrap batch 39 qwen35
 bin/af-batch start 39
 ```
 
-`af-local bootstrap` persists the exact plan-derived requirement and explicitly
-hands it to LOW. `af-batch` never bootstraps a model. It writes WLO's strict
+`af-local bootstrap` persists the exact generic capability-request bytes and
+invokes LOW with `bootstrap --capability-request PATH --json`. `af-batch` never
+bootstraps a model. It writes WLO's strict
 named-source configuration for the independently selected `low workers --json`
 and/or `rpof workers --json` publishers. WLO consumes those registries directly,
 preserves their namespaces and checkpoints, and schedules over their union.

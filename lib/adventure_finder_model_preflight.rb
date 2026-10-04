@@ -27,6 +27,10 @@ module AdventureFinderWorkspace
     end
 
     def resolve(batch_handle:, alias_name:)
+      resolve_artifacts(batch_handle:, alias_name:).to_h
+    end
+
+    def resolve_artifacts(batch_handle:, alias_name:)
       source = resolve_source(batch_handle:, alias_name:)
       CapabilityArtifacts.new(
         ollama_requirement: source.requirement,
@@ -39,11 +43,11 @@ module AdventureFinderWorkspace
           pool_id: source.pool_id
         },
         capability_request_class: capability_request_class!(source.batch)
-      ).to_h
+      )
     end
 
-    # Transitional compatibility for the existing LOW handoff. New
-    # AdventureFinder artifact generation uses #resolve and the split contracts.
+    # Historical compatibility only. New AdventureFinder artifact generation
+    # and LOW bootstrap use the split contracts.
     def resolve_legacy_requirement(batch_handle:, alias_name:)
       source = resolve_source(batch_handle:, alias_name:)
       {
@@ -161,13 +165,14 @@ module AdventureFinderWorkspace
       unless context.is_a?(Integer) && context.positive?
         raise Error, "required_context_length must be a positive integer"
       end
-      raise Error, "require_fully_gpu_resident must be true" unless source["require_fully_gpu_resident"] == true
+      residency = source["require_fully_gpu_resident"]
+      raise Error, "require_fully_gpu_resident must be true" unless residency == true
 
       output = {
         "model" => model,
         "expected_digest" => digest,
         "required_context_length" => context,
-        "require_fully_gpu_resident" => true
+        "require_fully_gpu_resident" => residency
       }
       if source.key?("required_gpu_id")
         output["required_gpu_id"] = exact_string!(source["required_gpu_id"], "required_gpu_id")

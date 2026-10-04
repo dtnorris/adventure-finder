@@ -152,6 +152,15 @@ class ModelPreflightTest < Minitest::Test
     end
   end
 
+  def test_af_production_requires_full_gpu_residency
+    with_fixture(
+      requirement_mutation: ->(row) { row["require_fully_gpu_resident"] = false }
+    ) do |fixture|
+      error = assert_raises(AdventureFinderWorkspace::Error) { resolve(fixture, "qwen27") }
+      assert_includes error.message, "require_fully_gpu_resident must be true"
+    end
+  end
+
   def test_preflight_is_read_only
     with_fixture do |fixture|
       before = tree_digest(fixture.fetch(:root))

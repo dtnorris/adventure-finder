@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require "fileutils"
-require "json"
 require "securerandom"
 require_relative "adventure_finder_model_preflight"
 
@@ -15,10 +14,12 @@ module AdventureFinderWorkspace
       end
     end
 
-    def initialize(registry:, executor: ForegroundExecutor.new, bundle_executable: nil)
+    def initialize(registry:, executor: ForegroundExecutor.new, bundle_executable: nil,
+                   capability_request_class: nil)
       @registry = registry
       @executor = executor
       @bundle_executable = bundle_executable
+      @capability_request_class = capability_request_class
     end
 
     def bootstrap(batch_handle:, alias_name:)
@@ -30,31 +31,35 @@ module AdventureFinderWorkspace
       gemfile = File.join(low_root, "Gemfile")
       raise Error, "LOW Gemfile is not a file: #{gemfile}" unless File.file?(gemfile)
 
-      requirement = ModelPreflight.new(registry: @registry).resolve_legacy_requirement(
+      artifacts = ModelPreflight.new(
+        registry: @registry, capability_request_class: @capability_request_class
+      ).resolve_artifacts(
         batch_handle: batch_handle.to_s, alias_name: alias_name.to_s
       )
-      path = write_requirement(batch, alias_name.to_s, requirement)
+      path = write_capability_request(
+        batch, alias_name.to_s, artifacts.capability_request_bytes
+      )
       argv = [find_executable!("bundle", @bundle_executable), "exec", executable, "bootstrap",
-              "--requirement", path, "--json"]
+              "--capability-request", path, "--json"]
       @executor.call({ "BUNDLE_GEMFILE" => gemfile }, argv, chdir: low_root)
       0
     end
 
     private
 
-    def write_requirement(batch, alias_name, requirement)
+    def write_capability_request(batch, alias_name, bytes)
       unless alias_name.match?(/\A[A-Za-z0-9][A-Za-z0-9._-]{0,127}\z/)
         raise Error, "model alias is not safe for an evidence filename"
       end
       root = File.join(
-        File.dirname(batch.dig("wlo", "output_root")), "local-model-requirements",
+        File.dirname(batch.dig("wlo", "output_root")), "local-capability-requests",
         batch.fetch("production_batch_id")
       )
       FileUtils.mkdir_p(root, mode: 0o700)
       path = File.join(root, "#{alias_name}.json")
       temporary = "#{path}.tmp.#{Process.pid}.#{SecureRandom.hex(4)}"
       File.open(temporary, File::WRONLY | File::CREAT | File::EXCL, 0o600) do |file|
-        file.write("#{JSON.generate(requirement)}\n")
+        file.write(bytes)
         file.flush
         file.fsync
       end
