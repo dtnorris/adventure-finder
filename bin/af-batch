@@ -8,7 +8,7 @@ require "adventure_finder_batch"
 
 options = {
   registry: File.expand_path("../config/production_contexts.yml", __dir__),
-  root: ENV.fetch("AF_PROJECT_ROOT", "/Users/davidnorris/code"),
+  root: ENV.fetch("AF_PROJECT_ROOT", "/Users/davidnorris/code/adventure-finder-components"),
   reason: nil,
   dry_run: false,
   acknowledge_circuit_breaker: false

@@ -5,7 +5,7 @@ require "open3"
 require "pathname"
 
 ROOT = Pathname.new(__dir__).join("..").expand_path
-CODE_ROOT = ROOT.parent
+CODE_ROOT = Pathname.new(ENV.fetch("AF_PROJECT_ROOT", "/Users/davidnorris/code/adventure-finder-components")).expand_path
 
 PDF_CONVERTER_ROOT = Pathname.new(
   ENV.fetch("AF_PDF_CONVERTER_ROOT", CODE_ROOT.join("pdf-to-llm-md-converter").to_s)
@@ -71,7 +71,10 @@ executable!(router, "ingestion next-action router")
 
 build_dir = PDF_CONVERTER_ROOT.join("build")
 venv_bin = PDF_CONVERTER_ROOT.join(".venv", "bin")
-env = {}
+env = {
+  "AF_PROJECT_ROOT" => CODE_ROOT.to_s,
+  "AF_ADVENTURE_FINDER_ROOT" => ENV.fetch("AF_ADVENTURE_FINDER_ROOT", ROOT.to_s)
+}
 if venv_bin.directory?
   current_path = ENV.fetch("PATH", "")
   env["PATH"] = [venv_bin.to_s, current_path].reject(&:empty?).join(File::PATH_SEPARATOR)
@@ -103,7 +106,7 @@ puts
 puts "Routing durable conversion state..."
 puts
 
-router_ok = system(router.to_s, receipt.to_s)
+router_ok = system(env, router.to_s, receipt.to_s, "--pdf-converter-root", PDF_CONVERTER_ROOT.to_s)
 router_status = $?
 
 unless router_ok

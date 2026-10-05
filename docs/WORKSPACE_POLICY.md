@@ -1,7 +1,7 @@
 # Workspace policy
 
 The `adventure-finder` repository is an orchestration and documentation layer over
-independent sibling repositories.
+independent component repositories under a separate non-Git container.
 
 It is deliberately **not**:
 
@@ -52,3 +52,16 @@ tree, not every historical object. Unshallow it only when the question actually 
 Git-history traversal.
 
 Archived and experimental repositories are documented but opt-in through `--all`.
+
+## Filesystem contract
+
+The normal and intended production front doors stay at
+`/Users/davidnorris/code/adventure-finder` and
+`/Users/davidnorris/code/adventure-finder-production`. `AF_PROJECT_ROOT` selects
+`/Users/davidnorris/code/adventure-finder-components`; both normal and retained
+production components use that same parent. `--all` includes project-adjacent
+repositories from the front-door parent, or explicit `--adjacent-root` /
+`AF_ADJACENT_ROOT`, without placing them in the component workspace.
+
+Paths do not authorize relocation. Preserve frozen production identities, ignored
+state and guardian authority through the FS-04/FS-05 migration prerequisites.

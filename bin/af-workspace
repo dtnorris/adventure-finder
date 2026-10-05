@@ -47,6 +47,7 @@ module AdventureFinderWorkspace
     def common_options(manifest)
       {
         root: ENV.fetch("AF_PROJECT_ROOT", manifest.workspace_root_default),
+        adjacent_root: ENV["AF_ADJACENT_ROOT"],
         all: false,
         core: false
       }
@@ -54,6 +55,7 @@ module AdventureFinderWorkspace
 
     def add_selection_options(parser, options)
       parser.on("--root PATH", "Workspace root (default: AF_PROJECT_ROOT or manifest default)") { |v| options[:root] = v }
+      parser.on("--adjacent-root PATH", "Outside repositories (default: AF_ADJACENT_ROOT or front-door parent)") { |v| options[:adjacent_root] = v }
       parser.on("--all", "Include archived/experimental repositories") { options[:all] = true }
       parser.on("--core", "Only repositories tagged core") { options[:core] = true }
     end
@@ -76,7 +78,7 @@ module AdventureFinderWorkspace
       end
       parser.parse!(@argv)
 
-      workspace = Workspace.new(manifest: manifest, root: options[:root])
+      workspace = Workspace.new(manifest: manifest, root: options[:root], adjacent_root: options[:adjacent_root])
       workspace.bootstrap(repos: selected(manifest, options), protocol: options[:protocol], setup: options[:setup]) ? 0 : 1
     end
 
@@ -87,7 +89,7 @@ module AdventureFinderWorkspace
         add_selection_options(p, options)
       end
       parser.parse!(@argv)
-      Workspace.new(manifest: manifest, root: options[:root]).print_status(repos: selected(manifest, options))
+      Workspace.new(manifest: manifest, root: options[:root], adjacent_root: options[:adjacent_root]).print_status(repos: selected(manifest, options))
       0
     end
 
@@ -98,7 +100,7 @@ module AdventureFinderWorkspace
         add_selection_options(p, options)
       end
       parser.parse!(@argv)
-      Workspace.new(manifest: manifest, root: options[:root]).sync(repos: selected(manifest, options)) ? 0 : 1
+      Workspace.new(manifest: manifest, root: options[:root], adjacent_root: options[:adjacent_root]).sync(repos: selected(manifest, options)) ? 0 : 1
     end
 
     def test(manifest)
@@ -110,7 +112,7 @@ module AdventureFinderWorkspace
         p.on("--fail-fast", "Stop after the first missing/failing suite (requires --jobs 1)") { options[:fail_fast] = true }
       end
       parser.parse!(@argv)
-      Workspace.new(manifest: manifest, root: options[:root]).test(
+      Workspace.new(manifest: manifest, root: options[:root], adjacent_root: options[:adjacent_root]).test(
         repos: selected(manifest, options),
         fail_fast: options[:fail_fast],
         jobs: options[:jobs]
@@ -127,7 +129,7 @@ module AdventureFinderWorkspace
         p.on("--strict", "Treat warnings (including missing optional runtime tools) as failure") { options[:strict] = true }
       end
       parser.parse!(@argv)
-      Workspace.new(manifest: manifest, root: options[:root]).doctor(
+      Workspace.new(manifest: manifest, root: options[:root], adjacent_root: options[:adjacent_root]).doctor(
         repos: selected(manifest, options),
         strict: options[:strict]
       ) ? 0 : 1
@@ -173,7 +175,7 @@ module AdventureFinderWorkspace
         "snapshots",
         "workspace-#{Time.now.utc.strftime('%Y%m%dT%H%M%SZ')}.yml"
       )
-      Workspace.new(manifest: manifest, root: options[:root]).snapshot(
+      Workspace.new(manifest: manifest, root: options[:root], adjacent_root: options[:adjacent_root]).snapshot(
         repos: selected(manifest, options),
         output_path: output
       )
@@ -268,7 +270,7 @@ module AdventureFinderWorkspace
           bin/af-batch recovery 39
 
         Defaults:
-          workspace root: AF_PROJECT_ROOT, otherwise /Users/davidnorris/code
+          component root: AF_PROJECT_ROOT, otherwise /Users/davidnorris/code/adventure-finder-components
           repository set: current/default repos in repos.yml
           clone protocol: AF_GIT_PROTOCOL, otherwise ssh
 

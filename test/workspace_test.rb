@@ -124,6 +124,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
       workspace = AdventureFinderWorkspace::Workspace.new(
         manifest: manifest,
         root: dir,
+        front_door_root: File.join(dir, "adventure-finder"),
         out: StringIO.new,
         err: StringIO.new
       )
@@ -193,6 +194,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
       workspace = AdventureFinderWorkspace::Workspace.new(
         manifest: manifest,
         root: dir,
+        front_door_root: File.join(dir, "adventure-finder"),
         runner: runner,
         out: StringIO.new,
         err: StringIO.new
@@ -240,6 +242,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
       workspace = AdventureFinderWorkspace::Workspace.new(
         manifest: manifest,
         root: dir,
+        front_door_root: File.join(dir, "adventure-finder"),
         runner: runner,
         out: out,
         err: StringIO.new
@@ -278,6 +281,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
       workspace = AdventureFinderWorkspace::Workspace.new(
         manifest: manifest,
         root: dir,
+        front_door_root: File.join(dir, "adventure-finder"),
         runner: runner,
         out: out,
         err: StringIO.new
@@ -376,6 +380,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
       workspace = AdventureFinderWorkspace::Workspace.new(
         manifest: manifest,
         root: dir,
+        front_door_root: File.join(dir, "adventure-finder"),
         out: out,
         err: StringIO.new
       )
@@ -436,6 +441,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
       workspace = AdventureFinderWorkspace::Workspace.new(
         manifest: manifest,
         root: dir,
+        front_door_root: File.join(dir, "adventure-finder"),
         runner: ParallelTestRunner.new(fail_names: ["suite-b"], delay: 0.01),
         out: out,
         err: StringIO.new
@@ -499,6 +505,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
       workspace = AdventureFinderWorkspace::Workspace.new(
         manifest: manifest,
         root: dir,
+        front_door_root: File.join(dir, "adventure-finder"),
         runner: ParallelTestRunner.new(delay: 0.01),
         out: out,
         err: StringIO.new
@@ -531,6 +538,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
       workspace = AdventureFinderWorkspace::Workspace.new(
         manifest: manifest,
         root: dir,
+        front_door_root: File.join(dir, "adventure-finder"),
         out: StringIO.new,
         err: StringIO.new
       )

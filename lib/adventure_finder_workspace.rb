@@ -62,6 +62,9 @@ module AdventureFinderWorkspace
         %w[name github role lifecycle default].each do |key|
           raise Error, "repository entry #{index + 1} missing #{key}" unless repo.key?(key)
         end
+        unless [nil, "adjacent"].include?(repo["location"])
+          raise Error, "repository entry #{index + 1}: unsupported location"
+        end
         name = repo["name"]
         raise Error, "duplicate repository #{name}" if names[name]
 
@@ -117,9 +120,12 @@ module AdventureFinderWorkspace
 
     attr_reader :manifest, :root, :runner, :out, :err
 
-    def initialize(manifest:, root:, runner: CommandRunner.new, out: $stdout, err: $stderr)
+    def initialize(manifest:, root:, front_door_root: File.expand_path("..", __dir__),
+                   adjacent_root: nil, runner: CommandRunner.new, out: $stdout, err: $stderr)
       @manifest = manifest
       @root = Pathname(root).expand_path
+      @front_door_root = Pathname(front_door_root).expand_path
+      @adjacent_root = Pathname(adjacent_root || ENV["AF_ADJACENT_ROOT"] || @front_door_root.parent).expand_path
       @runner = runner
       @out = out
       @err = err
@@ -645,7 +651,7 @@ module AdventureFinderWorkspace
     end
 
     def test_timing_history_dir
-      root / "adventure-finder" / "output" / "af-test"
+      @front_door_root / "output" / "af-test"
     end
 
     def median(values)
@@ -657,11 +663,12 @@ module AdventureFinderWorkspace
     end
 
     def repo_path(repo)
-      root / repo.fetch("name")
+      parent = repo["location"] == "adjacent" ? @adjacent_root : root
+      parent / repo.fetch("name")
     end
 
     def repo_path_by_name(name)
-      root / name
+      repo_path(manifest.repositories.find { |repo| repo["name"] == name } || {"name" => name})
     end
 
     def git_checkout?(path)

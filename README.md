@@ -36,12 +36,14 @@ For production operation, start with the
 [composed operator runbook](docs/operator-runbook.md). It resolves short handles
 and calls component-owned public interfaces for execution, capacity and review.
 
-Set `AF_PROJECT_ROOT` to your workspace parent:
+The front door stays outside the non-Git component container. For a new installation:
 
 ```bash
-cd "$AF_PROJECT_ROOT"
+export AF_PROJECT_ROOT=/Users/davidnorris/code/adventure-finder-components
+export AF_ADVENTURE_FINDER_ROOT=/Users/davidnorris/code/adventure-finder
+cd /Users/davidnorris/code
 git clone git@github.com:dtnorris/adventure-finder.git
-cd adventure-finder
+cd "$AF_ADVENTURE_FINDER_ROOT"
 
 bin/af-doctor
 bin/af-bootstrap
@@ -74,6 +76,33 @@ Override the normal workspace root:
 ```bash
 AF_PROJECT_ROOT=/another/path bin/af-status
 ```
+
+## Filesystem roots
+
+`AF_PROJECT_ROOT` (and operator `--root`) is the component parent, defaulting to
+`/Users/davidnorris/code/adventure-finder-components`. This container is not a Git
+repository. Normal components and the four retained production checkouts share it;
+production names remain explicit `-production` identities in the operator registry.
+No production twins are created automatically. The intended production front door
+is `/Users/davidnorris/code/adventure-finder-production`, also outside the container.
+Test timing output belongs to the front door actually running `af-test`.
+
+Existing flat installations remain supported by explicitly selecting
+`AF_PROJECT_ROOT=/Users/davidnorris/code`; there is no existence-based fallback to
+old paths. `AF_PDF_CONVERTER_ROOT` and `AF_DATA_PIPELINE_ROOT` override catalog
+component routing. Catalog ingestion passes the selected front door through
+`AF_ADVENTURE_FINDER_ROOT`. The PDF converter already supports that override;
+Frontier must receive `AF_PROJECT_ROOT` explicitly.
+
+For new production ingestion, deliberately set both `AF_AFW_ROOT` and
+`AF_SCORER_ROOT` to their retained production checkouts. Their defaults select
+normal `af-workloads` and `af-cli-scoring-utility`, never legacy AFIO. This does not
+upgrade frozen production commits/configuration or migrate retained execution state.
+
+The three archived/experimental entries remain opt-in with `--all` and live outside
+the component container, beside the front door. `--adjacent-root` or
+`AF_ADJACENT_ROOT` explicitly selects a different outside parent. Legacy
+`af-inference-orchestrator-production` remains HOLD outside, unmanaged by this list.
 
 ## Commands
 

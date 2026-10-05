@@ -8,12 +8,14 @@ This runbook calls their public surfaces and does not interpret owner storage.
 
 ## Resolve and inspect — read-only
 
-Set `AF_PROJECT_ROOT` to your actual workspace parent and run from its
+Set `AF_PROJECT_ROOT` to your component parent and run from the separate
 `adventure-finder` checkout. Registered production roots can differ from the
 development sibling roots. Never infer the executing checkout from pushed main.
 
 ```bash
-cd "$AF_PROJECT_ROOT/adventure-finder"
+export AF_PROJECT_ROOT=/Users/davidnorris/code/adventure-finder-components
+export AF_ADVENTURE_FINDER_ROOT=/Users/davidnorris/code/adventure-finder
+cd "$AF_ADVENTURE_FINDER_ROOT"
 bin/af-status
 bin/af-context batch 39
 bin/af-context fleet A

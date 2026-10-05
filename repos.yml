@@ -1,6 +1,6 @@
 ---
 schema_version: adventurefinder-workspace/v0.1
-workspace_root_default: /Users/davidnorris/code
+workspace_root_default: /Users/davidnorris/code/adventure-finder-components
 
 # `default: true` means normal bootstrap/status/sync/test operations include the
 # repository. Historical/experimental repos remain documented but opt-in.
@@ -175,6 +175,7 @@ repositories:
       - Run `git fetch --unshallow` inside the repository only when historical Git traversal is actually needed.
 
   - name: 5e-tools-corpus-converter
+    location: adjacent
     github: dtnorris/5e-tools-corpus-converter
     role: Earlier local-5e.tools corpus-conversion spike retained for reference.
     groups: [code, experimental]
@@ -186,6 +187,7 @@ repositories:
     requires: [ruby, bundle, git]
 
   - name: af-corpus-ingester-basics
+    location: adjacent
     github: dtnorris/af-corpus-ingester-basics
     role: Superseded deterministic candidate-ingestion prototype.
     groups: [code, archive]
@@ -197,6 +199,7 @@ repositories:
     requires: [ruby, bundle, git]
 
   - name: af-matcher-cli
+    location: adjacent
     github: dtnorris/af-matcher-cli
     role: Completed direct-LLM recommendation experiment retained for reproducibility.
     groups: [code, archive]

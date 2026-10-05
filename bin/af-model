@@ -10,7 +10,7 @@ require "adventure_finder_model_preflight"
 
 options = {
   registry: File.expand_path("../config/production_contexts.yml", __dir__),
-  root: ENV.fetch("AF_PROJECT_ROOT", "/Users/davidnorris/code"),
+  root: ENV.fetch("AF_PROJECT_ROOT", "/Users/davidnorris/code/adventure-finder-components"),
   json: false
 }
 parser = OptionParser.new do |value|

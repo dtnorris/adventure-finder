@@ -9,7 +9,7 @@ require "adventure_finder_review"
 options = {
   registry: File.expand_path("../config/production_contexts.yml", __dir__),
   manifest: File.expand_path("../repos.yml", __dir__),
-  root: ENV.fetch("AF_PROJECT_ROOT", "/Users/davidnorris/code")
+  root: ENV.fetch("AF_PROJECT_ROOT", "/Users/davidnorris/code/adventure-finder-components")
 }
 parser = OptionParser.new do |entry|
   entry.banner = "Usage: bin/af-review prepare BATCH JOB [options]"
