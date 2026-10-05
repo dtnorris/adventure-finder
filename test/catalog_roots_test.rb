@@ -8,7 +8,12 @@ require "tmpdir"
 
 class CatalogRootsTest < Minitest::Test
   def test_flat_and_component_layouts_route_from_detached_normal_and_production_front_doors
-    Dir.mktmpdir("catalog roots") do |dir|
+    Dir.mktmpdir("catalog roots") do |tmp|
+      # Exercise symlinked parents on every platform (macOS /var -> /private/var).
+      real_dir = File.join(tmp, "real")
+      FileUtils.mkdir_p(real_dir)
+      dir = File.join(tmp, "alias")
+      File.symlink(real_dir, dir)
       [dir, File.join(dir, "adventure-finder-components")].each do |components|
         %w[adventure-finder adventure-finder-production].each do |name|
           front = File.join(dir, name)
@@ -44,7 +49,7 @@ class CatalogRootsTest < Minitest::Test
              "AF_AFW_ROOT" => afw, "AF_SCORER_ROOT" => scorer}, catalog, pdf
           )
           assert status.success?, stderr
-          assert_equal({"AF_PROJECT_ROOT" => components, "AF_ADVENTURE_FINDER_ROOT" => front,
+          assert_equal({"AF_PROJECT_ROOT" => components, "AF_ADVENTURE_FINDER_ROOT" => File.realpath(front),
                         "AF_AFW_ROOT" => afw, "AF_SCORER_ROOT" => scorer}, JSON.parse(File.read(routed)))
         end
       end
