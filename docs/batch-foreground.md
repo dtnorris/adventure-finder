@@ -19,17 +19,11 @@ evidence. The FO-05 dashboard is rendered by WLO. Neither command starts,
 changes, or tears down RPOF capacity. With no compatible READY workers, WLO
 truthfully remains in its waiting state.
 
-Retained-state decisions are conservative:
-
-| Retained state | `start` | `resume` |
-| --- | --- | --- |
-| none | start exact frozen plan | refuse; use `start` |
-| active executor | refuse duplicate owner | refuse duplicate owner |
-| paused | refuse; point to `resume` | delegate to WLO resume |
-| complete | report complete; execute nothing | report complete; execute nothing |
-| failed/interrupted/breaker/halt | require explicit reviewed recovery | require explicit reviewed recovery |
-| safe pending state | continue pending work only | use WLO resume semantics |
-| identity or plan drift | fail closed | fail closed |
+AdventureFinder calls WLO's public
+[`wlo-execution-action-check/v0.1`](https://github.com/dtnorris/workload-orchestrator/blob/main/contracts/wlo-execution-action-check/v0.1/README.md)
+before delegation. WLO owns retained-state admissibility and rechecks during the
+real operation. AdventureFinder presents the returned disposition/reason; it
+does not interpret execution storage. See the [composed runbook](operator-runbook.md).
 
 `AF_PROJECT_ROOT` relocates every registered repository and runtime path. The
 Batch context selects `local`, `remote`, or both in `worker_sources`.
@@ -48,7 +42,7 @@ bin/af-local bootstrap batch 39 qwen35
 ```
 
 The command resolves the alias against the frozen plan and invokes LOW only with the
-resulting exact `adventurefinder-model-requirement/v0.1` artifact. A local worker that
+resulting exact generic `ollama-capability-request/v0.1` artifact. A local worker that
 advertises multiple compatible models remains one worker and therefore one WLO busy
 slot across all pools.
 
@@ -67,7 +61,8 @@ Retry requires exact canonical IDs or unambiguous FO-07 short handles. WLO
 archives prior attempt evidence, records hashes and the human reason, and queues
 only selected failed/interrupted jobs. It never starts execution. Resume later
 runs pending work; unrelated terminal jobs remain terminal. Breaker
-acknowledgement is available only as an explicit retry/resume flag.
+acknowledgement on this front door is an explicit reviewed retry flag; WLO's
+public resume command also has its own explicit acknowledgement option.
 
 `bin/af-batch repair 39 --reason TEXT --dry-run` reports the current repair
 boundary. There is no deterministic generic repair today, so an actual repair

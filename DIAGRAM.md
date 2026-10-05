@@ -1,6 +1,6 @@
-This is the forward responsibility map. General legacy production paths remain during
-migration. Evidence still passes through `af-data-pipeline` review/adjudication before
-AMC promotion; this map does not change its current inference-root behavior.
+This is the current responsibility map. AFW binds scoring evidence; the pipeline
+prepares review packages and retains human editorial authority before AMC promotion.
+See [the composed operator runbook](docs/operator-runbook.md) for public commands.
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
@@ -67,7 +67,7 @@ AMC promotion; this map does not change its current inference-root behavior.
 ┌──────────────────────── ADVENTUREFINDER WORKLOAD LAYER ──────────────────────────────────┐
 │                                                                                          │
 │                  af-workloads (AFW)                                                      │
-│                  formerly the AFIO codebase                                              │
+│                  scoring intent and evidence binding                                     │
 │                                                                                          │
 │  OWNS ADVENTUREFINDER MEANING                                                            │
 │                                                                                          │
@@ -81,10 +81,10 @@ AMC promotion; this map does not change its current inference-root behavior.
 │  workloads/<id>/                                                                         │
 │  ├─ snapshot.yml                                                                         │
 │  ├─ case_index.csv                                                                       │
-│  └─ execution-plan.json (v0.2 logical plan)                                              │
+│  └─ execution-plan.json (v0.3 logical plan)                                              │
 │  build/workloads/<id>/cases/... (generated; runtime/preflight alongside)                 │
 │                                                                                          │
-│                         │ opaque argv/env + logical pools; placement via WLO profile     │
+│                         │ opaque argv/env + logical pools; dynamic registry placement    │
 │                         ▼                                                                │
 └─────────────────────────┼────────────────────────────────────────────────────────────────┘
                           │
@@ -102,10 +102,10 @@ AMC promotion; this map does not change its current inference-root behavior.
 │  ├─ resume / failure state                                                               │
 │  ├─ logs + execution provenance                                                          │
 │  ├─ audited retries / circuit breakers                                                   │
-│  └─ zero-cost admission; paid cost/runtime controls via guarded budget API               │
+│  └─ generic execution; provider capacity admission remains external                      │
 │                                                                                          │
 │                  │                                    │                                  │
-│          DEFAULT / $0 PATH                     OPTIONAL PROVIDER APIs                    │
+│          DEFAULT / $0 PATH                     REMOTE REGISTRY PUBLISHER                 │
 │                  │                                    │                                  │
 │                  ▼                                    ▼                                  │
 │        local worker / Ollama                 runpod-ollama-fleet (RPOF)                  │
@@ -119,8 +119,8 @@ AMC promotion; this map does not change its current inference-root behavior.
 │                                                        ▼                                 │
 │                                               remote Ollama workers                      │
 │                                                                                          │
-│  NOTE: AFW→WLO local execution is the default forward path. RPOF readiness,              │
-│  guarded budget and capacity APIs exist; paid RPOF job-runner dispatch is blocked.       │
+│  NOTE: WLO runs commands locally against LOW/RPOF registry-selected endpoints.           │
+│  RPOF independently admits bounded paid capacity; WLO owns no provider dispatch.         │
 │                                                                                          │
 └─────────────────────────┬────────────────────────────────────────────────────────────────┘
                           │ executes

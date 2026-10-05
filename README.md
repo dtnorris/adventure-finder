@@ -32,10 +32,14 @@ This is historical context only. Live catalog roles remain authoritative in
 
 ## Quick start
 
-Assuming AdventureFinder repositories live under `/Users/davidnorris/code`:
+For production operation, start with the
+[composed operator runbook](docs/operator-runbook.md). It resolves short handles
+and calls component-owned public interfaces for execution, capacity and review.
+
+Set `AF_PROJECT_ROOT` to your workspace parent:
 
 ```bash
-cd /Users/davidnorris/code
+cd "$AF_PROJECT_ROOT"
 git clone git@github.com:dtnorris/adventure-finder.git
 cd adventure-finder
 
@@ -231,7 +235,7 @@ The large `llm-response-data` evidence repository is shallow-cloned by default.
 If a task truly needs its Git history:
 
 ```bash
-cd /Users/davidnorris/code/llm-response-data
+cd "$AF_PROJECT_ROOT/llm-response-data"
 git fetch --unshallow
 ```
 
@@ -406,10 +410,12 @@ flowchart TD
 
 WLO treats jobs as opaque commands; Adventure IDs, dimensions, qualification policy,
 and result interpretation remain in AFW. The scoring utility owns prompt construction,
-rubrics and scoring output. The default forward path runs scoring commands locally
-against local Ollama; WLO also supports already-reachable zero-cost fixed endpoints.
-RPOF readiness and guarded capacity APIs exist, but paid RPOF job execution through
-the WLO runner is still blocked. The remote branch above is not a working paid-run path.
+rubrics and scoring output. The registered production context selects the
+public worker sources for each execution.
+LOW and RPOF independently publish exact READY workers. WLO discovers local,
+remote or mixed named registries and runs scoring commands locally against the
+selected endpoint. RPOF independently admits and manages bounded paid capacity;
+WLO does not create paid resources or dispatch jobs through a provider runner.
 
 Supporting deterministic selection remains `af-cli-query-matcher`: a natural-language
 request becomes validated AFPS and then deterministic filtering/ranking.
