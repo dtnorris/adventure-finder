@@ -13,11 +13,7 @@ require "adventure_finder_workspace"
 require "adventure_finder_production_context"
 require "adventure_finder_model_preflight"
 
-WLO_ROOT = ENV.fetch(
-  "WLO_REPOSITORY_ROOT", File.expand_path("../../workload-orchestrator", __dir__)
-) unless defined?(WLO_ROOT)
-$LOAD_PATH.unshift(File.join(WLO_ROOT, "lib"))
-require "workload_orchestrator/ollama_capability_request"
+require_relative "support/wlo_contract"
 
 class ModelPreflightTest < Minitest::Test
   ROOT = File.expand_path("..", __dir__)

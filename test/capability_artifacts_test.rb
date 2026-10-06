@@ -4,10 +4,8 @@ require "json"
 require "minitest/autorun"
 
 ROOT = File.expand_path("..", __dir__) unless defined?(ROOT)
-WLO_ROOT = ENV.fetch("WLO_REPOSITORY_ROOT", File.expand_path("../workload-orchestrator", ROOT)) unless defined?(WLO_ROOT)
-$LOAD_PATH.unshift(File.join(WLO_ROOT, "lib"))
+require_relative "support/wlo_contract"
 
-require "workload_orchestrator/ollama_capability_request"
 require "adventure_finder_capability_artifacts"
 
 class CapabilityArtifactsTest < Minitest::Test

@@ -8,11 +8,9 @@ require "tmpdir"
 require "yaml"
 
 ROOT = File.expand_path("..", __dir__) unless defined?(ROOT)
-WLO_ROOT = ENV.fetch("WLO_REPOSITORY_ROOT", File.expand_path("../workload-orchestrator", ROOT)) unless defined?(WLO_ROOT)
-$LOAD_PATH.unshift(File.join(WLO_ROOT, "lib"))
+require_relative "support/wlo_contract"
 
 require "adventure_finder_local_capacity"
-require "workload_orchestrator/ollama_capability_request"
 
 class LocalCapacityTest < Minitest::Test
   class Executor
