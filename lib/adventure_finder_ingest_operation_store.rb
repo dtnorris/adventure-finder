@@ -167,6 +167,16 @@ module AdventureFinderWorkspace
       revisions_dir(operation_id).join(revision_filename(revision))
     end
 
+    # Resolve one validated portable binding through the store's configured
+    # roots. Consumers use this instead of reimplementing locator containment.
+    def binding_path(operation_id, binding_id)
+      document = validate!(operation_id)
+      entry = binding_entries(document).find { |candidate| candidate["binding_id"] == binding_id }
+      fail_with("CORRUPT_EVIDENCE", "unknown binding_id #{binding_id.inspect}") unless entry
+
+      resolve_locator(entry.dig("content", "locator"), binding_id: binding_id, require_file: true)
+    end
+
     private
 
     def utc_now

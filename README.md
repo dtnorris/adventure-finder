@@ -250,6 +250,12 @@ layout, replay rules, and failure classifications are documented in
 The combined operator-facing start/resume command is intentionally deferred to its
 separate front-door task.
 
+The read-only composition with the pipeline's public operation-input router is
+documented in
+[`docs/INGEST_OPERATION_ROUTING_COMPOSITION_V0.1.md`](docs/INGEST_OPERATION_ROUTING_COMPOSITION_V0.1.md).
+It derives the current operator gate without running the pipeline's returned commands
+or persisting a copy of pipeline routing state.
+
 ### `bin/af-bootstrap`
 
 Clone missing repositories into the workspace root.
