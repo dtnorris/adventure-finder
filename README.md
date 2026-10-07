@@ -239,6 +239,17 @@ The equivalent Rake entrypoint is `rake test:operator_acceptance`. This acceptan
 is intentionally separate from the repository's default unit suite because it requires
 the WLO and RPOF sibling checkouts and their already-installed Bundler dependencies.
 
+### Durable ingest operations
+
+The internal `AdventureFinderWorkspace::IngestOperationStore` library creates,
+reloads, validates, and read-only inspects versioned ingest-operation revisions. It
+persists portable component artifact references and explicit operator choices, not
+copies of component-owned canonical state. The public library invocation, storage
+layout, replay rules, and failure classifications are documented in
+[`docs/INGEST_OPERATION_PERSISTENCE_V0.1.md`](docs/INGEST_OPERATION_PERSISTENCE_V0.1.md).
+The combined operator-facing start/resume command is intentionally deferred to its
+separate front-door task.
+
 ### `bin/af-bootstrap`
 
 Clone missing repositories into the workspace root.
