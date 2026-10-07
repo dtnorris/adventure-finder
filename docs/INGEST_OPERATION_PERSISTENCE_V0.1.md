@@ -66,5 +66,6 @@ versioned report distinguishes:
 The inspection report exposes component-owned facts only as references. It does not
 copy an artifact body into coordination state, make route observations editable facts,
 authorize execution, assign editorial decisions, or imply promotion. Pipeline route
-composition remains a later public-interface consumer, and the single operator-facing
-start/resume experience remains outside this persistence layer.
+composition remains a separate public-interface consumer. The operator-facing
+`bin/af-catalog start` and `resume` commands use this store without moving persistence,
+component validation, or routing authority into the command layer.

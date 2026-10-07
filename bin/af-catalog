@@ -7,6 +7,16 @@ require "pathname"
 ROOT = Pathname.new(__dir__).join("..").expand_path
 CODE_ROOT = Pathname.new(ENV.fetch("AF_PROJECT_ROOT", "/Users/davidnorris/code/adventure-finder-components")).expand_path
 
+if %w[start resume].include?(ARGV.first)
+  $LOAD_PATH.unshift(ROOT.join("lib").to_s)
+  require "adventure_finder_catalog_ingest"
+  exit AdventureFinderWorkspace::CatalogIngestCLI.run(
+    ARGV,
+    front_door_root: ENV.fetch("AF_ADVENTURE_FINDER_ROOT", ROOT.to_s),
+    project_root: CODE_ROOT
+  )
+end
+
 PDF_CONVERTER_ROOT = Pathname.new(
   ENV.fetch("AF_PDF_CONVERTER_ROOT", CODE_ROOT.join("pdf-to-llm-md-converter").to_s)
 ).expand_path

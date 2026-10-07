@@ -1,10 +1,10 @@
 # AdventureFinder ingest operation v0.1
 
 Status: contract definition and executable document/revision proof for
-`adventurefinder-ingest-operation/v0.1` (IG-05A). This does **not** implement an
-operation store, routing composition or command entry (IG-05B, IG-05C, IG-06).
-`bin/af-catalog` still takes a PDF, calls `convert-cached`, and routes the durable
-conversion receipt. No operation is created by that command yet.
+`adventurefinder-ingest-operation/v0.1` (IG-05A). Persistence, read-only routing
+composition, and the public start/resume entry are implemented by their separate
+AdventureFinder layers. The historical `bin/af-catalog INPUT.pdf` form remains a
+non-operation compatibility path.
 
 One operation coordinates one explicitly selected digital-book PDF toward the
 next meaningful operator review gate. Its UUID is not a source ID, Adventure ID,

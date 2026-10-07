@@ -241,14 +241,18 @@ the WLO and RPOF sibling checkouts and their already-installed Bundler dependenc
 
 ### Durable ingest operations
 
-The internal `AdventureFinderWorkspace::IngestOperationStore` library creates,
+`bin/af-catalog start` creates a durable operation for one explicitly declared
+digital-book PDF and returns its stable UUID handle. `bin/af-catalog resume HANDLE`
+revalidates that operation in a fresh process and reports its current meaningful gate.
+Both commands are documented in
+[`docs/CATALOG_INGEST_FRONT_DOOR_V0.1.md`](docs/CATALOG_INGEST_FRONT_DOOR_V0.1.md).
+
+The `AdventureFinderWorkspace::IngestOperationStore` library creates,
 reloads, validates, and read-only inspects versioned ingest-operation revisions. It
 persists portable component artifact references and explicit operator choices, not
 copies of component-owned canonical state. The public library invocation, storage
 layout, replay rules, and failure classifications are documented in
 [`docs/INGEST_OPERATION_PERSISTENCE_V0.1.md`](docs/INGEST_OPERATION_PERSISTENCE_V0.1.md).
-The combined operator-facing start/resume command is intentionally deferred to its
-separate front-door task.
 
 The read-only composition with the pipeline's public operation-input router is
 documented in

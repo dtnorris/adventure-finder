@@ -61,8 +61,8 @@ are retained in the ephemeral composition result.
 
 The operation projection is a temporary invocation file. Any occurrence of its path in
 pipeline output is replaced with `<operation-input>` before returning; no reusable
-command is executed or persisted. IG-06 must rerun composition and provide its own
-current projection when it eventually presents an operator action.
+command is executed or persisted. `bin/af-catalog resume` reruns composition and
+provides a current projection whenever it presents an operator gate or action.
 
 ## Failure and replay behavior
 
