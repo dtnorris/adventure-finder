@@ -17,6 +17,42 @@ module AdventureFinderWorkspace
     PIPELINE_ERROR_VERSION = "af-ingest-routing-error/v0.1"
     ContinuationInput = Data.define(:operation, :target, :projection)
 
+    RECOVERY_ACTIONS = {
+      "COMPONENT_ARTIFACT_CONFLICT" =>
+        "Resolve the reported component/source conflict through its owning public seam while preserving operation-bound intent, then resume this operation.",
+      "BLOCKED_SOURCE_IDENTITY" =>
+        "Resolve the conflicting source-registry identity while preserving the operation-bound source ID and canonical path, then resume this operation.",
+      "NEEDS_MANUAL_SOURCE_REGISTRATION" =>
+        "Complete the documented manual source-registration correction without inferring identity, segments, or offsets, then resume this operation.",
+      "PARTIAL_CONTINUATION_OUTPUT" =>
+        "Repair or remove only the reported partial pipeline publication through the pipeline-owned workflow, then resume this operation.",
+      "INVALID_CONTINUATION_EVIDENCE" =>
+        "Correct the reported source evidence through its owning public seam without changing operation-bound intent or provenance, then resume this operation.",
+      "INVALID_CONTINUATION_OUTPUT" =>
+        "Repair the reported pipeline-owned output and revalidate it before resuming this operation.",
+      "TRANSITION_COMMAND_FAILED" =>
+        "Correct the reported pipeline subcommand failure through that component's public seam, then resume the same operation.",
+      "SOURCE_PROGRESSION_PROTOCOL_ERROR" =>
+        "Repair the af-source-progress result or missing declared output before resuming; a zero child exit is not recovery authority.",
+      "PIPELINE_UNAVAILABLE" =>
+        "Restore the configured public pipeline executable at the reported root, then resume this operation.",
+      "MISSING_BOUND_ARTIFACT" =>
+        "Restore the exact bound artifact bytes or use an explicitly authorized replacement operation; do not silently rebind this operation.",
+      "STALE_INPUT" =>
+        "Restore the exact operation-bound bytes or use an explicitly authorized replacement operation; do not silently accept changed provenance.",
+      "CORRUPT_EVIDENCE" =>
+        "Restore the authoritative operation revision and bound evidence before resuming; do not reconstruct or rewrite provenance.",
+      "CORRUPT_RESUME_CONTEXT" =>
+        "Restore the authoritative AdventureFinder resume context before retrying; do not guess source intent or paths."
+    }.freeze
+
+    def self.recovery_action(code, owner:)
+      RECOVERY_ACTIONS.fetch(
+        code,
+        "Inspect and correct the reported #{owner} evidence through its owning public seam, then resume the same operation."
+      )
+    end
+
     class CommandRunner
       Result = Struct.new(:stdout, :stderr, :status, keyword_init: true)
 
@@ -101,6 +137,7 @@ module AdventureFinderWorkspace
       out.puts "Gate kind: #{result.dig('gate', 'kind')}"
       if (diagnostic = result["diagnostic"])
         out.puts "Diagnostic: #{diagnostic.fetch('code')}: #{diagnostic.fetch('message')}"
+        out.puts "Next action: #{diagnostic.fetch('next_action')}"
         return result
       end
 
@@ -356,7 +393,12 @@ module AdventureFinderWorkspace
         "pipeline" => nil,
         "gate" => {"state" => state, "kind" => "WAITING_FOR_ARTIFACT"},
         "route" => nil,
-        "diagnostic" => {"owner" => "adventure-finder", "code" => state, "message" => message}
+        "diagnostic" => {
+          "owner" => "adventure-finder",
+          "code" => state,
+          "message" => message,
+          "next_action" => self.class.recovery_action(state, owner: "adventure-finder")
+        }
       }
     end
 
@@ -392,7 +434,12 @@ module AdventureFinderWorkspace
         "pipeline" => nil,
         "gate" => {"state" => code, "kind" => "BLOCKED"},
         "route" => nil,
-        "diagnostic" => {"owner" => owner, "code" => code, "message" => message}
+        "diagnostic" => {
+          "owner" => owner,
+          "code" => code,
+          "message" => message,
+          "next_action" => self.class.recovery_action(code, owner:)
+        }
       }
     end
 

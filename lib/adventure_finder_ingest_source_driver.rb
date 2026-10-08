@@ -393,7 +393,12 @@ module AdventureFinderWorkspace
         "pipeline" => nil,
         "gate" => {"state" => code, "kind" => "BLOCKED"},
         "route" => nil,
-        "diagnostic" => {"owner" => owner, "code" => code, "message" => message}
+        "diagnostic" => {
+          "owner" => owner,
+          "code" => code,
+          "message" => message,
+          "next_action" => IngestOperationRouting.recovery_action(code, owner:)
+        }
       }
     end
 

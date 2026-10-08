@@ -47,6 +47,12 @@ partial, corrupt, changed, or mismatched output is rejected. Pipeline GATE resul
 append nothing. On restart, pipeline's replay-safe seam validates and reuses
 compatible existing outputs; the operation appends only the next missing references.
 
+Blocked diagnostics include the refusing owner, stable reason code, explanatory
+message, and one focused next action. The action directs repair through the owning
+public seam and never authorizes silent retry, source replacement, provenance edits,
+or reconstructed intent. Ordinary pipeline gates continue to display their validated
+human-review guidance and inspection-only commands.
+
 ## Terminal handoff
 
 After binding the linked editorial context and decisions ledger, the driver stops at

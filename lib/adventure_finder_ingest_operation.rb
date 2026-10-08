@@ -17,7 +17,10 @@ module AdventureFinderWorkspace
       "source_intake" => ["af-data-pipeline", %w[af-source-intake/v0.1]],
       "boundary_dossier" => ["af-data-pipeline", %w[af-boundary-dossier/v0.1 af-boundary-dossier/v0.2]],
       "editorial_context" => ["af-data-pipeline", %w[af-boundary-editorial-context/v0.1]],
-      "editorial_decisions" => ["af-data-pipeline", %w[af-boundary-editorial-decisions/v0.1]],
+      "editorial_decisions" => [
+        "af-data-pipeline",
+        %w[af-boundary-editorial-decisions/v0.1 af-boundary-editorial-decisions/v0.2]
+      ],
       "boundary_freeze" => ["af-data-pipeline", %w[af-boundary-freeze/v0.1]],
       "boundary_apply_report" => ["af-data-pipeline", %w[af-boundary-freeze-apply-report/v0.1]]
     }.freeze

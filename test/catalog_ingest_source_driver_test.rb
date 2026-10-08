@@ -433,7 +433,7 @@ class CatalogIngestSourceDriverTest < Minitest::Test
                      "owner" => "af-data-pipeline", "contract_version" => "af-boundary-editorial-context/v0.1",
                      "content" => content("pipeline", pipeline_root, context)},
                     {"role" => "operation_artifact", "kind" => "editorial_decisions",
-                     "owner" => "af-data-pipeline", "contract_version" => "af-boundary-editorial-decisions/v0.1",
+                     "owner" => "af-data-pipeline", "contract_version" => "af-boundary-editorial-decisions/v0.2",
                      "content" => content("pipeline", pipeline_root, decisions)},
                     {"role" => "companion_evidence", "content" => content("pipeline", pipeline_root, review)}
                   ]
