@@ -244,6 +244,11 @@ the WLO and RPOF sibling checkouts and their already-installed Bundler dependenc
 `bin/af-catalog start` creates a durable operation for one explicitly declared
 digital-book PDF and returns its stable UUID handle. `bin/af-catalog resume HANDLE`
 revalidates that operation in a fresh process and reports its current meaningful gate.
+Supplying an explicit --canonical-destination lets those same commands drive only
+the validated deterministic source-side transitions and stop at the authoritative
+boundary-editorial review workspace. The allowlist, validation, replay, and terminal
+gate are documented in
+[`docs/INGEST_SOURCE_DRIVER_V0.1.md`](docs/INGEST_SOURCE_DRIVER_V0.1.md).
 Both commands are documented in
 [`docs/CATALOG_INGEST_FRONT_DOOR_V0.1.md`](docs/CATALOG_INGEST_FRONT_DOOR_V0.1.md).
 

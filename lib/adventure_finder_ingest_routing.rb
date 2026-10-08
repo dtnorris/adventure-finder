@@ -15,6 +15,7 @@ module AdventureFinderWorkspace
     PIPELINE_INPUT_VERSION = "af-ingest-routing-input/v0.1"
     PIPELINE_RESULT_VERSION = "af-ingest-routing-result/v0.1"
     PIPELINE_ERROR_VERSION = "af-ingest-routing-error/v0.1"
+    ContinuationInput = Data.define(:operation, :target, :projection)
 
     class CommandRunner
       Result = Struct.new(:stdout, :stderr, :status, keyword_init: true)
@@ -49,18 +50,12 @@ module AdventureFinderWorkspace
     end
 
     def compose(operation_id)
-      stored = store.inspect(operation_id)
-      return operation_diagnostic(stored) unless stored["operation_status"] == "VALID"
+      prepared = source_continuation_input(operation_id)
+      return prepared if prepared.is_a?(Hash)
 
-      operation = stored.fetch("operation")
+      operation = prepared.operation
       operation_sha = IngestOperation.digest(operation)
-      return waiting_for_artifact(operation) if operation.fetch("artifacts").empty?
-
-      target = target_for(operation)
-      return target if target["contract_version"] == VERSION
-
-      projection = projection_for(operation, target)
-      result = invoke_pipeline(projection, target.fetch("path"))
+      result = invoke_pipeline(prepared.projection, prepared.target.fetch("path"))
       current = store.validate!(operation_id)
       unless IngestOperation.digest(current) == operation_sha
         return diagnostic(operation, "OPERATION_CHANGED",
@@ -68,11 +63,34 @@ module AdventureFinderWorkspace
       end
       return result if result["contract_version"] == VERSION
 
-      compose_result(operation, target, result.fetch("operation"), result.fetch("route"))
+      compose_result(operation, prepared.target, result.fetch("operation"), result.fetch("route"))
     rescue IngestOperationStore::Failure => e
       diagnostic(operation, e.code, e.message.sub(/\A[^:]+: /, ""), operation_id:)
     rescue SystemCallError => e
       diagnostic(operation, "PIPELINE_UNAVAILABLE", "pipeline invocation failed: #{e.class}", operation_id:)
+    end
+
+    # Public, read-only preparation seam shared by gate inspection and the
+    # source-only continuation driver. The returned projection is the exact
+    # operation input accepted by pipeline; the absolute target path is runtime
+    # coordination data and is never persisted as operation identity.
+    def source_continuation_input(operation_id)
+      stored = store.inspect(operation_id)
+      return operation_diagnostic(stored) unless stored["operation_status"] == "VALID"
+
+      operation = stored.fetch("operation")
+      return waiting_for_artifact(operation) if operation.fetch("artifacts").empty?
+
+      target = target_for(operation)
+      return target if target["contract_version"] == VERSION
+
+      ContinuationInput.new(
+        operation:,
+        target:,
+        projection: projection_for(operation, target)
+      )
+    rescue IngestOperationStore::Failure => e
+      diagnostic(operation, e.code, e.message.sub(/\A[^:]+: /, ""), operation_id:)
     end
 
     def render(result, out: $stdout)
@@ -92,6 +110,7 @@ module AdventureFinderWorkspace
       render_lines(out, "Evidence", route.fetch("evidence"))
       render_lines(out, "Human review", route.fetch("human_review"))
       render_lines(out, "Warnings", route.fetch("warnings"))
+      out.puts "Review workspace: #{result.fetch('review_workspace')}" if result["review_workspace"]
       unless route.fetch("commands").empty?
         out.puts "Next commands (inspection only; nothing was executed):"
         route.fetch("commands").each { |command| out.puts "  - #{command.fetch('command')}" }

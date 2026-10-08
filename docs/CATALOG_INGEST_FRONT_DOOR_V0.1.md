@@ -14,7 +14,8 @@ bin/af-catalog start INPUT.pdf \
   --policy-id POLICY-ID \
   --policy-version POLICY-VERSION \
   --policy-values '{"profile":"SELECTED PROFILE","execution":"SELECTED MODE"}' \
-  --selected-by "OPERATOR"
+  --selected-by "OPERATOR" \
+  --canonical-destination /explicit/source/root/Book_LLM_Edition.md
 
 bin/af-catalog resume OPERATION-UUID
 
@@ -32,6 +33,13 @@ object are recorded as inert operator intent. None of these values authorizes sc
 inference, execution, retry, recovery, provider capacity, catalog mutation, commit, or
 push. Boundaries, parentage, Adventure IDs, and approval remain explicitly unset.
 
+The --canonical-destination option is optional for backward compatibility. When
+present, it must be an explicit .md path beneath AF_SOURCE_ROOT; it enables the
+deterministic source-only continuation described below. The front door stores only
+its portable source-root-relative locator in the operation's resume context. It
+never derives the destination from a source ID, filename, receipt, registry, or
+prior shell state.
+
 The command generates and prints a lowercase UUIDv4 handle unless `--operation-id` is
 supplied. The latter is useful for deliberate external identity assignment and exact
 conflict tests; reusing a handle for different immutable input fails closed.
@@ -39,16 +47,33 @@ conflict tests; reusing a handle for different immutable input fails closed.
 ## Start behavior
 
 Start hashes the PDF, catalog, and policy definition, creates revision zero through
-`IngestOperationStore`, and persists a versioned local resume context. That context
-contains absolute runtime root mappings only. It is not part of operation identity,
-and the operation document retains only portable root-relative locators plus content
-digests and byte counts.
+`IngestOperationStore`, and persists a versioned local resume context. The v0.1
+context contains absolute runtime root mappings only. A v0.2 context additionally
+binds the explicit canonical-destination locator that authorizes source progression.
+The context is not part of operation document identity, and the operation document
+retains only portable root-relative locators plus content digests and byte counts.
 
 After publishing the handle, start invokes the existing public `convert-cached` PDF
 entry. A reported durable receipt is bound as a converter-owned artifact in revision
 one, then the existing IG-05C2 composer invokes pipeline's public
 `af-ingest-next --operation-input ... --json` interface and renders its gate. The
 composer never uses `--auto` and never executes a returned command.
+
+When the v0.2 resume context binds a canonical destination, the same start call
+continues through pipeline's public af-source-progress seam. Each child call may
+perform only one validated PASS transition. AdventureFinder validates the versioned
+result, exact operation/routing-input identity, output role and schema allowlist,
+declared roots, byte counts, and SHA-256 digests before appending artifact references
+to the existing operation. It then recomposes a fresh route from the new revision.
+The driver permits only:
+
+- accepted conversion receipt to source intake;
+- source intake to source registration plus boundary dossier; and
+- boundary dossier to an empty boundary-editorial review workspace.
+
+It stops at BOUNDARY_EDITORIAL_REVIEW and prints the authoritative workspace path.
+It never enters candidate decisions, freeze/import, scoring preparation or execution,
+inference, capacity, successor application, catalog adoption, or promotion.
 
 A reviewable nonzero converter result still binds and routes a reported receipt, then
 returns the converter status. A missing receipt leaves the valid revision-zero
@@ -59,8 +84,10 @@ pipeline rejection is rendered with pipeline ownership and remains a failure.
 
 Resume accepts only the handle. It reloads the versioned root context, validates the
 complete append-only operation history and every bound byte sequence, and recomputes
-the current gate through `IngestOperationRouting`. It requires no prior shell history
-or repeated input, catalog, component, or artifact paths.
+the current gate through `IngestOperationRouting`. For a v0.2 source-progression
+context it resumes the same source-only loop, reusing exact compatible component
+outputs and appending only missing compatible operation references. It requires no
+prior shell history or repeated input, catalog, component, or artifact paths.
 
 An unknown handle, malformed context, corrupt operation, missing bound artifact,
 changed bytes, incompatible version, unsafe locator, or component contract conflict
@@ -74,6 +101,13 @@ detached front-door root. Existing `AF_PDF_CONVERTER_ROOT` and
 `AF_DATA_PIPELINE_ROOT` overrides are preserved. `AF_SOURCE_ROOT` may explicitly
 select the source root used by read-only routing. Paths with spaces and symlinked root
 parents are supported through content validation and real-path containment.
+
+Missing, changed, partial, malformed, wrong-identity, or wrong-schema progression
+outputs stop immediately. A zero child exit is not success unless the expected
+versioned result and output bytes validate. Page/OCR, source identity, registry,
+catalog-base, and source-QA gates are rendered without bypass. Once an editorial
+context and decisions ledger are bound, every later resume stops at the same review
+workspace without invoking progression again.
 
 ## Successor-version authority
 

@@ -10,12 +10,14 @@ require "securerandom"
 require "time"
 require_relative "adventure_finder_ingest_operation_store"
 require_relative "adventure_finder_ingest_routing"
+require_relative "adventure_finder_ingest_source_driver"
 require_relative "adventure_finder_successor_version_authorization"
 
 module AdventureFinderWorkspace
   # Human-facing start/resume lifecycle for one durable digital-book ingest.
   class CatalogIngest
     CONTEXT_VERSION = "adventurefinder-catalog-ingest-context/v0.1"
+    SOURCE_CONTEXT_VERSION = "adventurefinder-catalog-ingest-context/v0.2"
     RECEIPT_VERSION = "pdf-to-llm-md/conversion-receipt/v0.1"
     CONTEXT_ROOTS = IngestOperation::ROOTS.sort.freeze
 
@@ -39,13 +41,14 @@ module AdventureFinderWorkspace
     end
 
     def start(pdf:, base_catalog:, source_declaration:, policy_definition:, policy_id:,
-              policy_version:, policy_values:, selected_by:, operation_id: SecureRandom.uuid)
+              policy_version:, policy_values:, selected_by:, operation_id: SecureRandom.uuid,
+              canonical_destination: nil)
       input = required_file(pdf, "input PDF")
       fail_with("UNSUPPORTED_INPUT", "input must be a .pdf file") unless input.extname.casecmp?(".pdf")
       catalog = required_file(base_catalog, "base catalog")
       policy_path = required_file(policy_definition, "policy definition")
       selected_at = utc_now
-      context = build_context(operation_id, input:, catalog:)
+      context = build_context(operation_id, input:, catalog:, canonical_destination:)
       store = store_for(context)
       choices = source_declaration.to_h do |key, value|
         [key, choice(value, selected_by:, selected_at:)]
@@ -87,7 +90,7 @@ module AdventureFinderWorkspace
       end
 
       current = bind_receipt(store, operation, receipt, context)
-      result = routing_for(store, context).compose(current.fetch("operation_id"))
+      result = continue_or_route(store, context, current.fetch("operation_id"))
       out.puts
       routing_for(store, context).render(result, out:)
       return status.exitstatus unless status.success?
@@ -100,7 +103,7 @@ module AdventureFinderWorkspace
     def resume(operation_id)
       context = load_context(operation_id)
       store = store_for(context)
-      result = routing_for(store, context).compose(operation_id)
+      result = continue_or_route(store, context, operation_id)
       routing_for(store, context).render(result, out:)
       result["status"] == "REJECTED" ? 2 : 0
     rescue IngestOperationStore::Failure => e
@@ -133,7 +136,7 @@ module AdventureFinderWorkspace
 
     private
 
-    def build_context(operation_id, input:, catalog:)
+    def build_context(operation_id, input:, catalog:, canonical_destination:)
       pipeline_root = Pathname(env.fetch("AF_DATA_PIPELINE_ROOT", project_root.join("af-data-pipeline").to_s)).expand_path
       converter_root = Pathname(
         env.fetch("AF_PDF_CONVERTER_ROOT", project_root.join("pdf-to-llm-md-converter").to_s)
@@ -147,8 +150,8 @@ module AdventureFinderWorkspace
         "source" => source_root.to_s,
         "catalog" => catalog.dirname.to_s
       }
-      {
-        "contract_version" => CONTEXT_VERSION,
+      context = {
+        "contract_version" => canonical_destination ? SOURCE_CONTEXT_VERSION : CONTEXT_VERSION,
         "operation_id" => operation_id,
         "project_root" => project_root.to_s,
         "front_door_root" => front_door_root.to_s,
@@ -157,6 +160,14 @@ module AdventureFinderWorkspace
         "catalog_root" => catalog.dirname.to_s,
         "roots" => roots
       }
+      if canonical_destination
+        context["source_progression"] = {
+          "canonical_destination" => destination_locator(
+            canonical_destination, Pathname(source_root), "source"
+          )
+        }
+      end
+      context
     end
 
     def store_for(context)
@@ -174,6 +185,29 @@ module AdventureFinderWorkspace
         pipeline_root: context.fetch("pipeline_root"),
         source_root: context.fetch("source_root"),
         catalog_root: context.fetch("catalog_root")
+      )
+    end
+
+    def continue_or_route(store, context, operation_id)
+      routing = routing_for(store, context)
+      progression = context["source_progression"]
+      return routing.compose(operation_id) unless progression
+
+      driver = IngestSourceDriver.new(
+        store:,
+        routing:,
+        project_root: context.fetch("project_root"),
+        front_door_root: context.fetch("front_door_root"),
+        pipeline_root: context.fetch("pipeline_root"),
+        source_root: context.fetch("source_root"),
+        catalog_root: context.fetch("catalog_root")
+      )
+      driver.drive(
+        operation_id,
+        canonical_destination: resolve_destination(
+          progression.fetch("canonical_destination"),
+          Pathname(context.fetch("source_root"))
+        )
       )
     end
 
@@ -281,9 +315,15 @@ module AdventureFinderWorkspace
       path = context_path(operation_id)
       fail_with("UNKNOWN_OPERATION", "unknown operation handle #{operation_id}") unless path.file?
       context = JSON.parse(File.binread(path))
-      expected = %w[catalog_root contract_version front_door_root operation_id pipeline_root project_root roots source_root]
-      unless context.is_a?(Hash) && context.keys.sort == expected &&
-             context["contract_version"] == CONTEXT_VERSION && context["operation_id"] == operation_id &&
+      base_keys = %w[catalog_root contract_version front_door_root operation_id pipeline_root project_root roots source_root]
+      valid_keys = if context.is_a?(Hash) && context["contract_version"] == SOURCE_CONTEXT_VERSION
+                     context.keys.sort == (base_keys + %w[source_progression]).sort &&
+                       valid_source_progression?(context["source_progression"])
+                   else
+                     context.is_a?(Hash) && context.keys.sort == base_keys &&
+                       context["contract_version"] == CONTEXT_VERSION
+                   end
+      unless valid_keys && context["operation_id"] == operation_id &&
              context["roots"].is_a?(Hash) && context["roots"].keys.sort == CONTEXT_ROOTS
         fail_with("CORRUPT_RESUME_CONTEXT", "resume context is malformed or incompatible")
       end
@@ -308,6 +348,44 @@ module AdventureFinderWorkspace
       {"root" => root_name, "path" => relative}
     rescue ArgumentError, Errno::ENOENT
       fail_with("UNSAFE_PATH", "could not resolve a safe portable locator")
+    end
+
+    def destination_locator(path, root, root_name)
+      resolved_root = root.realpath
+      destination = Pathname(path.to_s).expand_path
+      fail_with("MISSING_CHOICE", "canonical destination must end in .md") unless
+        destination.extname.casecmp?(".md")
+      relative = destination.relative_path_from(root).to_s
+      if relative == ".." || relative.start_with?("../") ||
+         relative.include?("\\") || relative.include?(":") ||
+         relative.match?(/[[:cntrl:]]/) ||
+         relative.split("/", -1).any? { |part| ["", ".", ".."].include?(part) }
+        fail_with("UNSAFE_PATH", "canonical destination is outside configured source root")
+      end
+      ancestor = destination
+      ancestor = ancestor.parent until ancestor.exist? || ancestor.symlink?
+      unless ancestor.realpath == resolved_root ||
+             ancestor.realpath.to_s.start_with?(resolved_root.to_s + File::SEPARATOR)
+        fail_with("UNSAFE_PATH", "canonical destination escapes configured source root")
+      end
+      {"root" => root_name, "path" => relative}
+    rescue ArgumentError, Errno::ENOENT
+      fail_with("UNSAFE_PATH", "could not resolve a safe canonical destination")
+    end
+
+    def resolve_destination(locator, root)
+      unless locator.is_a?(Hash) && locator.keys.sort == %w[path root] &&
+             locator["root"] == "source"
+        fail_with("CORRUPT_RESUME_CONTEXT", "resume context has an invalid canonical destination")
+      end
+      destination_locator(root.join(locator.fetch("path")), root, "source")
+      root.join(locator.fetch("path")).cleanpath
+    end
+
+    def valid_source_progression?(value)
+      value.is_a?(Hash) && value.keys == %w[canonical_destination] &&
+        value["canonical_destination"].is_a?(Hash) &&
+        value["canonical_destination"].keys.sort == %w[path root]
     end
 
     def choice(value, selected_by:, selected_at:)
@@ -378,6 +456,7 @@ module AdventureFinderWorkspace
           opts.on("--policy-values JSON") { |value| options[:policy_values] = parse_policy_values(value) }
           opts.on("--selected-by VALUE") { |value| options[:selected_by] = value }
           opts.on("--operation-id UUID") { |value| options[:operation_id] = value }
+          opts.on("--canonical-destination FILE") { |value| options[:canonical_destination] = value }
         end
         parser.parse!(argv)
         pdf = argv.shift
@@ -391,7 +470,7 @@ module AdventureFinderWorkspace
         source = IngestOperation::SOURCE_CHOICES.to_h { |key| [key, options.fetch(key.to_sym)] }
         service.start(pdf:, source_declaration: source, **options.slice(
           :base_catalog, :policy_definition, :policy_id, :policy_version, :policy_values,
-          :selected_by, :operation_id
+          :selected_by, :operation_id, :canonical_destination
         ))
       when "resume"
         operation_id = argv.shift
