@@ -22,6 +22,20 @@ module AdventureFinderWorkspace
         test_file: "test/batch_front_door_test.rb"
       ),
       Scenario.new(
+        name: "ig19b-source-exceptions",
+        description: "source, conversion, identity, registry, restart, and correction exception matrix",
+        repository: "adventure-finder",
+        test_file: "acceptance/ig19b_source_exception_matrix.rb",
+        bundle_repository: "af-data-pipeline"
+      ),
+      Scenario.new(
+        name: "ig19b-boundary-exceptions",
+        description: "editorial approval, frozen boundary, staged successor, and replay exception matrix",
+        repository: "adventure-finder",
+        test_file: "acceptance/ig19b_boundary_exception_matrix.rb",
+        bundle_repository: "af-data-pipeline"
+      ),
+      Scenario.new(
         name: "wlo-multi-source-registry",
         description: "local-only, remote-only, mixed, namespace-preserving scheduling and scoped loss",
         repository: "workload-orchestrator",
@@ -198,12 +212,13 @@ module AdventureFinderWorkspace
 
     def resolve_roots
       registered = @manifest.repositories.to_h { |repository| [repository.fetch("name"), repository] }
-      %w[workload-orchestrator runpod-ollama-fleet].each do |name|
+      %w[af-data-pipeline workload-orchestrator runpod-ollama-fleet].each do |name|
         raise Error, "acceptance component is not registered in repos.yml: #{name}" unless registered.key?(name)
       end
 
       {
         "adventure-finder" => @repository_root,
+        "af-data-pipeline" => component_root("af-data-pipeline", "AF_DATA_PIPELINE_ROOT"),
         "workload-orchestrator" => component_root("workload-orchestrator", "WLO_REPO_ROOT"),
         "runpod-ollama-fleet" => component_root("runpod-ollama-fleet", "RPOF_REPO_ROOT")
       }
@@ -253,6 +268,7 @@ module AdventureFinderWorkspace
       rubyopt = ["-r#{@network_guard}", inherited_rubyopt].reject(&:empty?).join(" ")
       environment = CREDENTIAL_NAMES.to_h { |name| [name, nil] }.merge(
         "AF_OPERATOR_ACCEPTANCE_OFFLINE" => "1",
+        "AF_IG19B_PIPELINE_SOURCE_ROOT" => roots.fetch("af-data-pipeline"),
         "WLO_REPO_ROOT" => roots.fetch("workload-orchestrator"),
         "RPOF_REPO_ROOT" => roots.fetch("runpod-ollama-fleet"),
         "RUBYOPT" => rubyopt

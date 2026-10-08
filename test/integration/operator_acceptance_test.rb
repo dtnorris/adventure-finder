@@ -33,6 +33,7 @@ class OperatorAcceptanceTest < Minitest::Test
     @tmp = Dir.mktmpdir("af-operator-acceptance-")
     @wlo = File.join(@tmp, "workload-orchestrator")
     @rpof = File.join(@tmp, "runpod-ollama-fleet")
+    @pipeline = File.join(@tmp, "af-data-pipeline")
     build_component(@wlo, %w[
       test/dynamic_cli_test.rb
       test/dynamic_local_dispatch_test.rb
@@ -51,6 +52,7 @@ class OperatorAcceptanceTest < Minitest::Test
       test/rpof_campaign_cli_test.rb
       test/runpod_budget_guardian_test.rb
     ])
+    build_component(@pipeline, [])
   end
 
   def teardown
@@ -65,7 +67,7 @@ class OperatorAcceptanceTest < Minitest::Test
     assert harness.run
     assert_equal AdventureFinderWorkspace::OperatorAcceptance::SCENARIOS.length, runner.calls.length
     assert_includes out.string, "Network/provider/inference access: blocked"
-    assert_includes out.string, "Acceptance summary: 18/18 scenarios passed"
+    assert_includes out.string, "Acceptance summary: 20/20 scenarios passed"
     assert_includes out.string, "Offline proof: fake providers only; inference calls: 0; paid resources: $0"
     runner.calls.each do |call|
       assert_nil call.dig(:env, "RUNPOD_API_KEY")
@@ -74,6 +76,7 @@ class OperatorAcceptanceTest < Minitest::Test
       assert_includes call.dig(:env, "RUBYOPT"), "offline_network_guard.rb"
       assert_equal @wlo, call.dig(:env, "WLO_REPO_ROOT")
       assert_equal @rpof, call.dig(:env, "RPOF_REPO_ROOT")
+      assert_equal @pipeline, call.dig(:env, "AF_IG19B_PIPELINE_SOURCE_ROOT")
     end
   end
 
@@ -106,6 +109,21 @@ class OperatorAcceptanceTest < Minitest::Test
     refute_nil scenario
     assert_equal "adventure-finder", scenario.repository
     assert_equal "test/batch_front_door_test.rb", scenario.test_file
+  end
+
+  def test_ig19b_source_and_boundary_matrices_use_pipeline_bundle
+    expected = {
+      "ig19b-source-exceptions" => "acceptance/ig19b_source_exception_matrix.rb",
+      "ig19b-boundary-exceptions" => "acceptance/ig19b_boundary_exception_matrix.rb"
+    }
+
+    expected.each do |name, test_file|
+      scenario = AdventureFinderWorkspace::OperatorAcceptance::SCENARIOS.find { |entry| entry.name == name }
+      refute_nil scenario
+      assert_equal "adventure-finder", scenario.repository
+      assert_equal "af-data-pipeline", scenario.bundle_repository
+      assert_equal test_file, scenario.test_file
+    end
   end
 
   def test_audited_recovery_is_a_named_offline_scenario
@@ -156,7 +174,7 @@ class OperatorAcceptanceTest < Minitest::Test
     refute harness.run
     assert_equal AdventureFinderWorkspace::OperatorAcceptance::SCENARIOS.length, runner.calls.length
     assert_includes err.string, "FAIL rpof-campaign-lifecycle"
-    assert_includes out.string, "Acceptance summary: 17/18 scenarios passed"
+    assert_includes out.string, "Acceptance summary: 19/20 scenarios passed"
   end
 
   def test_operator_lifecycle_uses_rpof_bundle_while_running_from_workspace_repo
@@ -190,6 +208,7 @@ class OperatorAcceptanceTest < Minitest::Test
     AdventureFinderWorkspace::OperatorAcceptance.new(
       workspace_root: @tmp,
       component_roots: {
+        "af-data-pipeline" => @pipeline,
         "workload-orchestrator" => @wlo,
         "runpod-ollama-fleet" => @rpof
       },

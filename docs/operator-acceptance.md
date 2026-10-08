@@ -13,6 +13,8 @@ bin/af-operator-acceptance
 bin/af-operator-acceptance --only operator-lifecycle
 bin/af-operator-acceptance --only batch-front-door
 bin/af-operator-acceptance --only audited-recovery
+bin/af-operator-acceptance --only ig19b-source-exceptions
+bin/af-operator-acceptance --only ig19b-boundary-exceptions
 ```
 
 ## Coherent lifecycle replay
@@ -63,6 +65,24 @@ The methods below are the assertion sites, not merely suggestive filenames.
 | FP-05 | Provider/bootstrap/capability failures do not publish false READY state | `rpof-campaign-lifecycle`: partial and ambiguous start tests; `rpof-worker-publication`: bootstrap incomplete, missing capability, unhealthy, stale provider identity, and conflicting model evidence tests |
 | FP-06 | Teardown failure remains retryable and cannot claim provider absence | lifecycle phase `teardown retry`; `rpof-teardown`: `RunpodBudgetGuardianTest#test_failed_provider_teardown_remains_in_progress_without_absence_claim` |
 | FP-07 | Ctrl-C/help semantics do not conflate foreground cancellation, WLO pause, observation, or provider teardown | `wlo-foreground-cancellation`: all cancellation/pause contrasts; `process-ownership`: `OperatorProcessOwnershipTest#test_top_level_help_distinguishes_observation_work_and_teardown` and `#test_campaign_help_states_short_lived_cli_and_verified_teardown_rule`; `wlo-process-ownership`: `OperatorUxTest#test_start_output_says_detached_work_outlives_the_invoking_cli` |
+
+## V2 source and boundary exception matrices
+
+`ig19b-source-exceptions` groups the landed IG-07C public-driver acceptance
+cases into one table-defined matrix. Each row records its input condition,
+public gate, permitted and prohibited mutations, preserved evidence, and one
+operator action. It includes the clean control, converter readiness and page
+review, canonical-byte conflict, missing/invalid registry, identity/segment
+conflict, zero-exit missing output, changed bound evidence, and explicit public
+correction/resume.
+
+`ig19b-boundary-exceptions` groups the pipeline's public editorial, freeze, and
+operation-bound staging tests without copying its implementation or fixtures.
+It distinguishes unreviewed emptiness from approved zero-record review, proves
+approval invalidation for every bound input, rejects invalid parent/span/freeze
+and version/destination conflicts, preserves identical approval/freeze replay,
+and proves IDs appear only in a verified staged successor. The scenario never
+runs scoring, inference, catalog adoption, Git persistence, or provider code.
 
 FO-08 adds `rpof-safety-gate` to the same hard-offline harness. Its
 `CampaignSafetyGateTest` proves that a finite compute-liability report is emitted
