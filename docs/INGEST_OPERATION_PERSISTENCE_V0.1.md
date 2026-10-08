@@ -69,3 +69,10 @@ authorize execution, assign editorial decisions, or imply promotion. Pipeline ro
 composition remains a separate public-interface consumer. The operator-facing
 `bin/af-catalog start` and `resume` commands use this store without moving persistence,
 component validation, or routing authority into the command layer.
+
+Explicit successor-version intent uses the separate, append-only
+[`adventurefinder-successor-version-authorization/v0.1`](SUCCESSOR_VERSION_AUTHORIZATION_V0.1.md)
+store. It binds the stable operation/base identity without changing this contract,
+rewriting any v0.1 revision, or making an AdventureFinder-owned authorization look
+like a component artifact. A valid historical operation with no authorization remains
+valid and reports that the authority is not yet bound when requested.

@@ -10,6 +10,7 @@ require "securerandom"
 require "time"
 require_relative "adventure_finder_ingest_operation_store"
 require_relative "adventure_finder_ingest_routing"
+require_relative "adventure_finder_successor_version_authorization"
 
 module AdventureFinderWorkspace
   # Human-facing start/resume lifecycle for one durable digital-book ingest.
@@ -106,6 +107,30 @@ module AdventureFinderWorkspace
       fail_with(e.code, e.message.sub(/\A[^:]+: /, ""))
     end
 
+    def bind_successor_version(operation_id, successor_version:, selected_by:)
+      context = load_context(operation_id)
+      store = store_for(context)
+      authorization = authority_store_for(context, store).bind!(
+        operation_id:, successor_version:, selected_by:
+      )
+      out.puts "Bound successor-version authority"
+      out.puts "Operation handle: #{operation_id}"
+      out.puts "Successor version: #{authorization.fetch('successor_version')}"
+      out.puts "Authorization: #{authorization.fetch('authorization_id')}"
+      0
+    rescue IngestOperationStore::Failure, SuccessorVersionAuthorizationStore::Failure => e
+      fail_with(e.code, e.message.sub(/\A[^:]+: /, ""))
+    end
+
+    def successor_version_authority(operation_id)
+      context = load_context(operation_id)
+      store = store_for(context)
+      out.puts JSON.pretty_generate(authority_store_for(context, store).projection(operation_id))
+      0
+    rescue IngestOperationStore::Failure, SuccessorVersionAuthorizationStore::Failure => e
+      fail_with(e.code, e.message.sub(/\A[^:]+: /, ""))
+    end
+
     private
 
     def build_context(operation_id, input:, catalog:)
@@ -149,6 +174,15 @@ module AdventureFinderWorkspace
         pipeline_root: context.fetch("pipeline_root"),
         source_root: context.fetch("source_root"),
         catalog_root: context.fetch("catalog_root")
+      )
+    end
+
+    def authority_store_for(context, store)
+      SuccessorVersionAuthorizationStore.new(
+        root: SuccessorVersionAuthorizationStore.default_root(
+          front_door_root: context.fetch("front_door_root")
+        ),
+        operation_store: store
       )
     end
 
@@ -367,9 +401,37 @@ module AdventureFinderWorkspace
           )
         end
         service.resume(operation_id)
+      when "bind-successor-version"
+        options = {}
+        parser = OptionParser.new do |opts|
+          opts.on("--successor-version VERSION") { |value| options[:successor_version] = value }
+          opts.on("--selected-by VALUE") { |value| options[:selected_by] = value }
+        end
+        parser.parse!(argv)
+        operation_id = argv.shift
+        unless operation_id && argv.empty? && options.keys.sort == %i[selected_by successor_version]
+          raise CatalogIngest::Failure.new(
+            "MISSING_CHOICE",
+            "usage: bin/af-catalog bind-successor-version OPERATION_ID " \
+            "--successor-version VERSION --selected-by VALUE"
+          )
+        end
+        service.bind_successor_version(operation_id, **options)
+      when "successor-version-authority"
+        json = false
+        parser = OptionParser.new { |opts| opts.on("--json") { json = true } }
+        parser.parse!(argv)
+        operation_id = argv.shift
+        unless operation_id && argv.empty? && json
+          raise CatalogIngest::Failure.new(
+            "USAGE", "usage: bin/af-catalog successor-version-authority OPERATION_ID --json"
+          )
+        end
+        service.successor_version_authority(operation_id)
       else
         raise CatalogIngest::Failure.new(
-          "USAGE", "usage: bin/af-catalog {start INPUT.pdf [required options] | resume OPERATION_ID}"
+          "USAGE", "usage: bin/af-catalog {start | resume | bind-successor-version | " \
+                   "successor-version-authority} ..."
         )
       end
     rescue OptionParser::ParseError => e

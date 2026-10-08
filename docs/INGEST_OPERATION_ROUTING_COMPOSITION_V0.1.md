@@ -52,6 +52,14 @@ optional projection member as `null`; it does not parse component artifacts to i
 or duplicate that fact. Pipeline remains responsible for validating the routed
 artifact, its public schema, and any component-owned provenance it carries.
 
+The separate AdventureFinder-owned successor-version authorization is not appended to
+the operation artifact list and is not added to `af-ingest-routing-input/v0.1`.
+Consequently it cannot become the routed target merely because it was bound later.
+Its independently versioned public projection is described in
+[`SUCCESSOR_VERSION_AUTHORIZATION_V0.1.md`](SUCCESSOR_VERSION_AUTHORIZATION_V0.1.md)
+for a later pipeline-owned consumer; policy values remain inert and are not version
+authority.
+
 An operation with no artifact returns `NEEDS_FIRST_COMPONENT_ARTIFACT` without calling
 pipeline. An editorial context without a later, explicitly linked decisions artifact
 returns `NEEDS_EDITORIAL_DECISIONS_ARTIFACT`. Otherwise, the pipeline route determines

@@ -32,7 +32,7 @@ class CatalogIngestFrontDoorTest < Minitest::Test
     @converter_log = File.join(@temporary, "converter.log")
     @forbidden_log = File.join(@temporary, "forbidden.log")
     @sentinel_bin = directory("sentinel bin")
-    %w[git ollama wlo rpof af-workloads af-cli-scoring-utility].each do |name|
+    %w[git ollama wlo rpof af-workloads af-cli-scoring-utility af-boundary-freeze-apply].each do |name|
       executable(File.join(@sentinel_bin, name), <<~RUBY)
         File.open(#{@forbidden_log.inspect}, "ab") { |file| file.puts(File.basename($PROGRAM_NAME)) }
         exit 99
@@ -165,6 +165,80 @@ class CatalogIngestFrontDoorTest < Minitest::Test
     refute File.exist?(@forbidden_log)
   end
 
+  def test_bind_successor_version_is_durable_replay_safe_and_nonexecuting
+    _stdout, stderr, status = run_catalog(*start_arguments)
+    assert status.success?, stderr
+    revisions_before = revision_snapshot
+    converter_calls = File.readlines(@converter_log).length
+    router_before = Digest::SHA256.file(@router_log).hexdigest
+
+    stdout, stderr, status = run_catalog(
+      "bind-successor-version", ID,
+      "--successor-version", "7.5.2",
+      "--selected-by", "David"
+    )
+
+    assert status.success?, stderr
+    assert_includes stdout, "Bound successor-version authority"
+    assert_includes stdout, "Successor version: 7.5.2"
+    authorization_path = successor_authorization_path
+    bytes = File.binread(authorization_path)
+    mtime = File.mtime(authorization_path)
+    document = JSON.parse(bytes)
+    assert_equal "adventurefinder-successor-version-authorization/v0.1", document["contract_version"]
+    assert_equal ID, document.dig("operation", "operation_id")
+    assert_equal revision_document(0).dig("base_catalog", "content").slice("sha256", "bytes"),
+                 document["base_catalog"]
+    assert_equal revisions_before, revision_snapshot
+    assert_equal converter_calls, File.readlines(@converter_log).length
+    assert_equal router_before, Digest::SHA256.file(@router_log).hexdigest
+    refute File.exist?(@forbidden_log)
+
+    projected, projected_err, projected_status = run_catalog(
+      "successor-version-authority", ID, "--json"
+    )
+    assert projected_status.success?, projected_err
+    projection = JSON.parse(projected)
+    assert_equal "adventurefinder-successor-version-authorization-projection/v0.1",
+                 projection["contract_version"]
+    assert_equal document, projection["authorization"]
+
+    _stdout, replay_err, replay_status = run_catalog(
+      "bind-successor-version", ID,
+      "--successor-version", "7.5.2",
+      "--selected-by", "David"
+    )
+    assert replay_status.success?, replay_err
+    assert_equal bytes, File.binread(authorization_path)
+    assert_equal mtime, File.mtime(authorization_path)
+
+    _stdout, conflict_err, conflict_status = run_catalog(
+      "bind-successor-version", ID,
+      "--successor-version", "7.5.3",
+      "--selected-by", "David"
+    )
+    refute conflict_status.success?
+    assert_includes conflict_err, "SUCCESSOR_VERSION_AUTHORITY_CONFLICT"
+    assert_equal bytes, File.binread(authorization_path)
+  end
+
+  def test_bind_successor_version_rejects_malformed_value_before_authority_mutation
+    _stdout, stderr, status = run_catalog(*start_arguments)
+    assert status.success?, stderr
+
+    _stdout, bind_err, bind_status = run_catalog(
+      "bind-successor-version", ID,
+      "--successor-version", "VERSION",
+      "--selected-by", "David"
+    )
+
+    refute bind_status.success?
+    assert_includes bind_err, "INVALID_SUCCESSOR_VERSION"
+    refute File.exist?(File.dirname(successor_authorization_path))
+    assert_equal 1, File.readlines(@converter_log).length
+    refute File.exist?(@forbidden_log)
+  end
+
   private
 
   def start_arguments(pdf: @pdf)
@@ -271,6 +345,19 @@ class CatalogIngestFrontDoorTest < Minitest::Test
 
   def revision_document(revision)
     JSON.parse(File.binread(revision_path(revision)))
+  end
+
+  def successor_authorization_path
+    File.join(
+      @front, "output", "ingest-authorities", "successor-version", "v0.1", ID,
+      "authorization.json"
+    )
+  end
+
+  def revision_snapshot
+    Dir.glob(File.join(operation_root, "revisions", "*.json")).sort.to_h do |path|
+      [File.basename(path), Digest::SHA256.file(path).hexdigest]
+    end
   end
 
   def operation_snapshot

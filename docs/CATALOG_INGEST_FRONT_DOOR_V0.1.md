@@ -17,6 +17,12 @@ bin/af-catalog start INPUT.pdf \
   --selected-by "OPERATOR"
 
 bin/af-catalog resume OPERATION-UUID
+
+bin/af-catalog bind-successor-version OPERATION-UUID \
+  --successor-version 7.5.2 \
+  --selected-by "OPERATOR"
+
+bin/af-catalog successor-version-authority OPERATION-UUID --json
 ```
 
 Start requires every semantic source declaration, an exact base catalog, and an
@@ -68,6 +74,22 @@ detached front-door root. Existing `AF_PDF_CONVERTER_ROOT` and
 `AF_DATA_PIPELINE_ROOT` overrides are preserved. `AF_SOURCE_ROOT` may explicitly
 select the source root used by read-only routing. Paths with spaces and symlinked root
 parents are supported through content validation and real-path containment.
+
+## Successor-version authority
+
+`bind-successor-version` validates the existing operation and its frozen bytes, then
+records one explicit AdventureFinder-owned successor-version authorization. It
+validates dot-separated numeric syntax but does not infer or enforce an increment
+policy. Exact replay is idempotent; a conflicting version or selector fails closed.
+The command does not call the converter, pipeline, boundary application, scoring,
+inference, a provider, catalog adoption, or Git.
+
+`successor-version-authority --json` emits the validated public projection for a later
+pipeline-owned IG-09C consumer. It does not expose or require knowledge of the private
+authority store layout. See
+[`SUCCESSOR_VERSION_AUTHORIZATION_V0.1.md`](SUCCESSOR_VERSION_AUTHORIZATION_V0.1.md)
+for the frozen provenance and verification rules. This authority is not a policy
+value and does not change the existing resume route.
 
 ## Existing PDF compatibility
 

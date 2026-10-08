@@ -7,6 +7,7 @@ require "minitest/autorun"
 require "stringio"
 require "tmpdir"
 require "adventure_finder_ingest_routing"
+require "adventure_finder_successor_version_authorization"
 
 class IngestOperationRoutingTest < Minitest::Test
   Routing = AdventureFinderWorkspace::IngestOperationRouting
@@ -205,6 +206,34 @@ class IngestOperationRoutingTest < Minitest::Test
     assert_equal second_ref.dig("content", "sha256"), @runner.projections.first.dig("artifact", "sha256")
     assert_equal %w[intake-1 intake-2], current.fetch("artifacts").map { |item| item.fetch("artifact_id") }
     assert_equal %w[intake-1 intake-2], @store.load(ID).fetch("artifacts").map { |item| item.fetch("artifact_id") }
+  end
+
+  def test_successor_authority_never_becomes_the_component_routing_target
+    operation = create
+    write_artifact(@pipeline_artifacts, "intake.json", "component-owned fixture\n")
+    bound = bind(operation, artifact(
+      "intake", "source_intake", "af-data-pipeline", "af-source-intake/v0.1",
+      "pipeline", "intake.json"
+    ))
+    operation_digest = Contract.digest(bound)
+    authority_store = AdventureFinderWorkspace::SuccessorVersionAuthorizationStore.new(
+      root: File.join(@temporary, "front-door", "output", "ingest-authorities", "successor-version", "v0.1"),
+      operation_store: @store,
+      clock: -> { Time.iso8601(NOW) }
+    )
+    authority_store.bind!(operation_id: ID, successor_version: "7.5.2", selected_by: "David")
+
+    result = @composer.compose(ID)
+    projection = @runner.projections.fetch(0)
+
+    assert_equal "ROUTED", result["status"]
+    assert_equal ["intake"], result.dig("artifact", "artifact_ids")
+    assert_equal "source_intake", result.dig("artifact", "kind")
+    assert_equal "file", projection.dig("artifact", "kind")
+    assert_equal bound.dig("artifacts", 0, "content", "sha256"), projection.dig("artifact", "sha256")
+    assert_equal operation_digest, result.dig("operation", "document_sha256")
+    refute_includes JSON.generate(projection), "7.5.2"
+    assert_equal "7.5.2", authority_store.projection(ID).dig("authorization", "successor_version")
   end
 
   def test_missing_changed_and_corrupt_bound_state_never_produce_a_route

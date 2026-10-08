@@ -260,6 +260,11 @@ documented in
 It derives the current operator gate without running the pipeline's returned commands
 or persisting a copy of pipeline routing state.
 
+Explicit successor catalog version intent is a separate durable, replay-safe
+AdventureFinder authorization; it does not change operation v0.1 history or pipeline
+routing. See
+[`docs/SUCCESSOR_VERSION_AUTHORIZATION_V0.1.md`](docs/SUCCESSOR_VERSION_AUTHORIZATION_V0.1.md).
+
 ### `bin/af-bootstrap`
 
 Clone missing repositories into the workspace root.
