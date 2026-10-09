@@ -239,6 +239,45 @@ class CatalogIngestFrontDoorTest < Minitest::Test
     refute File.exist?(@forbidden_log)
   end
 
+  def test_explicit_scoring_choice_is_recorded_once_and_plain_resume_reuses_it
+    policy = write(
+      File.join(@pipeline, "config", "staged_scoring_input_policy_v0.1.json"),
+      JSON.generate(
+        "schema_version" => "af-staged-scoring-input-policy/v0.1",
+        "policy_id" => "approved-new-records", "policy_version" => "1",
+        "scope" => "operation-approved-new-records", "selection" => "afw-qualified-default",
+        "permissions" => %w[scoring_input workload_preparation]
+      )
+    )
+    arguments = start_arguments
+    arguments[arguments.index(@policy)] = policy
+    arguments[arguments.index("standard-scoring-execution")] = "approved-new-records"
+    arguments[arguments.index("v0.1")] = "1"
+    arguments << "--prepare-staged-scoring"
+
+    _stdout, stderr, status = run_catalog(*arguments)
+
+    assert status.success?, stderr
+    intent_path = File.join(
+      @front, "output", "staged-scoring-intents", "v0.1", ID, "intent.json"
+    )
+    intent_bytes = File.binread(intent_path)
+    intent = JSON.parse(intent_bytes)
+    assert_equal "ingest-#{ID}", intent.fetch("workload_id")
+    assert_equal "ingest_start", intent.fetch("interaction")
+
+    _stdout, resume_err, resume_status = run_catalog("resume", ID)
+    assert resume_status.success?, resume_err
+    assert_equal intent_bytes, File.binread(intent_path)
+
+    _stdout, conflict_err, conflict_status = run_catalog(
+      "resume", ID, "--decline-staged-scoring", "--selected-by", "David"
+    )
+    refute conflict_status.success?
+    assert_includes conflict_err, "SCORING_INTENT_CONFLICT"
+    assert_equal intent_bytes, File.binread(intent_path)
+  end
+
   private
 
   def start_arguments(pdf: @pdf)

@@ -129,6 +129,35 @@ module AdventureFinderWorkspace
       diagnostic(operation, e.code, e.message.sub(/\A[^:]+: /, ""), operation_id:)
     end
 
+    # Public, read-only projection for a pipeline-owned approved boundary
+    # freeze. The pipeline remains responsible for validating the freeze,
+    # approval lineage, source evidence and staged successor. This method only
+    # binds the exact bytes to the already-validated durable operation.
+    def boundary_freeze_input(operation_id, freeze_path:)
+      stored = store.inspect(operation_id)
+      return operation_diagnostic(stored) unless stored["operation_status"] == "VALID"
+
+      operation = stored.fetch("operation")
+      path = Pathname(freeze_path).expand_path
+      return diagnostic(operation, "MISSING_BOUND_ARTIFACT", "boundary freeze does not exist: #{path}") unless path.file?
+
+      target = {
+        "kind" => "boundary_freeze",
+        "path" => path.to_s,
+        "artifact_ids" => [],
+        "binding" => {
+          "kind" => "file",
+          "sha256" => Digest::SHA256.file(path).hexdigest,
+          "bytes" => File.size(path)
+        }
+      }
+      ContinuationInput.new(operation:, target:, projection: projection_for(operation, target))
+    rescue IngestOperationStore::Failure => e
+      diagnostic(operation, e.code, e.message.sub(/\A[^:]+: /, ""), operation_id:)
+    rescue SystemCallError => e
+      diagnostic(operation, "MISSING_BOUND_ARTIFACT", "boundary freeze could not be read: #{e.class}", operation_id:)
+    end
+
     def render(result, out: $stdout)
       operation = result.fetch("operation")
       out.puts "Ingest operation: #{operation.fetch('operation_id')}"

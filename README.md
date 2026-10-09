@@ -270,6 +270,12 @@ AdventureFinder authorization; it does not change operation v0.1 history or pipe
 routing. See
 [`docs/SUCCESSOR_VERSION_AUTHORIZATION_V0.1.md`](docs/SUCCESSOR_VERSION_AUTHORIZATION_V0.1.md).
 
+The standard zero-inference handoff from an approved ingest operation to one
+authority-bound AFW workload is documented in
+[`docs/STAGED_WORKLOAD_PREPARATION_V0.1.md`](docs/STAGED_WORKLOAD_PREPARATION_V0.1.md).
+It records an explicit scoring choice, lets pipeline issue staged authority, and lets
+AFW select the qualified production cases without running scoring or adopting a catalog.
+
 ### `bin/af-bootstrap`
 
 Clone missing repositories into the workspace root.

@@ -7,7 +7,7 @@ require "pathname"
 ROOT = Pathname.new(__dir__).join("..").expand_path
 CODE_ROOT = Pathname.new(ENV.fetch("AF_PROJECT_ROOT", "/Users/davidnorris/code/adventure-finder-components")).expand_path
 
-if %w[start resume bind-successor-version successor-version-authority].include?(ARGV.first)
+if %w[start resume bind-successor-version successor-version-authority prepare-workload].include?(ARGV.first)
   $LOAD_PATH.unshift(ROOT.join("lib").to_s)
   require "adventure_finder_catalog_ingest"
   exit AdventureFinderWorkspace::CatalogIngestCLI.run(

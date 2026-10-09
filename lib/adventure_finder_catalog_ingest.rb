@@ -11,6 +11,8 @@ require "time"
 require_relative "adventure_finder_ingest_operation_store"
 require_relative "adventure_finder_ingest_routing"
 require_relative "adventure_finder_ingest_source_driver"
+require_relative "adventure_finder_staged_scoring_intent"
+require_relative "adventure_finder_staged_workload_preparation"
 require_relative "adventure_finder_successor_version_authorization"
 
 module AdventureFinderWorkspace
@@ -42,7 +44,7 @@ module AdventureFinderWorkspace
 
     def start(pdf:, base_catalog:, source_declaration:, policy_definition:, policy_id:,
               policy_version:, policy_values:, selected_by:, operation_id: SecureRandom.uuid,
-              canonical_destination: nil)
+              canonical_destination: nil, scoring_choice: nil)
       input = required_file(pdf, "input PDF")
       fail_with("UNSUPPORTED_INPUT", "input must be a .pdf file") unless input.extname.casecmp?(".pdf")
       catalog = required_file(base_catalog, "base catalog")
@@ -73,6 +75,8 @@ module AdventureFinderWorkspace
         policy:
       )
       write_context!(context)
+      capture_scoring_choice!(context, store, operation_id, scoring_choice,
+                              selected_by:, interaction: "ingest_start") if scoring_choice
 
       out.puts "Started durable catalog ingest"
       out.puts "Operation handle: #{operation_id}"
@@ -100,13 +104,44 @@ module AdventureFinderWorkspace
       fail_with(e.code, e.message.sub(/\A[^:]+: /, ""))
     end
 
-    def resume(operation_id)
+    def resume(operation_id, scoring_choice: nil, selected_by: nil)
       context = load_context(operation_id)
       store = store_for(context)
+      capture_scoring_choice!(context, store, operation_id, scoring_choice,
+                              selected_by:, interaction: "post_boundary_resume") if scoring_choice
       result = continue_or_route(store, context, operation_id)
       routing_for(store, context).render(result, out:)
       result["status"] == "REJECTED" ? 2 : 0
     rescue IngestOperationStore::Failure => e
+      fail_with(e.code, e.message.sub(/\A[^:]+: /, ""))
+    end
+
+    def prepare_workload(operation_id, freeze_path:, approval_path:, bundle_dir:,
+                         historical_project_state_path:, current_project_state_path: nil)
+      context = load_context(operation_id)
+      store = store_for(context)
+      routing = routing_for(store, context)
+      intent_store = scoring_intent_store_for(context, store)
+      result = StagedWorkloadPreparation.new(
+        front_door_root: context.fetch("front_door_root"),
+        project_root: context.fetch("project_root"),
+        pipeline_root: context.fetch("pipeline_root"),
+        afw_root: env["AF_AFW_ROOT"] || Pathname(context.fetch("project_root")).join("af-workloads"),
+        scorer_root: env["AF_SCORER_ROOT"] || Pathname(context.fetch("project_root")).join("af-cli-scoring-utility"),
+        source_root: context.fetch("source_root"),
+        catalog_root: context.fetch("catalog_root"),
+        operation_store: store,
+        intent_store:,
+        authorization_store: authority_store_for(context, store),
+        routing:
+      ).prepare(
+        operation_id:, freeze_path:, approval_path:, bundle_dir:,
+        historical_project_state_path:, current_project_state_path:
+      )
+      render_workload_result(result)
+      0
+    rescue IngestOperationStore::Failure, StagedScoringIntentStore::Failure,
+           StagedWorkloadPreparation::Failure, SuccessorVersionAuthorizationStore::Failure => e
       fail_with(e.code, e.message.sub(/\A[^:]+: /, ""))
     end
 
@@ -218,6 +253,39 @@ module AdventureFinderWorkspace
         ),
         operation_store: store
       )
+    end
+
+    def scoring_intent_store_for(context, store)
+      StagedScoringIntentStore.new(
+        root: StagedScoringIntentStore.default_root(front_door_root: context.fetch("front_door_root")),
+        operation_store: store,
+        policy_path: Pathname(context.fetch("pipeline_root")).join(
+          "config", "staged_scoring_input_policy_v0.1.json"
+        )
+      )
+    end
+
+    def capture_scoring_choice!(context, store, operation_id, choice, selected_by:, interaction:)
+      scoring_intent_store_for(context, store).capture!(
+        operation_id:, choice:, selected_by: required_text(selected_by, "scoring choice selected by"), interaction:
+      )
+    end
+
+    def render_workload_result(result)
+      out.puts "Staged scoring workload: #{result.fetch('status')}"
+      out.puts "Operation: #{result.fetch('operation_id')}"
+      out.puts "Workload: #{result.fetch('workload_id')}"
+      out.puts "Qualified cases / metric denominator: #{result.fetch('qualified_cases')} / #{result.fetch('metric_denominator')}"
+      result.fetch("selected").each do |entry|
+        out.puts "Selected: #{entry.fetch('adventure_id')} (#{entry.fetch('case_count')} cases)"
+      end
+      result.fetch("deferred").each do |entry|
+        label = entry["adventure_id"] || "no new record"
+        out.puts "Deferred: #{label} — #{entry.fetch('reason')}"
+      end
+      out.puts "Execution authorized: no"
+      out.puts "Catalog adoption authorized: no"
+      out.puts "Next inspection: #{result.fetch('next_action')}" if result["next_action"]
     end
 
     def convert(input, context)
@@ -457,6 +525,8 @@ module AdventureFinderWorkspace
           opts.on("--selected-by VALUE") { |value| options[:selected_by] = value }
           opts.on("--operation-id UUID") { |value| options[:operation_id] = value }
           opts.on("--canonical-destination FILE") { |value| options[:canonical_destination] = value }
+          opts.on("--prepare-staged-scoring") { select_scoring_choice!(options, "prepare") }
+          opts.on("--decline-staged-scoring") { select_scoring_choice!(options, "decline") }
         end
         parser.parse!(argv)
         pdf = argv.shift
@@ -470,16 +540,48 @@ module AdventureFinderWorkspace
         source = IngestOperation::SOURCE_CHOICES.to_h { |key| [key, options.fetch(key.to_sym)] }
         service.start(pdf:, source_declaration: source, **options.slice(
           :base_catalog, :policy_definition, :policy_id, :policy_version, :policy_values,
-          :selected_by, :operation_id, :canonical_destination
+          :selected_by, :operation_id, :canonical_destination, :scoring_choice
         ))
       when "resume"
+        options = {}
+        parser = OptionParser.new do |opts|
+          opts.on("--prepare-staged-scoring") { select_scoring_choice!(options, "prepare") }
+          opts.on("--decline-staged-scoring") { select_scoring_choice!(options, "decline") }
+          opts.on("--selected-by VALUE") { |value| options[:selected_by] = value }
+        end
+        parser.parse!(argv)
         operation_id = argv.shift
-        unless operation_id && argv.empty?
+        valid_choice = !options.key?(:scoring_choice) || options[:selected_by]
+        valid_selector = options.key?(:scoring_choice) || !options.key?(:selected_by)
+        unless operation_id && argv.empty? && valid_choice && valid_selector
           raise CatalogIngest::Failure.new(
-            "INVALID_OPERATION_HANDLE", "usage: bin/af-catalog resume OPERATION_ID"
+            "INVALID_OPERATION_HANDLE",
+            "usage: bin/af-catalog resume OPERATION_ID " \
+            "[--prepare-staged-scoring|--decline-staged-scoring --selected-by VALUE]"
           )
         end
-        service.resume(operation_id)
+        service.resume(operation_id, **options)
+      when "prepare-workload"
+        options = {}
+        parser = OptionParser.new do |opts|
+          opts.on("--freeze PATH") { |value| options[:freeze_path] = value }
+          opts.on("--approval PATH") { |value| options[:approval_path] = value }
+          opts.on("--editorial-bundle DIR") { |value| options[:bundle_dir] = value }
+          opts.on("--historical-project-state PATH") { |value| options[:historical_project_state_path] = value }
+          opts.on("--current-project-state PATH") { |value| options[:current_project_state_path] = value }
+        end
+        parser.parse!(argv)
+        operation_id = argv.shift
+        required = %i[freeze_path approval_path bundle_dir historical_project_state_path]
+        missing = required.reject { |key| options.key?(key) }
+        unless operation_id && argv.empty? && missing.empty?
+          raise CatalogIngest::Failure.new(
+            "MISSING_CHOICE",
+            "usage: bin/af-catalog prepare-workload OPERATION_ID --freeze PATH --approval PATH " \
+            "--editorial-bundle DIR --historical-project-state PATH"
+          )
+        end
+        service.prepare_workload(operation_id, **options)
       when "bind-successor-version"
         options = {}
         parser = OptionParser.new do |opts|
@@ -510,7 +612,7 @@ module AdventureFinderWorkspace
       else
         raise CatalogIngest::Failure.new(
           "USAGE", "usage: bin/af-catalog {start | resume | bind-successor-version | " \
-                   "successor-version-authority} ..."
+                   "successor-version-authority | prepare-workload} ..."
         )
       end
     rescue OptionParser::ParseError => e
@@ -531,5 +633,15 @@ module AdventureFinderWorkspace
       raise CatalogIngest::Failure.new("MISSING_CHOICE", "policy values must be valid JSON")
     end
     private_class_method :parse_policy_values
+
+    def self.select_scoring_choice!(options, choice)
+      if options.key?(:scoring_choice) && options[:scoring_choice] != choice
+        raise CatalogIngest::Failure.new(
+          "INVALID_SCORING_CHOICE", "choose exactly one staged-scoring disposition"
+        )
+      end
+      options[:scoring_choice] = choice
+    end
+    private_class_method :select_scoring_choice!
   end
 end
