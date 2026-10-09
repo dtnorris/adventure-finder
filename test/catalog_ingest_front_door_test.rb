@@ -5,7 +5,9 @@ require "fileutils"
 require "json"
 require "minitest/autorun"
 require "open3"
+require "stringio"
 require "tmpdir"
+require "adventure_finder_catalog_ingest"
 
 class CatalogIngestFrontDoorTest < Minitest::Test
   ROOT = File.expand_path("..", __dir__)
@@ -81,48 +83,56 @@ class CatalogIngestFrontDoorTest < Minitest::Test
   end
 
   def test_missing_choices_and_unsupported_input_fail_before_creating_an_operation
-    _stdout, stderr, status = run_catalog("start", @pdf)
+    _stdout, stderr, status = dispatch_catalog("start", @pdf)
 
-    refute status.success?
+    assert_equal 1, status
     assert_includes stderr, "MISSING_CHOICE"
     refute File.exist?(operation_root)
 
     text = write(File.join(@input, "not-a-pdf.txt"), "not a pdf\n")
-    _stdout, stderr, status = run_catalog(*start_arguments(pdf: text))
-    refute status.success?
+    _stdout, stderr, status = dispatch_catalog(*start_arguments(pdf: text))
+    assert_equal 1, status
     assert_includes stderr, "UNSUPPORTED_INPUT"
     refute File.exist?(operation_root)
   end
 
   def test_reusing_a_handle_with_different_input_fails_closed
-    _stdout, stderr, status = run_catalog(*start_arguments)
-    assert status.success?, stderr
+    _stdout, stderr, status = dispatch_catalog(*start_arguments)
+    assert_equal 0, status, stderr
     other = write(File.join(@input, "other.pdf"), "%PDF different fixture\n")
 
-    _stdout, conflict_err, conflict_status = run_catalog(*start_arguments(pdf: other))
+    _stdout, conflict_err, conflict_status = dispatch_catalog(*start_arguments(pdf: other))
 
-    refute conflict_status.success?
+    assert_equal 1, conflict_status
     assert_includes conflict_err, "CONFLICT"
     assert_equal Digest::SHA256.file(@pdf).hexdigest, revision_document(0).dig("input", "content", "sha256")
   end
 
   def test_unknown_corrupt_context_and_corrupt_operation_are_distinct_failures
-    _stdout, stderr, status = run_catalog("resume")
-    refute status.success?
+    _stdout, stderr, status = dispatch_catalog("resume")
+    assert_equal 1, status
     assert_includes stderr, "INVALID_OPERATION_HANDLE"
 
-    _stdout, stderr, status = run_catalog("resume", "not-a-handle")
-    refute status.success?
+    _stdout, stderr, status = dispatch_catalog("resume", "not-a-handle")
+    assert_equal 1, status
     assert_includes stderr, "INVALID_OPERATION_HANDLE"
 
-    _stdout, stderr, status = run_catalog("resume", ID)
-    refute status.success?
+    _stdout, stderr, status = dispatch_catalog("resume", "--unknown", ID)
+    assert_equal 1, status
+    assert_includes stderr, "USAGE"
+
+    _stdout, stderr, status = dispatch_catalog("not-a-command")
+    assert_equal 1, status
+    assert_includes stderr, "USAGE"
+
+    _stdout, stderr, status = dispatch_catalog("resume", ID)
+    assert_equal 1, status
     assert_includes stderr, "UNKNOWN_OPERATION"
 
     FileUtils.mkdir_p(context_root)
     File.binwrite(File.join(context_root, "#{ID}.json"), "{not json")
-    _stdout, stderr, status = run_catalog("resume", ID)
-    refute status.success?
+    _stdout, stderr, status = dispatch_catalog("resume", ID)
+    assert_equal 1, status
     assert_includes stderr, "CORRUPT_RESUME_CONTEXT"
 
     FileUtils.remove_entry(@front)
@@ -166,19 +176,19 @@ class CatalogIngestFrontDoorTest < Minitest::Test
   end
 
   def test_bind_successor_version_is_durable_replay_safe_and_nonexecuting
-    _stdout, stderr, status = run_catalog(*start_arguments)
-    assert status.success?, stderr
+    _stdout, stderr, status = dispatch_catalog(*start_arguments)
+    assert_equal 0, status, stderr
     revisions_before = revision_snapshot
     converter_calls = File.readlines(@converter_log).length
     router_before = Digest::SHA256.file(@router_log).hexdigest
 
-    stdout, stderr, status = run_catalog(
+    stdout, stderr, status = dispatch_catalog(
       "bind-successor-version", ID,
       "--successor-version", "7.5.2",
       "--selected-by", "David"
     )
 
-    assert status.success?, stderr
+    assert_equal 0, status, stderr
     assert_includes stdout, "Bound successor-version authority"
     assert_includes stdout, "Successor version: 7.5.2"
     authorization_path = successor_authorization_path
@@ -194,45 +204,45 @@ class CatalogIngestFrontDoorTest < Minitest::Test
     assert_equal router_before, Digest::SHA256.file(@router_log).hexdigest
     refute File.exist?(@forbidden_log)
 
-    projected, projected_err, projected_status = run_catalog(
+    projected, projected_err, projected_status = dispatch_catalog(
       "successor-version-authority", ID, "--json"
     )
-    assert projected_status.success?, projected_err
+    assert_equal 0, projected_status, projected_err
     projection = JSON.parse(projected)
     assert_equal "adventurefinder-successor-version-authorization-projection/v0.1",
                  projection["contract_version"]
     assert_equal document, projection["authorization"]
 
-    _stdout, replay_err, replay_status = run_catalog(
+    _stdout, replay_err, replay_status = dispatch_catalog(
       "bind-successor-version", ID,
       "--successor-version", "7.5.2",
       "--selected-by", "David"
     )
-    assert replay_status.success?, replay_err
+    assert_equal 0, replay_status, replay_err
     assert_equal bytes, File.binread(authorization_path)
     assert_equal mtime, File.mtime(authorization_path)
 
-    _stdout, conflict_err, conflict_status = run_catalog(
+    _stdout, conflict_err, conflict_status = dispatch_catalog(
       "bind-successor-version", ID,
       "--successor-version", "7.5.3",
       "--selected-by", "David"
     )
-    refute conflict_status.success?
+    assert_equal 1, conflict_status
     assert_includes conflict_err, "SUCCESSOR_VERSION_AUTHORITY_CONFLICT"
     assert_equal bytes, File.binread(authorization_path)
   end
 
   def test_bind_successor_version_rejects_malformed_value_before_authority_mutation
-    _stdout, stderr, status = run_catalog(*start_arguments)
-    assert status.success?, stderr
+    _stdout, stderr, status = dispatch_catalog(*start_arguments)
+    assert_equal 0, status, stderr
 
-    _stdout, bind_err, bind_status = run_catalog(
+    _stdout, bind_err, bind_status = dispatch_catalog(
       "bind-successor-version", ID,
       "--successor-version", "VERSION",
       "--selected-by", "David"
     )
 
-    refute bind_status.success?
+    assert_equal 1, bind_status
     assert_includes bind_err, "INVALID_SUCCESSOR_VERSION"
     refute File.exist?(File.dirname(successor_authorization_path))
     assert_equal 1, File.readlines(@converter_log).length
@@ -266,8 +276,8 @@ class CatalogIngestFrontDoorTest < Minitest::Test
     assert_equal "ingest-#{ID}", intent.fetch("workload_id")
     assert_equal "ingest_start", intent.fetch("interaction")
 
-    _stdout, resume_err, resume_status = run_catalog("resume", ID)
-    assert resume_status.success?, resume_err
+    _stdout, resume_err, resume_status = dispatch_catalog("resume", ID)
+    assert_equal 0, resume_status, resume_err
     assert_equal intent_bytes, File.binread(intent_path)
 
     _stdout, conflict_err, conflict_status = run_catalog(
@@ -279,6 +289,27 @@ class CatalogIngestFrontDoorTest < Minitest::Test
   end
 
   private
+
+  # The dispatcher consumes argv; each call gets its own array and streams.
+  # Executable/restart scenarios continue to use run_catalog below.
+  def dispatch_catalog(*arguments)
+    out = StringIO.new
+    err = StringIO.new
+    status = AdventureFinderWorkspace::CatalogIngestCLI.run(
+      arguments,
+      front_door_root: @front,
+      project_root: @components,
+      out: out,
+      err: err,
+      env: {
+        "AF_PDF_CONVERTER_ROOT" => @converter,
+        "AF_DATA_PIPELINE_ROOT" => @pipeline,
+        "AF_SOURCE_ROOT" => @source,
+        "PATH" => [@sentinel_bin, ENV.fetch("PATH", "")].join(File::PATH_SEPARATOR)
+      }
+    )
+    [out.string, err.string, status]
+  end
 
   def start_arguments(pdf: @pdf)
     [
