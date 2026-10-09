@@ -1,0 +1,157 @@
+# Per-file coverage floors. A file that drops below its floor fails the run,
+# and files with no entry fall through to the global per-file minimum.
+# Regenerate with `simplecov ratchet`. Floors only ever tighten.
+lib/adventure_finder_batch.rb:
+  lines:
+    percent: 89.59
+    missed: 23
+  branches:
+    percent: 64.65
+    missed: 41
+lib/adventure_finder_capability_artifacts.rb:
+  lines:
+    percent: 95.58
+    missed: 3
+  branches:
+    percent: 76.47
+    missed: 4
+lib/adventure_finder_catalog_ingest.rb:
+  lines:
+    percent: 28.37
+    missed: 255
+  branches:
+    percent: 8.04
+    missed: 80
+lib/adventure_finder_deadline_plan.rb:
+  lines:
+    percent: 98.83
+    missed: 1
+  branches:
+    percent: 100.0
+    missed: 0
+lib/adventure_finder_deadline_proposals.rb:
+  lines:
+    percent: 100.0
+    missed: 0
+  branches:
+    percent: 88.0
+    missed: 6
+lib/adventure_finder_diagnostics.rb:
+  lines:
+    percent: 81.53
+    missed: 24
+  branches:
+    percent: 58.06
+    missed: 26
+lib/adventure_finder_ingest_operation.rb:
+  lines:
+    percent: 97.56
+    missed: 4
+  branches:
+    percent: 90.0
+    missed: 3
+lib/adventure_finder_ingest_operation_store.rb:
+  lines:
+    percent: 92.12
+    missed: 20
+  branches:
+    percent: 72.04
+    missed: 26
+lib/adventure_finder_ingest_routing.rb:
+  lines:
+    percent: 88.72
+    missed: 23
+  branches:
+    percent: 70.58
+    missed: 25
+lib/adventure_finder_ingest_source_driver.rb:
+  lines:
+    percent: 21.39
+    missed: 147
+  branches:
+    percent: 0.0
+    missed: 93
+lib/adventure_finder_job_handle_resolver.rb:
+  lines:
+    percent: 91.17
+    missed: 3
+  branches:
+    percent: 91.66
+    missed: 1
+lib/adventure_finder_local_capability_plan.rb:
+  lines:
+    percent: 96.87
+    missed: 4
+  branches:
+    percent: 72.72
+    missed: 9
+lib/adventure_finder_local_capacity.rb:
+  lines:
+    percent: 87.23
+    missed: 6
+  branches:
+    percent: 42.85
+    missed: 8
+lib/adventure_finder_measurements.rb:
+  lines:
+    percent: 93.75
+    missed: 6
+  branches:
+    percent: 70.0
+    missed: 9
+lib/adventure_finder_model_preflight.rb:
+  lines:
+    percent: 86.0
+    missed: 14
+  branches:
+    percent: 70.0
+    missed: 12
+lib/adventure_finder_operator_acceptance.rb:
+  lines:
+    percent: 96.96
+    missed: 3
+  branches:
+    percent: 84.37
+    missed: 5
+lib/adventure_finder_production_context.rb:
+  lines:
+    percent: 92.09
+    missed: 20
+  branches:
+    percent: 63.63
+    missed: 44
+lib/adventure_finder_review.rb:
+  lines:
+    percent: 89.9
+    missed: 11
+  branches:
+    percent: 58.33
+    missed: 15
+lib/adventure_finder_staged_scoring_intent.rb:
+  lines:
+    percent: 93.25
+    missed: 11
+  branches:
+    percent: 69.49
+    missed: 18
+lib/adventure_finder_staged_workload_preparation.rb:
+  lines:
+    percent: 90.21
+    missed: 23
+  branches:
+    percent: 60.93
+    missed: 25
+lib/adventure_finder_successor_version_authorization.rb:
+  lines:
+    percent: 93.22
+    missed: 12
+  branches:
+    percent: 75.0
+    missed: 13
+lib/adventure_finder_workspace.rb:
+  lines:
+    percent: 57.77
+    missed: 190
+  branches:
+    percent: 38.85
+    missed: 107

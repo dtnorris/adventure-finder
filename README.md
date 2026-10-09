@@ -551,17 +551,33 @@ duplicated.
 
 The workspace CLI itself has no third-party runtime dependency beyond Ruby and Git.
 
-Run its self-tests:
+Install the test dependencies once, then run the front-door suite:
 
 ```bash
-bin/test
-```
-
-or, when Rake is available:
-
-```bash
+bundle install
+bundle check
 rake test
 ```
 
+`rake test` runs the ordinary suite without coverage instrumentation. The default
+`rake` also runs the coverage task and checks the committed per-file line and branch
+floors. Run coverage separately with:
+
+```bash
+rake test:coverage
+```
+
+The local HTML report is `coverage/index.html`. Conditional integration skips remain
+visible in the test output. Coverage starts in the Minitest process, so Ruby code
+reached only through `Open3` child CLIs (notably catalog ingest and its source driver)
+can report zero coverage despite passing CLI assertions. This baseline measures that
+boundary honestly; it does not instrument sibling repositories or child processes.
+
+For an intentional coverage update, review changed production code and the measured
+per-file line and branch deltas, then run `rake test:coverage:baseline` explicitly and
+review the `.simplecov_baseline.yml` diff. Ordinary test commands never rewrite the
+baseline. Keep the baseline change in the same review as its justification.
+
+`rake test:operator_acceptance` remains a separate cross-repository command.
 The GitHub workflow tests only this repository's own orchestration code and manifest.
 It does not attempt to clone private sibling repositories in CI.
