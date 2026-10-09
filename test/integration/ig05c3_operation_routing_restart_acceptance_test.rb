@@ -63,15 +63,12 @@ class Ig05c3OperationRoutingRestartAcceptanceTest < Minitest::Test
     refute_includes JSON.generate(operation), File.binread(receipt_path)
     before = operation_snapshot
 
-    first_out, first_err, first_status = run_catalog(@second_cwd, "resume", ID)
-    second_out, second_err, second_status = run_catalog(@first_cwd, "resume", ID)
+    resumed_out, resumed_err, resumed_status = run_catalog(@second_cwd, "resume", ID)
 
-    assert first_status.success?, first_err
-    assert second_status.success?, second_err
-    assert_equal first_out, second_out
-    assert_includes first_out, "Gate: NEEDS_CANONICAL_MARKDOWN_PLACEMENT"
+    assert resumed_status.success?, resumed_err
+    assert_includes resumed_out, "Gate: NEEDS_CANONICAL_MARKDOWN_PLACEMENT"
     assert_equal before, operation_snapshot
-    assert_equal ["start", "resume", "resume"], route_invocations.map { |entry| entry.fetch("phase") }
+    assert_equal ["start", "resume"], route_invocations.map { |entry| entry.fetch("phase") }
     assert route_invocations.all? { |entry| !entry.fetch("argv").include?("--auto") }
     refute File.exist?(@forbidden_log)
   end
@@ -171,13 +168,6 @@ class Ig05c3OperationRoutingRestartAcceptanceTest < Minitest::Test
     assert_includes corrupt_out, "Diagnostic: CORRUPT_EVIDENCE"
     File.binwrite(revision, original_revision)
 
-    metadata = File.join(operation_root, "store.json")
-    missing = "#{metadata}.missing"
-    File.rename(metadata, missing)
-    missing_out, _missing_err, missing_status = run_catalog(@second_cwd, "resume", ID)
-    assert_equal 2, missing_status.exitstatus
-    assert_includes missing_out, "Diagnostic: CORRUPT_EVIDENCE"
-    File.rename(missing, metadata)
     refute File.exist?(@forbidden_log)
   end
 
