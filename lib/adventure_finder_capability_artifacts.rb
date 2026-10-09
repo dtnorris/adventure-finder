@@ -59,7 +59,9 @@ module AdventureFinderWorkspace
     end
   end
 
-  class CapabilityArtifacts
+  # Builds the provider-neutral artifact owned by WLO without adding
+  # AdventureFinder operation, batch, or provenance fields to it.
+  class GenericCapabilityArtifact
     REQUIRED_OLLAMA_KEYS = %w[
       model expected_digest required_context_length require_fully_gpu_resident
     ].freeze
@@ -67,31 +69,17 @@ module AdventureFinderWorkspace
 
     attr_reader :capability_request, :capability_request_bytes,
                 :capability_fingerprint, :capability_artifact_sha256,
-                :provenance, :provenance_bytes
+                :contract_version
 
-    def initialize(ollama_requirement:, provenance:, capability_request_class:)
+    def initialize(ollama_requirement:, capability_request_class:)
       @capability_request, request = build_capability_request(
         ollama_requirement, capability_request_class
       )
       @capability_request_bytes = JSON.generate(capability_request).freeze
       @capability_fingerprint = request.fingerprint
       @capability_artifact_sha256 = Digest::SHA256.hexdigest(capability_request_bytes).freeze
-      binding = CapabilityProvenance.new(
-        **provenance,
-        capability_contract_version: request.contract_version,
-        capability_fingerprint: capability_fingerprint,
-        capability_artifact_sha256: capability_artifact_sha256
-      )
-      @provenance = binding.document
-      @provenance_bytes = binding.bytes
+      @contract_version = request.contract_version
       freeze
-    end
-
-    def to_h
-      {
-        "capability_request" => capability_request,
-        "provenance" => provenance
-      }.freeze
     end
 
     private
@@ -118,6 +106,38 @@ module AdventureFinderWorkspace
       raise unless e.class.name == "WorkloadOrchestrator::Error"
 
       raise Error, "WLO capability request rejected AFW requirement: #{e.message}"
+    end
+  end
+
+  class CapabilityArtifacts
+    attr_reader :capability_request, :capability_request_bytes,
+                :capability_fingerprint, :capability_artifact_sha256,
+                :provenance, :provenance_bytes
+
+    def initialize(ollama_requirement:, provenance:, capability_request_class:)
+      artifact = GenericCapabilityArtifact.new(
+        ollama_requirement:, capability_request_class:
+      )
+      @capability_request = artifact.capability_request
+      @capability_request_bytes = artifact.capability_request_bytes
+      @capability_fingerprint = artifact.capability_fingerprint
+      @capability_artifact_sha256 = artifact.capability_artifact_sha256
+      binding = CapabilityProvenance.new(
+        **provenance,
+        capability_contract_version: artifact.contract_version,
+        capability_fingerprint: capability_fingerprint,
+        capability_artifact_sha256: capability_artifact_sha256
+      )
+      @provenance = binding.document
+      @provenance_bytes = binding.bytes
+      freeze
+    end
+
+    def to_h
+      {
+        "capability_request" => capability_request,
+        "provenance" => provenance
+      }.freeze
     end
   end
 end

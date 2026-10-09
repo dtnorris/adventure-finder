@@ -11,6 +11,7 @@ require "time"
 require_relative "adventure_finder_ingest_operation_store"
 require_relative "adventure_finder_ingest_routing"
 require_relative "adventure_finder_ingest_source_driver"
+require_relative "adventure_finder_local_capability_plan"
 require_relative "adventure_finder_staged_scoring_intent"
 require_relative "adventure_finder_staged_workload_preparation"
 require_relative "adventure_finder_successor_version_authorization"
@@ -142,6 +143,19 @@ module AdventureFinderWorkspace
       0
     rescue IngestOperationStore::Failure, StagedScoringIntentStore::Failure,
            StagedWorkloadPreparation::Failure, SuccessorVersionAuthorizationStore::Failure => e
+      fail_with(e.code, e.message.sub(/\A[^:]+: /, ""))
+    end
+
+    def plan_local_capabilities(operation_id)
+      context = load_context(operation_id)
+      planner = LocalCapabilityPlan.new(
+        front_door_root: context.fetch("front_door_root"),
+        project_root: context.fetch("project_root"),
+        env:
+      )
+      out.write(planner.bytes(operation_id:))
+      0
+    rescue LocalCapabilityPlan::Failure => e
       fail_with(e.code, e.message.sub(/\A[^:]+: /, ""))
     end
 
@@ -582,6 +596,17 @@ module AdventureFinderWorkspace
           )
         end
         service.prepare_workload(operation_id, **options)
+      when "plan-local-capabilities"
+        json = false
+        parser = OptionParser.new { |opts| opts.on("--json") { json = true } }
+        parser.parse!(argv)
+        operation_id = argv.shift
+        unless operation_id && argv.empty? && json
+          raise CatalogIngest::Failure.new(
+            "USAGE", "usage: bin/af-catalog plan-local-capabilities OPERATION_ID --json"
+          )
+        end
+        service.plan_local_capabilities(operation_id)
       when "bind-successor-version"
         options = {}
         parser = OptionParser.new do |opts|
@@ -612,7 +637,7 @@ module AdventureFinderWorkspace
       else
         raise CatalogIngest::Failure.new(
           "USAGE", "usage: bin/af-catalog {start | resume | bind-successor-version | " \
-                   "successor-version-authority | prepare-workload} ..."
+                   "successor-version-authority | prepare-workload | plan-local-capabilities} ..."
         )
       end
     rescue OptionParser::ParseError => e

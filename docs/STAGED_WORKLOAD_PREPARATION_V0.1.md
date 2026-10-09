@@ -53,3 +53,15 @@ On restart, a complete existing workload is verified with
 The next safe local action printed after preparation is read-only workload
 verification. WLO execution is a later, explicit operator action and is not started
 by this command.
+
+After successful preparation, derive the deterministic planning-only capability
+inventory and possible one-worker sequence from those exact frozen bytes:
+
+```bash
+bin/af-catalog plan-local-capabilities OPERATION_UUID --json
+```
+
+The output follows
+[`adventurefinder-local-capability-plan/v0.1`](../contracts/adventurefinder-local-capability-plan/v0.1/README.md).
+It preserves exact WLO requirements and pool constraints, reports no READY state,
+and grants no execution, provider, capacity, or catalog-adoption authority.
