@@ -111,6 +111,8 @@ class AfCatalogTest < Minitest::Test
       pipeline_root = File.join(dir, "af-data-pipeline")
       pdf = File.join(dir, "book.pdf")
       receipt = File.join(converter_root, "build", "book.conversion-receipt.json")
+      acknowledgment = File.join(dir, "progress-acknowledged")
+      routed = File.join(dir, "routed.txt")
 
       FileUtils.mkdir_p(File.join(converter_root, "bin"))
       FileUtils.mkdir_p(File.join(pipeline_root, "bin"))
@@ -125,7 +127,16 @@ class AfCatalogTest < Minitest::Test
           receipt = #{receipt.inspect}
           FileUtils.mkdir_p(File.dirname(receipt))
           print "\\r[=                   ] 1/2"
-          sleep 0.5
+          $stdout.flush
+          acknowledgment = #{acknowledgment.inspect}
+          deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 8
+          until File.exist?(acknowledgment)
+            if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+              warn "converter timed out waiting for progress acknowledgment"
+              exit 1
+            end
+            sleep 0.01
+          end
           File.write(receipt, "{}")
           puts
           puts "Conversion receipt: \#{receipt}"
@@ -136,6 +147,7 @@ class AfCatalogTest < Minitest::Test
         File.join(pipeline_root, "bin", "af-ingest-next"),
         <<~RUBY
           #!/usr/bin/env ruby
+          File.write(#{routed.inspect}, ARGV.fetch(0))
           puts "STATE: NEEDS_CANONICAL_MARKDOWN_PLACEMENT"
         RUBY
       )
@@ -145,20 +157,61 @@ class AfCatalogTest < Minitest::Test
         "AF_DATA_PIPELINE_ROOT" => pipeline_root
       }
 
-      Open3.popen2e(env, COMMAND, pdf) do |_stdin, output, wait_thread|
+      Open3.popen2e(env, COMMAND, pdf, pgroup: true) do |_stdin, output, wait_thread|
         observed = +""
+        completed = false
+        begin
+          progress = "\r[=                   ] 1/2"
+          deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 3
+          until observed.include?(progress)
+            remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            flunk "timed out waiting for streamed carriage-return progress" if remaining <= 0
+            flunk "timed out waiting for streamed carriage-return progress" unless IO.select([output], nil, nil, remaining)
+            begin
+              observed << output.readpartial(4096)
+            rescue EOFError
+              flunk "catalog output ended before carriage-return progress: #{observed.inspect}"
+            end
+          end
 
-        until observed.include?("1/2")
-          ready = IO.select([output], nil, nil, 1.0)
-          refute_nil ready, "progress output was not streamed within 1 second"
-          observed << output.readpartial(4096)
+          refute File.exist?(receipt), "converter created its receipt before progress was observable"
+          refute File.exist?(routed), "router ran before converter acknowledgment"
+          File.write(acknowledgment, "progress observed")
+
+          deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 5
+          loop do
+            remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            flunk "timed out waiting for catalog completion after acknowledgment" if remaining <= 0
+            flunk "timed out waiting for catalog completion after acknowledgment" unless IO.select([output], nil, nil, remaining)
+            begin
+              observed << output.readpartial(4096)
+            rescue EOFError
+              break
+            end
+          end
+
+          flunk "catalog did not exit after output EOF" unless wait_thread.join(1)
+          assert wait_thread.value.success?, observed
+          assert_includes observed, "Conversion receipt: #{receipt}"
+          assert_equal receipt, File.read(routed)
+          assert_includes observed, "STATE: NEEDS_CANONICAL_MARKDOWN_PLACEMENT"
+          completed = true
+        ensure
+          unless completed
+            begin
+              Process.kill("TERM", -wait_thread.pid)
+            rescue Errno::ESRCH
+              # The test-owned process group has already exited.
+            end
+            wait_thread.join(0.5)
+            begin
+              Process.kill("KILL", -wait_thread.pid)
+            rescue Errno::ESRCH
+              # No test-owned processes remain.
+            end
+            wait_thread.join(1)
+          end
         end
-
-        assert wait_thread.alive?, "converter exited before progress was observable"
-
-        observed << output.read until output.eof?
-        assert wait_thread.value.success?
-        assert_includes observed, "Conversion receipt:"
       end
     end
   end
