@@ -96,6 +96,21 @@ class CatalogIngestFrontDoorTest < Minitest::Test
     refute File.exist?(operation_root)
   end
 
+  def test_local_execution_commands_require_explicit_authority_and_exact_handles
+    _stdout, stderr, status = dispatch_catalog("local-start", ID)
+    assert_equal 1, status
+    assert_includes stderr, "MISSING_CHOICE"
+
+    _stdout, stderr, status = dispatch_catalog("local-resume")
+    assert_equal 1, status
+    assert_includes stderr, "INVALID_OPERATION_HANDLE"
+
+    _stdout, stderr, status = dispatch_catalog("local-status", ID, "unexpected")
+    assert_equal 1, status
+    assert_includes stderr, "INVALID_OPERATION_HANDLE"
+    refute File.exist?(operation_root)
+  end
+
   def test_reusing_a_handle_with_different_input_fails_closed
     _stdout, stderr, status = dispatch_catalog(*start_arguments)
     assert_equal 0, status, stderr

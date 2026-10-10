@@ -65,3 +65,16 @@ The output follows
 [`adventurefinder-local-capability-plan/v0.1`](../contracts/adventurefinder-local-capability-plan/v0.1/README.md).
 It preserves exact WLO requirements and pool constraints, reports no READY state,
 and grants no execution, provider, capacity, or catalog-adoption authority.
+
+After reviewing that plan, explicitly authorize and drive its local-only execution:
+
+```bash
+bin/af-catalog local-start OPERATION_UUID --selected-by OPERATOR
+bin/af-catalog local-status OPERATION_UUID
+```
+
+The durable coordination, capability-transition, restart, cancellation, and evidence
+handoff rules are defined by
+[`LOCAL_INGEST_EXECUTION_V0.1.md`](LOCAL_INGEST_EXECUTION_V0.1.md). The driver keeps
+the same AFW workload and WLO execution throughout; it does not add retry, remote
+capacity, scoring acceptance, or catalog-adoption authority.

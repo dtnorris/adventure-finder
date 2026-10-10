@@ -12,6 +12,7 @@ require_relative "adventure_finder_ingest_operation_store"
 require_relative "adventure_finder_ingest_routing"
 require_relative "adventure_finder_ingest_source_driver"
 require_relative "adventure_finder_local_capability_plan"
+require_relative "adventure_finder_local_execution"
 require_relative "adventure_finder_staged_scoring_intent"
 require_relative "adventure_finder_staged_workload_preparation"
 require_relative "adventure_finder_successor_version_authorization"
@@ -159,6 +160,30 @@ module AdventureFinderWorkspace
       fail_with(e.code, e.message.sub(/\A[^:]+: /, ""))
     end
 
+    def local_start(operation_id, selected_by:)
+      context = load_context(operation_id)
+      plan = local_capability_plan(context, operation_id)
+      local_execution(context).start(operation_id:, selected_by:, capability_plan: plan)
+    rescue LocalCapabilityPlan::Failure, LocalExecution::Failure => e
+      fail_with(e.code, e.message.sub(/\A[^:]+: /, ""))
+    end
+
+    def local_resume(operation_id, continue_operator_pause: false)
+      context = load_context(operation_id)
+      plan = local_capability_plan(context, operation_id)
+      local_execution(context).resume(operation_id:, capability_plan: plan, continue_operator_pause:)
+    rescue LocalCapabilityPlan::Failure, LocalExecution::Failure => e
+      fail_with(e.code, e.message.sub(/\A[^:]+: /, ""))
+    end
+
+    def local_status(operation_id)
+      context = load_context(operation_id)
+      plan = local_capability_plan(context, operation_id)
+      local_execution(context).status(operation_id:, capability_plan: plan)
+    rescue LocalCapabilityPlan::Failure, LocalExecution::Failure => e
+      fail_with(e.code, e.message.sub(/\A[^:]+: /, ""))
+    end
+
     def bind_successor_version(operation_id, successor_version:, selected_by:)
       context = load_context(operation_id)
       store = store_for(context)
@@ -184,6 +209,21 @@ module AdventureFinderWorkspace
     end
 
     private
+
+    def local_capability_plan(context, operation_id)
+      LocalCapabilityPlan.new(
+        front_door_root: context.fetch("front_door_root"),
+        project_root: context.fetch("project_root"),
+        env:
+      ).call(operation_id:)
+    end
+
+    def local_execution(context)
+      LocalExecution.new(
+        front_door_root: context.fetch("front_door_root"),
+        project_root: context.fetch("project_root"), out:, env:
+      )
+    end
 
     def build_context(operation_id, input:, catalog:, canonical_destination:)
       pipeline_root = Pathname(env.fetch("AF_DATA_PIPELINE_ROOT", project_root.join("af-data-pipeline").to_s)).expand_path
@@ -607,6 +647,39 @@ module AdventureFinderWorkspace
           )
         end
         service.plan_local_capabilities(operation_id)
+      when "local-start"
+        options = {}
+        OptionParser.new do |opts|
+          opts.on("--selected-by VALUE") { |value| options[:selected_by] = value }
+        end.parse!(argv)
+        operation_id = argv.shift
+        unless operation_id && argv.empty? && options[:selected_by]
+          raise CatalogIngest::Failure.new(
+            "MISSING_CHOICE", "usage: bin/af-catalog local-start OPERATION_ID --selected-by VALUE"
+          )
+        end
+        service.local_start(operation_id, **options)
+      when "local-resume"
+        options = {continue_operator_pause: false}
+        OptionParser.new do |opts|
+          opts.on("--continue-operator-pause") { options[:continue_operator_pause] = true }
+        end.parse!(argv)
+        operation_id = argv.shift
+        unless operation_id && argv.empty?
+          raise CatalogIngest::Failure.new(
+            "INVALID_OPERATION_HANDLE",
+            "usage: bin/af-catalog local-resume OPERATION_ID [--continue-operator-pause]"
+          )
+        end
+        service.local_resume(operation_id, **options)
+      when "local-status"
+        operation_id = argv.shift
+        unless operation_id && argv.empty?
+          raise CatalogIngest::Failure.new(
+            "INVALID_OPERATION_HANDLE", "usage: bin/af-catalog local-status OPERATION_ID"
+          )
+        end
+        service.local_status(operation_id)
       when "bind-successor-version"
         options = {}
         parser = OptionParser.new do |opts|
@@ -637,7 +710,8 @@ module AdventureFinderWorkspace
       else
         raise CatalogIngest::Failure.new(
           "USAGE", "usage: bin/af-catalog {start | resume | bind-successor-version | " \
-                   "successor-version-authority | prepare-workload | plan-local-capabilities} ..."
+                   "successor-version-authority | prepare-workload | plan-local-capabilities | " \
+                   "local-start | local-resume | local-status} ..."
         )
       end
     rescue OptionParser::ParseError => e

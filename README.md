@@ -197,6 +197,27 @@ delegates exact selected authorization to WLO. `recovery` is read-only. `repair`
 is a separate fail-closed command; WLO currently exposes no safe generic
 retained-state repair transformation.
 
+### Durable local ingest execution
+
+After a catalog ingest has produced one verified staged workload, the same front door
+can establish each frozen local capability and advance one authoritative WLO
+execution without per-model bootstrap commands:
+
+```bash
+bin/af-catalog plan-local-capabilities OPERATION_UUID --json
+bin/af-catalog local-start OPERATION_UUID --selected-by OPERATOR
+bin/af-catalog local-status OPERATION_UUID
+```
+
+`local-start` records immutable local-only authority, delegates readiness to LOW, and
+delegates scheduling and attempts to WLO. It preserves one worker identity and busy
+slot across safe capability transitions. It has no remote/paid fallback and grants no
+implicit retry, breaker acknowledgement, score acceptance, or catalog promotion.
+Use `local-resume OPERATION_UUID` after a coordinator-owned drain/restart. An ordinary
+operator pause additionally requires the explicit `--continue-operator-pause` flag
+after public drain is verified. See
+[`docs/LOCAL_INGEST_EXECUTION_V0.1.md`](docs/LOCAL_INGEST_EXECUTION_V0.1.md).
+
 ### `bin/af-operator-acceptance`
 
 Replay the production orchestration control paths with the component repositories'
