@@ -98,6 +98,10 @@ class BatchFrontDoorTest < Minitest::Test
     assert_equal "wlo-worker-sources/v0.1", config.fetch("contract_version")
     assert_equal %w[local remote], config.fetch("sources").map { |source| source.fetch("name") }
     local, remote = config.fetch("sources")
+    [local, remote].each do |source|
+      assert source.fetch("environment").key?("BUNDLE_LOCKFILE")
+      assert_nil source.dig("environment", "BUNDLE_LOCKFILE")
+    end
     assert_equal [@bundle, "exec", File.join(@low, "bin", "low"), "workers", "--json"],
                  [local.fetch("command"), *local.fetch("args")]
     assert_equal [@bundle, "exec", File.join(@rpof, "bin", "rpof"), "workers", "--json"],

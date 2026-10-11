@@ -67,12 +67,15 @@ class WloActionCheckIntegrationTest < Minitest::Test
   end
 
   def test_new_run_delegates_and_missing_resume_blocks_using_real_cli
+    lockfile = File.join(File.expand_path("../..", __dir__), "Gemfile.lock")
+    before = File.binread(lockfile)
     assert_raises(AdventureFinderWorkspace::Error) { @front.run("resume", "39") }
     assert_empty @handoff.calls
     refute_path_exists @output
     assert_equal 0, @front.run("start", "39")
     assert_includes @handoff.calls.last.fetch(:argv), "run"
     refute_path_exists @output
+    assert_equal before, File.binread(lockfile), "component action-check rewrote the front-door lockfile"
   end
 
   def test_paused_run_blocks_and_resume_handoff_leaves_pause_intact

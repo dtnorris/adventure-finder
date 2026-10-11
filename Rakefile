@@ -6,6 +6,7 @@ Rake::TestTask.new do |task|
   task.libs << "lib"
   task.libs << "test"
   task.pattern = "test/**/*_test.rb"
+  task.ruby_opts << "-r#{File.expand_path('test/support/subprocess_environment', __dir__)}"
   task.ruby_opts << "-r#{File.expand_path('test/support/simplecov_start', __dir__)}" if ENV["COVERAGE"] == "1"
 end
 

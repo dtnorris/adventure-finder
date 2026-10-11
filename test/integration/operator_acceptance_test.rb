@@ -72,6 +72,8 @@ class OperatorAcceptanceTest < Minitest::Test
     runner.calls.each do |call|
       assert_nil call.dig(:env, "RUNPOD_API_KEY")
       assert_nil call.dig(:env, "OPENAI_API_KEY")
+      assert call.fetch(:env).key?("BUNDLE_LOCKFILE")
+      assert_nil call.dig(:env, "BUNDLE_LOCKFILE")
       assert_equal "1", call.dig(:env, "AF_OPERATOR_ACCEPTANCE_OFFLINE")
       assert_includes call.dig(:env, "RUBYOPT"), "offline_network_guard.rb"
       assert_equal @wlo, call.dig(:env, "WLO_REPO_ROOT")

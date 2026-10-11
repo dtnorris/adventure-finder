@@ -588,6 +588,15 @@ floors. Run coverage separately with:
 rake test:coverage
 ```
 
+`bundle exec rake` and `bundle exec rake test` are also supported. The test
+process keeps its activated test bundle but restores Bundler's unbundled child
+environment before loading tests, preserving caller Ruby options such as offline
+guards. Fixture CLIs therefore do not inherit the front door's bundle. Component
+launches that select another `BUNDLE_GEMFILE` also clear `BUNDLE_LOCKFILE`: Bundler
+4 exports both, and carrying the front door's lockfile into a component can rewrite
+it during Ruby startup. Each independently bundled component retains ownership of
+its own Gemfile, lockfile and platform requirements.
+
 The local HTML report is `coverage/index.html`. Conditional integration skips remain
 visible in the test output. Coverage starts in the Minitest process, so Ruby code
 reached only through `Open3` child CLIs (notably catalog ingest and its source driver)
