@@ -34,7 +34,12 @@ class OperatorAcceptanceTest < Minitest::Test
     @wlo = File.join(@tmp, "workload-orchestrator")
     @rpof = File.join(@tmp, "runpod-ollama-fleet")
     @pipeline = File.join(@tmp, "af-data-pipeline")
+    @low = File.join(@tmp, "local-ollama-workers")
+    @afw = File.join(@tmp, "af-workloads")
+    build_component(@low, ["lib/local_ollama_workers/cli.rb"])
+    build_component(@afw, ["test/support/afw_wlo_v0_3_contract.rb"])
     build_component(@wlo, %w[
+      bin/wlo
       test/dynamic_cli_test.rb
       test/dynamic_local_dispatch_test.rb
       test/dw28_late_capacity_integration_test.rb
@@ -67,7 +72,7 @@ class OperatorAcceptanceTest < Minitest::Test
     assert harness.run
     assert_equal AdventureFinderWorkspace::OperatorAcceptance::SCENARIOS.length, runner.calls.length
     assert_includes out.string, "Network/provider/inference access: blocked"
-    assert_includes out.string, "Acceptance summary: 20/20 scenarios passed"
+    assert_includes out.string, "Acceptance summary: 21/21 scenarios passed"
     assert_includes out.string, "Offline proof: fake providers only; inference calls: 0; paid resources: $0"
     runner.calls.each do |call|
       assert_nil call.dig(:env, "RUNPOD_API_KEY")
@@ -77,9 +82,22 @@ class OperatorAcceptanceTest < Minitest::Test
       assert_equal "1", call.dig(:env, "AF_OPERATOR_ACCEPTANCE_OFFLINE")
       assert_includes call.dig(:env, "RUBYOPT"), "offline_network_guard.rb"
       assert_equal @wlo, call.dig(:env, "WLO_REPO_ROOT")
+      assert_equal @low, call.dig(:env, "LOW_REPO_ROOT")
+      assert_equal @afw, call.dig(:env, "AF_AFW_SOURCE_ROOT")
       assert_equal @rpof, call.dig(:env, "RPOF_REPO_ROOT")
       assert_equal @pipeline, call.dig(:env, "AF_IG19B_PIPELINE_SOURCE_ROOT")
     end
+  end
+
+  def test_local_multi_model_requires_real_component_seams_before_execution
+    runner = Runner.new
+    harness = build_harness(runner:)
+    assert harness.run(only: ["local-multi-model"])
+    assert_equal "test/integration/local_ingest_execution_test.rb", runner.calls.first.fetch(:argv).last
+    File.delete(File.join(@low, "lib/local_ollama_workers/cli.rb"))
+    error = assert_raises(AdventureFinderWorkspace::Error) { harness.run(only: ["local-multi-model"]) }
+    assert_includes error.message, "acceptance public seam is missing"
+    assert_equal 1, runner.calls.length
   end
 
   def test_only_selects_named_scenario_and_preserves_component_bundle
@@ -176,7 +194,7 @@ class OperatorAcceptanceTest < Minitest::Test
     refute harness.run
     assert_equal AdventureFinderWorkspace::OperatorAcceptance::SCENARIOS.length, runner.calls.length
     assert_includes err.string, "FAIL rpof-campaign-lifecycle"
-    assert_includes out.string, "Acceptance summary: 19/20 scenarios passed"
+    assert_includes out.string, "Acceptance summary: 20/21 scenarios passed"
   end
 
   def test_operator_lifecycle_uses_rpof_bundle_while_running_from_workspace_repo
@@ -211,6 +229,8 @@ class OperatorAcceptanceTest < Minitest::Test
       workspace_root: @tmp,
       component_roots: {
         "af-data-pipeline" => @pipeline,
+        "local-ollama-workers" => @low,
+        "af-workloads" => @afw,
         "workload-orchestrator" => @wlo,
         "runpod-ollama-fleet" => @rpof
       },

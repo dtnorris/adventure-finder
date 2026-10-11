@@ -362,7 +362,7 @@ module AdventureFinderWorkspace
         "name" => source,
         "command" => bundle,
         "args" => ["exec", File.join(root, "bin", executable), "workers", "--json"],
-        "environment" => environment,
+        "environment" => environment.merge("BUNDLE_LOCKFILE" => nil),
         "workdir" => root
       }
     end
