@@ -7,7 +7,7 @@ require_relative "adventure_finder_workspace"
 
 module AdventureFinderWorkspace
   class OperatorAcceptance
-    Scenario = Struct.new(:name, :description, :repository, :test_file, :bundle_repository, keyword_init: true)
+    Scenario = Struct.new(:name, :description, :repository, :test_file, :bundle_repository, :required_paths, keyword_init: true)
     Result = Struct.new(:scenario, :output, :status, keyword_init: true) do
       def success?
         status.success?
@@ -15,6 +15,17 @@ module AdventureFinderWorkspace
     end
 
     SCENARIOS = [
+      Scenario.new(
+        name: "local-multi-model",
+        description: "IG-15C3 one-worker LOW publication and retained WLO capability transition proof",
+        repository: "adventure-finder",
+        test_file: "test/integration/local_ingest_execution_test.rb",
+        required_paths: {
+          "local-ollama-workers" => "lib/local_ollama_workers/cli.rb",
+          "af-workloads" => "test/support/afw_wlo_v0_3_contract.rb",
+          "workload-orchestrator" => "bin/wlo"
+        }
+      ),
       Scenario.new(
         name: "batch-front-door",
         description: "frozen Batch 39 foreground start/resume with no remanifest or provider mutation",
@@ -218,6 +229,8 @@ module AdventureFinderWorkspace
 
       {
         "adventure-finder" => @repository_root,
+        "local-ollama-workers" => component_root("local-ollama-workers", "LOW_REPO_ROOT"),
+        "af-workloads" => component_root("af-workloads", "AF_AFW_SOURCE_ROOT"),
         "af-data-pipeline" => component_root("af-data-pipeline", "AF_DATA_PIPELINE_ROOT"),
         "workload-orchestrator" => component_root("workload-orchestrator", "WLO_REPO_ROOT"),
         "runpod-ollama-fleet" => component_root("runpod-ollama-fleet", "RPOF_REPO_ROOT")
@@ -232,6 +245,10 @@ module AdventureFinderWorkspace
       raise Error, "offline network guard is missing: #{@network_guard}" unless File.file?(@network_guard)
 
       selected.each do |scenario|
+        (scenario.required_paths || {}).each do |repository, relative|
+          path = File.join(roots.fetch(repository), relative)
+          raise Error, "acceptance public seam is missing: #{path}" unless File.file?(path)
+        end
         root = roots.fetch(scenario.repository)
         raise Error, "#{scenario.repository} checkout is missing: #{root}" unless File.directory?(root)
 
@@ -268,8 +285,11 @@ module AdventureFinderWorkspace
       rubyopt = ["-r#{@network_guard}", inherited_rubyopt].reject(&:empty?).join(" ")
       environment = CREDENTIAL_NAMES.to_h { |name| [name, nil] }.merge(
         "AF_OPERATOR_ACCEPTANCE_OFFLINE" => "1",
+        "BUNDLE_LOCKFILE" => nil,
         "AF_IG19B_PIPELINE_SOURCE_ROOT" => roots.fetch("af-data-pipeline"),
         "WLO_REPO_ROOT" => roots.fetch("workload-orchestrator"),
+        "LOW_REPO_ROOT" => roots.fetch("local-ollama-workers"),
+        "AF_AFW_SOURCE_ROOT" => roots.fetch("af-workloads"),
         "RPOF_REPO_ROOT" => roots.fetch("runpod-ollama-fleet"),
         "RUBYOPT" => rubyopt
       )

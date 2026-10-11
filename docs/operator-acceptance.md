@@ -10,12 +10,34 @@ Run the complete surface or the coherent lifecycle alone:
 
 ```bash
 bin/af-operator-acceptance
+bin/af-operator-acceptance --only local-multi-model
 bin/af-operator-acceptance --only operator-lifecycle
 bin/af-operator-acceptance --only batch-front-door
 bin/af-operator-acceptance --only audited-recovery
 bin/af-operator-acceptance --only ig19b-source-exceptions
 bin/af-operator-acceptance --only ig19b-boundary-exceptions
 ```
+
+## Automatic local multi-model proof
+
+`local-multi-model` exercises the [local execution contract](LOCAL_INGEST_EXECUTION_V0.1.md)
+through the IG-15C1 coordinator, LOW's public CLI with injected observer/client/hardware
+components, and WLO's public CLI and real subprocess executor. Its synthetic frozen
+plan is checked against AFW's producer-side v0.3 conformance fixture. No scoring,
+model-quality, owned-book, or provider payload participates. FIFO payload barriers
+hold attempts until public WLO demand observes them; a nonblocking payload lock
+checks one-worker exclusivity. Runtime observations contain only one resident model
+at a time. LOW alone retains capability evidence and publishes snapshots, including
+legitimately retained capabilities; WLO alone retains dispatch and attempts.
+
+The scenario emits a JSON evidence line binding the operation, plan, sequence,
+consumer, safe transition observations, LOW registry hashes/revisions, and all
+successful attempts. Disposable artifacts are inspected read-only and removed.
+Missing component seams fail harness validation rather than passing via skipped
+tests. Use `--root` for the component workspace or `LOW_REPO_ROOT`, `WLO_REPO_ROOT`,
+and `AF_AFW_SOURCE_ROOT` for exact read-only source checkouts. Existing front-door
+and project-root overrides retain their ordinary meanings. This is executable
+offline evidence for the linked contract, not new execution or retry authority.
 
 ## Coherent lifecycle replay
 
