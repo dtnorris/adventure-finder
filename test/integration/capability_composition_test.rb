@@ -146,7 +146,7 @@ class CapabilityCompositionTest < Minitest::Test
     repo = @repos.fetch("#{provider.upcase}_REPO_ROOT")
     script = File.expand_path("../support/bd04f/#{provider}_probe.rb", __dir__)
     stdout, stderr, status = Open3.capture3(
-      { "BUNDLE_GEMFILE" => File.join(repo, "Gemfile"), "RUBYLIB" => File.join(repo, "lib") },
+      { "BUNDLE_GEMFILE" => File.join(repo, "Gemfile"), "BUNDLE_LOCKFILE" => nil, "RUBYLIB" => File.join(repo, "lib") },
       "bundle", "exec", RbConfig.ruby, "-I#{repo}/lib", script, *flags, *paths, chdir: repo
     )
     assert status.success?, "#{provider} probe failed: #{stderr}\n#{stdout}"

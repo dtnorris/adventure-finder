@@ -84,7 +84,7 @@ class LocalCapacityTest < Minitest::Test
     refute_includes call.fetch(:argv), "--requirement"
     assert_equal [@bundle, "exec", File.join(@low, "bin", "low"), "bootstrap"], call.fetch(:argv).first(4)
     assert_equal "--json", call.fetch(:argv).last
-    assert_equal({ "BUNDLE_GEMFILE" => File.join(@low, "Gemfile") }, call.fetch(:environment))
+    assert_equal({ "BUNDLE_GEMFILE" => File.join(@low, "Gemfile"), "BUNDLE_LOCKFILE" => nil }, call.fetch(:environment))
     assert_equal @low, call.fetch(:chdir)
   end
 

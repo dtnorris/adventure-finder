@@ -18,6 +18,39 @@ if %w[start resume bind-successor-version successor-version-authority prepare-wo
   )
 end
 
+if ARGV.first == "final-promotion"
+  require "optparse"
+  $LOAD_PATH.unshift(ROOT.join("lib").to_s)
+  require "adventure_finder_final_promotion"
+
+  begin
+    ARGV.shift
+    options = {}
+    OptionParser.new do |parser|
+      parser.banner = "Usage: bin/af-catalog final-promotion --inputs INPUTS.json --package PACKAGE.json --approver NAME [options]"
+      parser.on("--inputs PATH") { |value| options[:inputs_path] = value }
+      parser.on("--package PATH") { |value| options[:package_path] = value }
+      parser.on("--approver NAME") { |value| options[:approver] = value }
+      parser.on("--operation-dir PATH") { |value| options[:operation_dir] = value }
+      parser.on("--preview") { options[:preview] = true }
+    end.parse!(ARGV)
+    required = %i[inputs_path package_path approver]
+    missing = required.reject { |key| options[key] }
+    raise OptionParser::MissingArgument, missing.map { |key| "--#{key.to_s.tr('_', '-')}" }.join(", ") unless missing.empty?
+    raise OptionParser::InvalidArgument, "unexpected arguments: #{ARGV.join(' ')}" unless ARGV.empty?
+
+    front_door = AdventureFinderWorkspace::FinalPromotion.new(
+      front_door_root: ENV.fetch("AF_ADVENTURE_FINDER_ROOT", ROOT.to_s),
+      project_root: CODE_ROOT,
+      pipeline_root: ENV["AF_DATA_PIPELINE_ROOT"]
+    )
+    exit front_door.run(**options)
+  rescue AdventureFinderWorkspace::Error, OptionParser::ParseError => e
+    warn "af-catalog: #{e.message}"
+    exit 2
+  end
+end
+
 PDF_CONVERTER_ROOT = Pathname.new(
   ENV.fetch("AF_PDF_CONVERTER_ROOT", CODE_ROOT.join("pdf-to-llm-md-converter").to_s)
 ).expand_path

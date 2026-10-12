@@ -119,7 +119,7 @@ module AdventureFinderWorkspace
     def run_component(command, root)
       result = @runner.capture(
         command, chdir: root,
-        env: { "BUNDLE_GEMFILE" => File.join(root, "Gemfile") }
+        env: { "BUNDLE_GEMFILE" => File.join(root, "Gemfile"), "BUNDLE_LOCKFILE" => nil }
       )
       unless result.status.success?
         detail = result.stderr.to_s.strip

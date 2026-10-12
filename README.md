@@ -297,6 +297,40 @@ authority-bound AFW workload is documented in
 It records an explicit scoring choice, lets pipeline issue staged authority, and lets
 AFW select the qualified production cases without running scoring or adopting a catalog.
 
+### Exact final promotion
+
+`bin/af-catalog final-promotion` is the single operator gate for a pipeline-validated
+IG-18A2 release package. It displays the exact base, current catalog, finalized
+candidate, catalog delta, scoring coverage, separate acceptance authorities,
+exceptions, compatibility result, concurrency classification, and shared-role effect.
+It proceeds when the pipeline says `readiness.ready`; `readiness.full_scoring` remains
+a separate completeness fact, so an independently authorized terminal release with
+gaps is still reviewable.
+
+```bash
+bin/af-catalog final-promotion \
+  --inputs /path/to/final-release-inputs.json \
+  --package /path/to/final-release-package.json \
+  --approver "David Norris"
+```
+
+The optional `--preview` flag reports the owner-bound red-cell preview only after
+rehashing it and does not add another approval step. When an independently validated
+IG-17F result is already part of the package, the review attributes it separately and
+uses the derived candidate. Until a pipeline-owned IG-17F packet producer exists,
+packages with eligible residual gaps report that continuation as unavailable and may
+still proceed under their validated terminal-gap authority.
+
+The front door stores only durable coordination evidence under
+`operations/final-promotions/PACKAGE_ID/`: the pipeline request, pipeline decision,
+software-timestamped AdventureFinder decision reference, and pipeline result. The one
+typed APPROVE or DECLINE decision is bound by the pipeline to the exact package,
+candidate, evidence graph, repository HEAD, manifest, and role snapshots. The pipeline
+revalidates those inputs at the transaction boundary and remains the only workbook and
+`PROJECT_STATE.yml` writer. Promotion and Git persistence remain separate; the command
+prints exact path-scoped commit suggestions and never stages, commits, pushes, or opens
+a pull request.
+
 ### `bin/af-bootstrap`
 
 Clone missing repositories into the workspace root.

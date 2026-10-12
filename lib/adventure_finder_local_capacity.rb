@@ -41,7 +41,7 @@ module AdventureFinderWorkspace
       )
       argv = [find_executable!("bundle", @bundle_executable), "exec", executable, "bootstrap",
               "--capability-request", path, "--json"]
-      @executor.call({ "BUNDLE_GEMFILE" => gemfile }, argv, chdir: low_root)
+      @executor.call({ "BUNDLE_GEMFILE" => gemfile, "BUNDLE_LOCKFILE" => nil }, argv, chdir: low_root)
       0
     end
 

@@ -291,7 +291,8 @@ module AdventureFinderWorkspace
         "LOW_REPO_ROOT" => roots.fetch("local-ollama-workers"),
         "AF_AFW_SOURCE_ROOT" => roots.fetch("af-workloads"),
         "RPOF_REPO_ROOT" => roots.fetch("runpod-ollama-fleet"),
-        "RUBYOPT" => rubyopt
+        "RUBYOPT" => rubyopt,
+        "BUNDLE_LOCKFILE" => nil
       )
       bundle_repository = scenario.bundle_repository ||
                           (scenario.repository unless scenario.repository == "adventure-finder")

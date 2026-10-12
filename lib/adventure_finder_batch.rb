@@ -189,7 +189,7 @@ module AdventureFinderWorkspace
         "--output", context.dig("wlo", "output_root"), "--action", wlo_action, "--json"
       ]
       result = @component_runner.capture(
-        { "BUNDLE_GEMFILE" => File.join(root, "Gemfile") }, argv, chdir: root
+        { "BUNDLE_GEMFILE" => File.join(root, "Gemfile"), "BUNDLE_LOCKFILE" => nil }, argv, chdir: root
       )
       unless result.status.success?
         detail = result.stderr.to_s.strip
@@ -266,7 +266,7 @@ module AdventureFinderWorkspace
         "--output", context.dig("wlo", "output_root"), "--json"
       ]
       result = @component_runner.capture(
-        { "BUNDLE_GEMFILE" => File.join(root, "Gemfile") }, argv, chdir: root
+        { "BUNDLE_GEMFILE" => File.join(root, "Gemfile"), "BUNDLE_LOCKFILE" => nil }, argv, chdir: root
       )
       unless result.status.success?
         detail = result.stderr.to_s.strip
@@ -349,11 +349,11 @@ module AdventureFinderWorkspace
       root, executable, environment =
         if source == "local"
           local_root = context.dig("local_workers", "repository_root")
-          [local_root, "low", { "BUNDLE_GEMFILE" => File.join(local_root, "Gemfile") }]
+          [local_root, "low", { "BUNDLE_GEMFILE" => File.join(local_root, "Gemfile"), "BUNDLE_LOCKFILE" => nil }]
         else
           remote_root = fleet.dig("rpof", "repository_root")
           [remote_root, "rpof", {
-            "BUNDLE_GEMFILE" => File.join(remote_root, "Gemfile"),
+            "BUNDLE_GEMFILE" => File.join(remote_root, "Gemfile"), "BUNDLE_LOCKFILE" => nil,
             "RPOF_STATE_ROOT" => fleet.dig("rpof", "state_root"),
             "RPOF_STATE_REPO_ROOT" => remote_root
           }]
