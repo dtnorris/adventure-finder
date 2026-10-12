@@ -335,11 +335,24 @@ module AdventureFinderWorkspace
       end
       result.fetch("deferred").each do |entry|
         label = entry["adventure_id"] || "no new record"
-        out.puts "Deferred: #{label} — #{entry.fetch('reason')}"
+        out.puts "Deferred: #{label} — #{render_workload_reason(entry.fetch('reason'))}"
+      end
+      result.fetch("refused", []).each do |entry|
+        out.puts "Refused: #{entry.fetch('adventure_id')} — #{render_workload_reason(entry.fetch('reason'))}"
+      end
+      out.puts "Owner decision: #{result.dig('decision', 'code')}"
+      if result["inspection"]
+        out.puts "AFW inspection: #{result.dig('inspection', 'action')} (#{result.dig('inspection', 'reason_code')})"
       end
       out.puts "Execution authorized: no"
       out.puts "Catalog adoption authorized: no"
       out.puts "Next inspection: #{result.fetch('next_action')}" if result["next_action"]
+    end
+
+    def render_workload_reason(reason)
+      return reason unless reason.is_a?(Hash)
+
+      [reason["code"], reason["detail"]].compact.join(": ")
     end
 
     def convert(input, context)

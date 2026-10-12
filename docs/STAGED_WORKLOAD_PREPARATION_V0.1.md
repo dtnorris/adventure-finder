@@ -1,4 +1,4 @@
-# Standard staged-workload preparation v0.1
+# Standard staged-workload preparation v0.1 and v0.2
 
 AdventureFinder records operator scoring intent and coordinates one authorized,
 zero-inference AFW workload. Pipeline remains the only staged-scoring authority;
@@ -38,21 +38,40 @@ bin/af-catalog prepare-workload OPERATION_UUID \
   --historical-project-state RETAINED_PROJECT_STATE.yml
 ```
 
-The command derives a stable workload ID from the operation. It asks pipeline to
-issue exact staged authority, passes only pipeline-allocated Adventure IDs to AFW,
-and omits AFW dimension selection so AFW's current qualified default remains
-authoritative. It freezes the generic 131072-context/full-GPU-residency requirements
-without naming a GPU, worker, provider, endpoint, placement profile, or budget.
+The command derives a stable workload ID from the operation and asks pipeline to
+issue exact staged authority for the complete new-ID allocation. It then consumes
+AFW's public `afw-staged-selection/v0.1` owner result. AFW, not the front door,
+classifies every allocated ID as `selected-qualified`, `legitimately-deferred`, or
+`refused`, and owns conditional Levels, page, blank-score, source-preflight,
+dimension, model, profile, runtime and capability decisions. Only the exact selected
+subset can enter the workload. The front door freezes the generic
+131072-context/full-GPU-residency requirements without naming a GPU, worker,
+provider, endpoint, placement profile, or budget.
 
-Successful output reports the exact workload, case/metric denominator, and every
-selected ID. A zero-record operation reports `NO_RUNNABLE_WORK`. AFW qualification
-refusal lists every authorized ID as deferred and does not claim a prepared workload.
-On restart, a complete existing workload is verified with
-`bin/afw-verify-staged-workload`; it is never deleted or blindly rebuilt.
+The durable `adventurefinder-staged-workload-preparation/v0.2` result retains the
+AFW selection identity, complete reasoned disposition ledger, exact case/metric
+denominator and the final `afw-workload-inspection/v0.1` evidence. A zero allocation
+reports `NO_SUCCESSOR_NEEDED`; a nonempty allocation with no qualified IDs reports
+`ALL_DEFERRED`. Invalid or unsupported evidence reports `REFUSED`, never deferred.
+None of those outcomes claims a runnable workload or completed scoring.
 
-The next safe local action printed after preparation is read-only workload
-verification. WLO execution is a later, explicit operator action and is not started
-by this command.
+Before any build, reuse, deterministic regeneration or refusal of existing workload
+state, the coordinator consumes AFW's read-only inspection action. `fresh-build`
+permits the public selection/compiler flow, `reuse` preserves exact frozen bytes,
+and `regenerate` permits only AFW's existing deterministic generated-build recovery.
+`refuse` preserves partial, conflicting or corrupt evidence without deletion,
+overwrite or workload-identity churn. A second inspection must report verified
+`reuse` before AdventureFinder records `PREPARED`. Existing results remain observed
+evidence with no completion claim and are never removed or regenerated.
+
+The next safe local action printed after preparation is the exact public read-only
+AFW inspection command, including its authority, selection, catalog and capability
+bindings. WLO execution is a later, explicit operator action and is not started by
+this command.
+
+Existing v0.1 `PREPARED` results remain readable by the local-capability planner.
+New preparation writes v0.2 and requires the retained AFW selection and final reuse
+inspection before local planning can proceed.
 
 After successful preparation, derive the deterministic planning-only capability
 inventory and possible one-worker sequence from those exact frozen bytes:

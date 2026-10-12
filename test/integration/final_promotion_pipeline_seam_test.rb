@@ -3,6 +3,7 @@
 require "fileutils"
 require "json"
 require "minitest/autorun"
+require "minitest/mock"
 require "open3"
 require "stringio"
 require "tmpdir"

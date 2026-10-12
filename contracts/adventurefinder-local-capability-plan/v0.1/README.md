@@ -24,6 +24,13 @@ The root contains:
 | `planning_only`, `read_only` | Always `true`. |
 | `readiness_observed`, `execution_authorized`, `provider_authorized`, `catalog_adoption_authorized` | Always `false`. |
 
+The planner accepts retained
+`adventurefinder-staged-workload-preparation/v0.1` results for compatibility. New
+`v0.2` preparation additionally requires the exact AFW staged-selection identity,
+an empty refused ledger, and a final `afw-workload-inspection/v0.1` `reuse`
+decision. Planning never converts an all-deferred, refused or
+`NO_SUCCESSOR_NEEDED` outcome into runnable work.
+
 Each `capabilities` entry contains the exact generic `capability_request`, its
 WLO semantic `capability_fingerprint`, the SHA-256 of its canonical artifact
 bytes, and one or more pool mappings. A pool mapping contains its exact

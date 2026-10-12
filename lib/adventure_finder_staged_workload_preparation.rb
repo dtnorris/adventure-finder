@@ -7,6 +7,8 @@ require "json"
 require "open3"
 require "pathname"
 require "securerandom"
+require "shellwords"
+require "stringio"
 require "yaml"
 require_relative "adventure_finder_ingest_operation"
 require_relative "adventure_finder_ingest_routing"
@@ -14,17 +16,173 @@ require_relative "adventure_finder_staged_scoring_intent"
 require_relative "adventure_finder_successor_version_authorization"
 
 module AdventureFinderWorkspace
+  # Loads and composes AFW's public staged-selection and workload-inspection
+  # contracts. AdventureFinder branches only on AFW's versioned owner results;
+  # qualification, immutable-workload validation and deterministic regeneration
+  # remain AFW responsibilities.
+  class AFWStagedWorkloadCoordinator
+    SELECTION_VERSION = "afw-staged-selection/v0.1"
+    INSPECTION_VERSION = "afw-workload-inspection/v0.1"
+
+    class Failure < Error; end
+
+    def initialize(afw_root:, scorer_root:, pipeline_root:, authority_inputs_path:,
+                   authority_store:, current_project_state_path:, mode: "production", contracts: nil)
+      @afw_root = Pathname(afw_root).expand_path
+      @scorer_root = Pathname(scorer_root).expand_path
+      @pipeline_root = Pathname(pipeline_root).expand_path
+      @authority_inputs_path = Pathname(authority_inputs_path).expand_path
+      @authority_store = Pathname(authority_store).expand_path
+      @current_project_state_path = Pathname(current_project_state_path).expand_path
+      @mode = mode.to_s
+      @contracts = contracts
+      raise ArgumentError, "mode must be production or synthetic" unless %w[production synthetic].include?(@mode)
+    end
+
+    def prepare(operation_id:, workload_id:, catalog_path:)
+      load_contracts!
+      staged = staged_input(operation_id)
+      authority = staged.authority!(catalog_path: catalog_path.to_s)
+      raise Failure, "pipeline returned zero allocation after issuing nonzero authority" unless authority
+
+      selector = contract(:selection).new(root: @afw_root.to_s, scorer_repo: @scorer_root.to_s)
+      selection, selection_path = selector.select!(authority:, catalog_path: catalog_path.to_s)
+      validate_selection_identity!(selection, operation_id, workload_id, authority)
+      result = {"status" => selection.fetch("status"), "selection" => selection,
+                "inspection" => nil, "manifest" => nil, "refusal" => nil}
+      return result unless selection["status"] == "SELECTED"
+
+      staged.use_selection!(path: selection_path, scorer_repo: @scorer_root.to_s)
+      inspection = inspect_workload(staged, selection, catalog_path)
+      result["inspection"] = inspection
+      case inspection.fetch("action")
+      when "fresh-build"
+        prepared = selector.prepare!(
+          staged_scoring: staged, catalog_path: catalog_path.to_s,
+          required_context_length: StagedWorkloadPreparation::REQUIRED_CONTEXT_LENGTH,
+          require_fully_gpu_resident: true, out: StringIO.new
+        )
+        if prepared.fetch("status") == "REFUSED"
+          return result.merge("status" => "REFUSED", "refusal" => prepared)
+        end
+      when "regenerate"
+        compile(staged, selection, catalog_path)
+      when "reuse"
+        # The inspector already replayed the complete producer validation.
+      when "refuse"
+        return result.merge("status" => "REFUSED")
+      else
+        raise Failure, "unsupported AFW inspection action: #{inspection.fetch('action').inspect}"
+      end
+
+      final = inspect_workload(staged, selection, catalog_path)
+      unless final["contract_version"] == INSPECTION_VERSION && final["action"] == "reuse"
+        return result.merge("status" => "REFUSED", "inspection" => final)
+      end
+      result.merge(
+        "status" => "PREPARED", "inspection" => final,
+        "manifest" => @afw_root.join("workloads", workload_id).to_s
+      )
+    rescue Failure
+      raise
+    rescue StandardError => e
+      raise unless contract_error?(e)
+
+      raise Failure, e.message
+    end
+
+    private
+
+    def load_contracts!
+      unless @contracts
+        path = @afw_root.join("lib", "af_workloads.rb")
+        raise Failure, "AFW public library is unavailable: #{path}" unless path.file?
+        require path.to_s
+        required = %i[Error StagedScoringInput StagedSelection FrozenWorkloadValidator WorkloadInspector WorkloadCompiler]
+        missing = required.reject { |name| AFWorkloads.const_defined?(name, false) }
+        raise Failure, "AFW public contracts are incomplete: #{missing.join(', ')}" unless missing.empty?
+        @contracts = {
+          error: AFWorkloads::Error, staged_input: AFWorkloads::StagedScoringInput,
+          selection: AFWorkloads::StagedSelection, validator: AFWorkloads::FrozenWorkloadValidator,
+          inspector: AFWorkloads::WorkloadInspector, compiler: AFWorkloads::WorkloadCompiler
+        }
+      end
+      unless contract(:selection).const_get(:VERSION) == SELECTION_VERSION &&
+             contract(:inspector).const_get(:CONTRACT_VERSION) == INSPECTION_VERSION
+        raise Failure, "AFW staged-selection or workload-inspection contract version changed"
+      end
+    end
+
+    def staged_input(operation_id)
+      contract(:staged_input).new(
+        root: @afw_root.to_s,
+        config: {
+          pipeline_root: @pipeline_root.to_s,
+          inputs_path: @authority_inputs_path.to_s,
+          store_root: @authority_store.to_s,
+          project_state_path: @current_project_state_path.to_s,
+          operation_id:, mode: @mode
+        }
+      )
+    end
+
+    def inspect_workload(staged, selection, catalog_path)
+      validator = contract(:validator).new(
+        root: @afw_root.to_s, workload_id: selection.fetch("workload_id"),
+        catalog_path: catalog_path.to_s, ids: selection.fetch("selected_ids"),
+        scorer_repo: @scorer_root.to_s,
+        required_context_length: StagedWorkloadPreparation::REQUIRED_CONTEXT_LENGTH,
+        require_fully_gpu_resident: true, staged_scoring: staged
+      )
+      contract(:inspector).new(
+        root: @afw_root.to_s, workload_id: selection.fetch("workload_id"), validator:
+      ).inspect
+    end
+
+    def compile(staged, selection, catalog_path)
+      contract(:compiler).new(
+        root: @afw_root.to_s, workload_id: selection.fetch("workload_id"),
+        catalog_path: catalog_path.to_s, ids: selection.fetch("selected_ids"),
+        scorer_repo: @scorer_root.to_s,
+        required_context_length: StagedWorkloadPreparation::REQUIRED_CONTEXT_LENGTH,
+        require_fully_gpu_resident: true, staged_scoring: staged, out: StringIO.new
+      ).build
+    end
+
+    def validate_selection_identity!(selection, operation_id, workload_id, authority)
+      allocation = authority.fetch("allocation")
+      dispositions = selection.fetch("dispositions")
+      valid = selection["schema_version"] == SELECTION_VERSION &&
+              selection["producer"] == "af-workloads" &&
+              %w[SELECTED ALL_DEFERRED REFUSED].include?(selection["status"]) &&
+              selection["authority_id"] == authority.fetch("authority_id") &&
+              selection.dig("operation", "operation_id") == operation_id &&
+              selection["workload_id"] == workload_id &&
+              selection["allocation"] == allocation &&
+              dispositions.map { |row| row["adventure_id"] } == allocation.map { |row| row["adventure_id"] }
+      raise Failure, "AFW selection identity/allocation differs from pipeline authority" unless valid
+    rescue KeyError, TypeError => e
+      raise Failure, "AFW selection is malformed: #{e.message}"
+    end
+
+    def contract(name)
+      @contracts.fetch(name)
+    end
+
+    def contract_error?(error)
+      @contracts && @contracts[:error] && error.is_a?(@contracts.fetch(:error))
+    end
+  end
+
   # Coordinates pipeline authority issuance and one zero-inference AFW build.
   # It owns neither qualification policy nor execution. All model, dimension,
   # profile and runtime selection stays inside AFW's public compiler.
   class StagedWorkloadPreparation
-    RESULT_VERSION = "adventurefinder-staged-workload-preparation/v0.1"
+    RESULT_VERSION = "adventurefinder-staged-workload-preparation/v0.2"
     LOCATOR_VERSION = "af-staged-scoring-evidence-locators/v0.1"
     AUTHORITY_PROJECTION_VERSION = "af-staged-scoring-authority-projection/v0.1"
     AUTHORITY_VERSION = "af-staged-scoring-authority/v0.1"
     PLAN_VERSION = "wlo-execution-plan/v0.3"
-    SNAPSHOT_VERSION = "afw-workload/v0.1"
-    STAGED_DOCUMENT_VERSION = "afw-staged-scoring-input/v0.1"
     REQUIRED_CONTEXT_LENGTH = 131_072
     AUTHORITY_KEYS = %w[
       schema_version issuer mode operation intent permissions base_amc staged_amc
@@ -56,7 +214,8 @@ module AdventureFinderWorkspace
 
     def initialize(front_door_root:, project_root:, pipeline_root:, afw_root:, scorer_root:,
                    source_root:, catalog_root:, operation_store:, intent_store:,
-                   authorization_store:, routing:, runner: CommandRunner.new)
+                   authorization_store:, routing:, runner: CommandRunner.new,
+                   afw_coordinator: nil)
       @front_door_root = Pathname(front_door_root).expand_path
       @project_root = Pathname(project_root).expand_path
       @pipeline_root = Pathname(pipeline_root).expand_path
@@ -69,6 +228,7 @@ module AdventureFinderWorkspace
       @authorization_store = authorization_store
       @routing = routing
       @runner = runner
+      @afw_coordinator = afw_coordinator
     end
 
     def prepare(operation_id:, freeze_path:, approval_path:, bundle_dir:,
@@ -97,19 +257,21 @@ module AdventureFinderWorkspace
       staged_catalog = catalog_root.join(authority.dig("staged_amc", "filename"))
       validate_staged_catalog!(staged_catalog, authority.fetch("staged_amc"))
 
-      workload_id = intent.fetch("workload_id")
-      manifest = afw_root.join("workloads", workload_id)
-      if manifest.directory?
-        run_afw_verify!(workload_id)
-      else
-        run_afw_build!(operation_id, workload_id, staged_catalog, ids, paths.fetch(:current_project_state_path))
-      end
-      result = inspect_workload!(operation_id, intent, authority, manifest, ids)
+      owner = (@afw_coordinator || default_afw_coordinator(operation_id, paths))
+      owner_result = owner.prepare(
+        operation_id:, workload_id: intent.fetch("workload_id"), catalog_path: staged_catalog
+      )
+      result = compose_result(
+        operation_id, intent, authority, owner_result,
+        current_state_path: paths.fetch(:current_project_state_path)
+      )
       persist_result!(operation_id, result)
       result
     rescue IngestOperationStore::Failure, StagedScoringIntentStore::Failure,
            SuccessorVersionAuthorizationStore::Failure => e
       fail_with(e.code, e.message.sub(/\A[^:]+: /, ""))
+    rescue AFWStagedWorkloadCoordinator::Failure => e
+      fail_with("AFW_PREPARATION_REFUSED", e.message)
     rescue Psych::Exception, JSON::ParserError, CSV::MalformedCSVError, KeyError, TypeError => e
       fail_with("INVALID_PREPARATION_OUTPUT", e.message)
     end
@@ -240,130 +402,128 @@ module AdventureFinderWorkspace
       authority
     end
 
-    def run_afw_build!(operation_id, workload_id, catalog, ids, current_state_path)
-      executable = afw_root.join("bin", "afw-build-workload")
-      required_executable(executable, "AFW workload compiler")
-      argv = [
-        executable.to_s,
-        "--workload", workload_id,
-        "--catalog", catalog.to_s,
-        "--ids", ids.join(","),
-        "--scorer-repo", scorer_root.to_s,
-        "--required-context-length", REQUIRED_CONTEXT_LENGTH.to_s,
-        "--require-fully-gpu-resident",
-        "--staged-authority-inputs", preparation_dir(operation_id).join("authority-inputs.json").to_s,
-        "--staged-authority-store", authority_root.to_s,
-        "--staged-project-state", current_state_path.to_s,
-        "--staged-operation", operation_id,
-        "--staged-pipeline-root", pipeline_root.to_s
-      ]
-      response = runner.capture(child_environment, *argv, chdir: afw_root.to_s)
-      unless response.status.success?
-        detail = [response.stderr, response.stdout].map(&:to_s).reject(&:empty?).join(" ").strip
-        disposition = ids.map { |id| "#{id}=deferred" }.join(", ")
-        fail_with("AFW_PREPARATION_REFUSED", "#{disposition}; AFW qualification refused: #{detail}")
-      end
-    end
-
-    def run_afw_verify!(workload_id)
-      executable = afw_root.join("bin", "afw-verify-staged-workload")
-      required_executable(executable, "AFW staged-workload verifier")
-      response = runner.capture(
-        child_environment, executable.to_s, "--workload", workload_id, chdir: afw_root.to_s
+    def default_afw_coordinator(operation_id, paths)
+      AFWStagedWorkloadCoordinator.new(
+        afw_root:, scorer_root:, pipeline_root:,
+        authority_inputs_path: preparation_dir(operation_id).join("authority-inputs.json"),
+        authority_store: authority_root,
+        current_project_state_path: paths.fetch(:current_project_state_path)
       )
-      unless response.status.success?
-        detail = [response.stderr, response.stdout].map(&:to_s).reject(&:empty?).join(" ").strip
-        fail_with("WORKLOAD_REPAIR_REQUIRED", detail)
-      end
     end
 
-    def inspect_workload!(operation_id, intent, authority, manifest, intended_ids)
-      required_directory(manifest, "AFW workload manifest")
-      plan_path = required_file(manifest.join("execution-plan.json"), "AFW execution plan")
-      snapshot_path = required_file(manifest.join("snapshot.yml"), "AFW snapshot")
-      index_path = required_file(manifest.join("case_index.csv"), "AFW case index")
-      staged_path = required_file(manifest.join("staged-scoring.json"), "AFW staged authority binding")
-      plan = read_json(plan_path)
-      snapshot = YAML.safe_load_file(snapshot_path, aliases: false)
-      staged = read_json(staged_path)
-      rows = CSV.read(index_path, headers: true).map(&:to_h)
-
-      unless plan["contract_version"] == PLAN_VERSION && plan["plan_id"] == intent.fetch("workload_id")
-        fail_with("INVALID_PREPARATION_OUTPUT", "AFW plan is not provider-neutral v0.3 for this workload")
+    def compose_result(operation_id, intent, authority, owner_result, current_state_path:)
+      selection = owner_result.fetch("selection")
+      dispositions = owner_result.dig("refusal", "dispositions") || selection.fetch("dispositions")
+      selected = disposition_rows(dispositions, "selected-qualified")
+      deferred = disposition_rows(dispositions, "legitimately-deferred")
+      refused = disposition_rows(dispositions, "refused")
+      plan = nil
+      rows = []
+      if owner_result["status"] == "PREPARED"
+        manifest = required_directory(owner_result.fetch("manifest"), "AFW workload manifest")
+        plan_path = required_file(manifest.join("execution-plan.json"), "AFW execution plan")
+        index_path = required_file(manifest.join("case_index.csv"), "AFW case index")
+        plan_document = read_json(plan_path)
+        rows = CSV.read(index_path, headers: true).map(&:to_h)
+        selected_ids = selection.fetch("selected_ids")
+        unless plan_document["contract_version"] == PLAN_VERSION &&
+               plan_document["plan_id"] == intent.fetch("workload_id") &&
+               rows.map { |row| row.fetch("case_id") } == plan_document.fetch("jobs").map { |job| job.fetch("job_id") } &&
+               (rows.map { |row| row.fetch("adventure_id") }.uniq - selected_ids).empty? &&
+               selected_ids.all? { |id| rows.any? { |row| row.fetch("adventure_id") == id } }
+          fail_with("INVALID_PREPARATION_OUTPUT", "AFW verified result and exact case denominator differ")
+        end
+        selected.each do |entry|
+          entry["case_count"] = rows.count { |row| row.fetch("adventure_id") == entry.fetch("adventure_id") }
+        end
+        plan = {"path" => plan_path.to_s, "sha256" => Digest::SHA256.file(plan_path).hexdigest}
       end
-      validate_capabilities!(plan)
-      plan_sha = Digest::SHA256.file(plan_path).hexdigest
-      unless snapshot.is_a?(Hash) && snapshot["contract_version"] == SNAPSHOT_VERSION &&
-             snapshot["workload_id"] == intent.fetch("workload_id") &&
-             snapshot["execution_plan_sha256"] == plan_sha &&
-             snapshot["adventure_order"] == intended_ids &&
-             snapshot["case_count"] == rows.length && rows.length == plan.fetch("jobs").length
-        fail_with("INVALID_PREPARATION_OUTPUT", "AFW snapshot, plan and case index do not reconcile")
-      end
-      row_ids = rows.map { |row| row.fetch("adventure_id") }
-      unless (row_ids - intended_ids).empty? && intended_ids.all? { |id| row_ids.include?(id) }
-        fail_with("INVALID_PREPARATION_OUTPUT", "AFW case coverage differs from intended new Adventure IDs")
-      end
-      job_ids = plan.fetch("jobs").map { |job| job.fetch("job_id") }
-      fail_with("INVALID_PREPARATION_OUTPUT", "AFW plan jobs differ from case index") unless
-        job_ids == rows.map { |row| row.fetch("case_id") } && job_ids.uniq == job_ids
-      binding = staged.fetch("binding")
-      unless staged["schema_version"] == STAGED_DOCUMENT_VERSION &&
-             binding["authority_id"] == authority.fetch("authority_id") &&
-             binding["operation_id"] == operation_id &&
-             binding["workload_id"] == intent.fetch("workload_id") &&
-             binding["intended_ids"] == intended_ids
-        fail_with("INVALID_PREPARATION_OUTPUT", "AFW staged authority binding differs")
-      end
+      status = owner_result.fetch("status")
       {
         "contract_version" => RESULT_VERSION,
-        "status" => "PREPARED",
+        "status" => status,
         "operation_id" => operation_id,
         "intent_id" => intent.fetch("intent_id"),
         "authority_id" => authority.fetch("authority_id"),
         "workload_id" => intent.fetch("workload_id"),
-        "plan" => {"path" => plan_path.to_s, "sha256" => plan_sha},
+        "selection_contract_version" => selection.fetch("schema_version"),
+        "selection_id" => selection.fetch("selection_id"),
+        "decision" => owner_decision(owner_result),
+        "inspection" => owner_result["inspection"],
+        "plan" => plan,
         "qualified_cases" => rows.length,
         "metric_denominator" => rows.length,
-        "selected" => intended_ids.map do |id|
-          {"adventure_id" => id, "case_count" => row_ids.count(id), "evidence" => "AFW snapshot and case index"}
-        end,
-        "deferred" => [],
+        "selected" => selected,
+        "deferred" => deferred,
+        "refused" => refused,
         "execution_authorized" => false,
         "catalog_adoption_authorized" => false,
-        "next_action" => "#{afw_root.join('bin', 'afw-verify-staged-workload')} --workload #{intent.fetch('workload_id')}"
+        "next_action" => status == "PREPARED" ?
+          inspection_command(operation_id, intent, selection, authority, current_state_path) : nil
       }
+    rescue KeyError, TypeError, CSV::MalformedCSVError => e
+      fail_with("INVALID_PREPARATION_OUTPUT", e.message)
     end
 
-    def validate_capabilities!(plan)
-      pools = plan["pools"]
-      unless pools.is_a?(Array) && !pools.empty?
-        fail_with("CAPABILITY_POLICY_MISMATCH", "AFW plan has no logical pools")
+    def disposition_rows(dispositions, disposition)
+      dispositions.filter_map do |row|
+        next unless row["disposition"] == disposition
+
+        row.slice("adventure_id", "reason", "evidence")
       end
-      pools.each do |pool|
-        ollama = pool.dig("requirements", "ollama")
-        unless ollama.is_a?(Hash) && ollama["required_context_length"] == REQUIRED_CONTEXT_LENGTH &&
-               ollama["require_fully_gpu_resident"] == true && !ollama.key?("required_gpu_id") &&
-               !pool.key?("worker_names") && !pool.key?("max_concurrency")
-          fail_with("CAPABILITY_POLICY_MISMATCH", "AFW plan changed the frozen production capability policy")
-        end
-      end
+    end
+
+    def owner_decision(owner_result)
+      inspection = owner_result["inspection"]
+      refusal = owner_result["refusal"]
+      status_code = {
+        "ALL_DEFERRED" => "AFW_ALL_DEFERRED",
+        "REFUSED" => "AFW_SELECTION_REFUSED"
+      }[owner_result.fetch("status")]
+      {
+        "code" => refusal&.dig("reason", "code") || status_code ||
+          inspection&.fetch("reason_code", nil) || "AFW_PREPARED",
+        "detail" => refusal&.dig("reason", "detail") || inspection&.fetch("detail", nil)
+      }.compact
+    end
+
+    def inspection_command(operation_id, intent, selection, authority, current_state_path)
+      argv = [
+        afw_root.join("bin", "afw-inspect-workload"), "--root", afw_root,
+        "--workload", intent.fetch("workload_id"),
+        "--catalog", catalog_root.join(authority.dig("staged_amc", "filename")),
+        "--ids", selection.fetch("selected_ids").join(","),
+        "--scorer-repo", scorer_root,
+        "--required-context-length", REQUIRED_CONTEXT_LENGTH,
+        "--require-fully-gpu-resident",
+        "--staged-authority-inputs", preparation_dir(operation_id).join("authority-inputs.json"),
+        "--staged-authority-store", authority_root,
+        "--staged-project-state", current_state_path,
+        "--staged-operation", operation_id,
+        "--staged-selection", afw_root.join("workloads", ".selections", intent.fetch("workload_id"), "selection.json"),
+        "--staged-pipeline-root", pipeline_root
+      ]
+      Shellwords.join(argv.map(&:to_s))
     end
 
     def zero_result(operation_id, intent, projection)
       {
         "contract_version" => RESULT_VERSION,
-        "status" => "NO_RUNNABLE_WORK",
+        "status" => "NO_SUCCESSOR_NEEDED",
         "operation_id" => operation_id,
         "intent_id" => intent.fetch("intent_id"),
         "authority_id" => nil,
         "workload_id" => intent.fetch("workload_id"),
+        "selection_contract_version" => nil,
+        "selection_id" => nil,
+        "decision" => {"code" => "NO_SUCCESSOR_NEEDED", "evidence" => projection.fetch("observation")},
+        "inspection" => nil,
         "plan" => nil,
         "qualified_cases" => 0,
         "metric_denominator" => 0,
         "selected" => [],
-        "deferred" => [{"adventure_id" => nil, "reason" => "approved boundary freeze contains no new records",
-                        "evidence" => projection.fetch("observation")}],
+        "deferred" => [],
+        "refused" => [],
         "execution_authorized" => false,
         "catalog_adoption_authorized" => false,
         "next_action" => nil

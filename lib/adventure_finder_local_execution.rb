@@ -605,7 +605,8 @@ module AdventureFinderWorkspace
         front_door_root.join("output", "staged-workload-preparations", "v0.1", operation_id, "result.json"),
         "staged workload preparation"
       )
-      "selected=#{document.fetch('selected').length} deferred=#{document.fetch('deferred').length} cases=#{document.fetch('qualified_cases')}"
+      "selected=#{document.fetch('selected').length} deferred=#{document.fetch('deferred').length} " \
+        "refused=#{document.fetch('refused', []).length} cases=#{document.fetch('qualified_cases')}"
     end
 
     def install_forwarding_handlers(handle)

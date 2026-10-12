@@ -121,6 +121,30 @@ class LocalCapabilityPlanTest < Minitest::Test
     assert_equal planner.call(operation_id: ID), JSON.parse(out.string)
   end
 
+  def test_v02_preparation_requires_final_afw_reuse_and_empty_refused_ledger
+    result = JSON.parse(File.binread(@result_path))
+    result.merge!(
+      "contract_version" => "adventurefinder-staged-workload-preparation/v0.2",
+      "selection_contract_version" => "afw-staged-selection/v0.1",
+      "selection_id" => "c" * 64,
+      "decision" => {"code" => "VERIFIED_REUSE"},
+      "inspection" => {
+        "contract_version" => "afw-workload-inspection/v0.1", "workload_id" => WORKLOAD,
+        "action" => "reuse", "reason_code" => "VERIFIED_REUSE", "observed" => {}
+      },
+      "refused" => []
+    )
+    File.write(@result_path, JSON.generate(result))
+    assert_equal WORKLOAD, planner.call(operation_id: ID).dig("workload", "workload_id")
+
+    result["inspection"]["action"] = "refuse"
+    File.write(@result_path, JSON.generate(result))
+    error = assert_raises(AdventureFinderWorkspace::LocalCapabilityPlan::Failure) do
+      planner.call(operation_id: ID)
+    end
+    assert_equal "INVALID_PREPARATION_RESULT", error.code
+  end
+
   def test_changed_plan_or_operation_binding_fails_closed
     File.open(@plan_path, "ab") { |file| file.write(" ") }
     error = assert_raises(AdventureFinderWorkspace::LocalCapabilityPlan::Failure) do

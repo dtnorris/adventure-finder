@@ -17,7 +17,7 @@ class StagedWorkloadPreparationTest < Minitest::Test
   Response = Data.define(:stdout, :stderr, :status)
 
   class Runner
-    attr_reader :calls
+    attr_reader :calls, :authority, :afw_root, :ids, :write_outputs, :build_success
 
     def initialize(authority:, afw_root:, ids:, write_outputs: true, capability_context: 131_072,
                    build_success: true)
@@ -50,9 +50,10 @@ class StagedWorkloadPreparationTest < Minitest::Test
 
     def write_workload(argv)
       workload = argv.fetch(argv.index("--workload") + 1)
+      ids = argv.include?("--ids") ? argv.fetch(argv.index("--ids") + 1).split(",") : @ids
       manifest = File.join(@afw_root, "workloads", workload)
       FileUtils.mkdir_p(manifest)
-      jobs = @ids.flat_map do |id|
+      jobs = ids.flat_map do |id|
         %w[combat social].map do |metric|
           {"job_id" => "#{workload}-#{id.downcase}-#{metric}", "pool_id" => "qwen", "group_id" => id,
            "argv" => ["bin/afw-score-job", "fixture"], "env" => {}, "depends_on_job_ids" => []}
@@ -79,20 +80,67 @@ class StagedWorkloadPreparationTest < Minitest::Test
       snapshot = {
         "contract_version" => "afw-workload/v0.1", "workload_id" => workload,
         "execution_plan_sha256" => Digest::SHA256.file(plan_path).hexdigest,
-        "adventure_order" => @ids, "case_count" => jobs.length,
+        "adventure_order" => ids, "case_count" => jobs.length,
         "selected_dimensions" => ["Combat Emphasis", "Social Interaction Emphasis"]
       }
       File.write(File.join(manifest, "snapshot.yml"), YAML.dump(snapshot))
       authority = @authority.fetch("authority")
       binding = {
         "authority_id" => authority.fetch("authority_id"), "operation_id" => ID,
-        "workload_id" => workload, "intended_ids" => @ids,
+        "workload_id" => workload, "intended_ids" => ids,
         "schema_version" => "af-staged-scoring-workload-binding/v0.1",
         "staged_amc" => authority.fetch("staged_amc"), "artifacts" => {}
       }
       File.write(File.join(manifest, "staged-scoring.json"), JSON.generate(
         "schema_version" => "afw-staged-scoring-input/v0.1", "validator" => {}, "binding" => binding
       ))
+    end
+  end
+
+  class Owner
+    attr_reader :calls
+
+    def initialize(runner:, status: "PREPARED", dispositions: nil, inspection_action: "reuse",
+                   inspection_reason: "VERIFIED_REUSE")
+      @runner = runner
+      @status = status
+      @dispositions = dispositions
+      @inspection_action = inspection_action
+      @inspection_reason = inspection_reason
+      @calls = []
+    end
+
+    def prepare(operation_id:, workload_id:, catalog_path:)
+      @calls << {operation_id:, workload_id:, catalog_path: catalog_path.to_s}
+      authority = @runner.authority.fetch("authority")
+      dispositions = @dispositions || @runner.ids.map do |id|
+        {"adventure_id" => id, "disposition" => "selected-qualified",
+         "reason" => {"code" => "AFW_QUALIFIED_DEFAULT"},
+         "evidence" => {"page_count" => 10, "needs_levels" => false}}
+      end
+      selected = dispositions.select { |row| row["disposition"] == "selected-qualified" }
+                             .map { |row| row.fetch("adventure_id") }
+      selection = {
+        "schema_version" => "afw-staged-selection/v0.1", "producer" => "af-workloads",
+        "status" => @status == "ALL_DEFERRED" ? "ALL_DEFERRED" : (@status == "REFUSED" ? "REFUSED" : "SELECTED"),
+        "authority_id" => authority.fetch("authority_id"), "operation" => authority.fetch("operation"),
+        "workload_id" => workload_id, "allocation" => authority.fetch("allocation"),
+        "selected_ids" => selected, "dispositions" => dispositions, "selection_id" => "c" * 64
+      }
+      inspection = {
+        "contract_version" => "afw-workload-inspection/v0.1", "workload_id" => workload_id,
+        "action" => @inspection_action, "reason_code" => @inspection_reason, "observed" => {}
+      }
+      manifest = nil
+      if @status == "PREPARED"
+        unless File.directory?(File.join(@runner.afw_root, "workloads", workload_id))
+          @runner.capture({}, File.join(@runner.afw_root, "bin/afw-build-workload"),
+                          "--workload", workload_id, "--ids", selected.join(","), chdir: @runner.afw_root)
+        end
+        manifest = File.join(@runner.afw_root, "workloads", workload_id)
+      end
+      {"status" => @status, "selection" => selection, "inspection" => inspection,
+       "manifest" => manifest, "refusal" => nil}
     end
   end
 
@@ -144,7 +192,7 @@ class StagedWorkloadPreparationTest < Minitest::Test
     FileUtils.remove_entry(@dir)
   end
 
-  def test_multiple_new_ids_prepare_once_and_restart_uses_public_verifier
+  def test_multiple_new_ids_prepare_once_and_restart_retains_owner_inspection
     ids = %w[ADV-0003 ADV-0004]
     projection = authority_projection(ids)
     runner = Runner.new(authority: projection, afw_root: @afw, ids:)
@@ -160,16 +208,12 @@ class StagedWorkloadPreparationTest < Minitest::Test
     assert_equal 4, first.fetch("qualified_cases")
     assert_equal 4, first.fetch("metric_denominator")
     assert_empty first.fetch("deferred")
+    assert_empty first.fetch("refused")
+    assert_equal "afw-staged-selection/v0.1", first.fetch("selection_contract_version")
+    assert_equal "reuse", first.dig("inspection", "action")
     assert_equal 1, runner.calls.count { |call| File.basename(call[:argv].first) == "afw-build-workload" }
-    assert_equal 1, runner.calls.count { |call| File.basename(call[:argv].first) == "afw-verify-staged-workload" }
-
-    build = runner.calls.find { |call| File.basename(call[:argv].first) == "afw-build-workload" }.fetch(:argv)
-    assert_includes build, "--required-context-length"
-    assert_includes build, "131072"
-    assert_includes build, "--require-fully-gpu-resident"
-    refute_includes build, "--dimension"
-    refute_includes build, "--worker"
-    refute_includes build, "--required-gpu-id"
+    assert_includes first.fetch("next_action"), "afw-inspect-workload"
+    assert_includes first.fetch("next_action"), "--staged-selection"
   end
 
   def test_no_new_records_returns_explicit_no_work_without_afw
@@ -182,13 +226,58 @@ class StagedWorkloadPreparationTest < Minitest::Test
     runner = Runner.new(authority: zero, afw_root: @afw, ids: [])
     result = prepare(service(runner))
 
-    assert_equal "NO_RUNNABLE_WORK", result.fetch("status")
+    assert_equal "NO_SUCCESSOR_NEEDED", result.fetch("status")
     assert_empty result.fetch("selected")
-    assert_equal 1, result.fetch("deferred").length
+    assert_empty result.fetch("deferred")
+    assert_empty result.fetch("refused")
+    assert_equal "NO_SUCCESSOR_NEEDED", result.dig("decision", "code")
     refute runner.calls.any? { |call| File.basename(call[:argv].first).start_with?("afw-") }
   end
 
-  def test_zero_exit_missing_output_and_capability_drift_fail_closed
+  def test_mixed_selection_retains_exact_owner_reasons_and_only_selected_cases
+    ids = %w[ADV-0003 ADV-0004]
+    projection = authority_projection(ids)
+    runner = Runner.new(authority: projection, afw_root: @afw, ids:)
+    dispositions = [
+      {"adventure_id" => "ADV-0003", "disposition" => "selected-qualified",
+       "reason" => {"code" => "AFW_QUALIFIED_DEFAULT"},
+       "evidence" => {"page_count" => 99, "needs_levels" => true}},
+      {"adventure_id" => "ADV-0004", "disposition" => "legitimately-deferred",
+       "reason" => {"code" => "OUTSIDE_QUALIFIED_PAGE_ENVELOPE", "limit_exclusive" => 100},
+       "evidence" => {"page_count" => 100, "needs_levels" => false}}
+    ]
+
+    result = prepare(service(runner, owner: Owner.new(runner:, dispositions:)))
+
+    assert_equal "PREPARED", result.fetch("status")
+    assert_equal ["ADV-0003"], result.fetch("selected").map { |row| row.fetch("adventure_id") }
+    assert_equal ["ADV-0004"], result.fetch("deferred").map { |row| row.fetch("adventure_id") }
+    assert_equal 100, result.dig("deferred", 0, "evidence", "page_count")
+    assert_equal "OUTSIDE_QUALIFIED_PAGE_ENVELOPE", result.dig("deferred", 0, "reason", "code")
+    assert_equal 2, result.fetch("qualified_cases")
+  end
+
+  def test_nonempty_all_deferred_is_not_zero_allocation_or_prepared
+    ids = ["ADV-0003"]
+    projection = authority_projection(ids)
+    runner = Runner.new(authority: projection, afw_root: @afw, ids:)
+    dispositions = [{
+      "adventure_id" => "ADV-0003", "disposition" => "legitimately-deferred",
+      "reason" => {"code" => "OUTSIDE_QUALIFIED_PAGE_ENVELOPE", "limit_exclusive" => 100},
+      "evidence" => {"page_count" => 100, "needs_levels" => false}
+    }]
+
+    result = prepare(service(runner, owner: Owner.new(runner:, status: "ALL_DEFERRED", dispositions:)))
+
+    assert_equal "ALL_DEFERRED", result.fetch("status")
+    assert_equal "AFW_ALL_DEFERRED", result.dig("decision", "code")
+    assert_equal ["ADV-0003"], result.fetch("deferred").map { |row| row.fetch("adventure_id") }
+    assert_nil result.fetch("plan")
+    assert_nil result.fetch("next_action")
+    refute File.directory?(File.join(@afw, "workloads", "ingest-11111111-1111-4111-8111-111111111111"))
+  end
+
+  def test_missing_output_and_owner_capability_refusal_fail_closed
     ids = ["ADV-0003"]
     projection = authority_projection(ids)
     missing = Runner.new(authority: projection, afw_root: @afw, ids:, write_outputs: false)
@@ -199,26 +288,31 @@ class StagedWorkloadPreparationTest < Minitest::Test
 
     FileUtils.remove_entry(File.join(@front, "output", "staged-workload-preparations"))
     drift = Runner.new(authority: projection, afw_root: @afw, ids:, capability_context: 262_144)
-    error = assert_raises(AdventureFinderWorkspace::StagedWorkloadPreparation::Failure) do
-      prepare(service(drift))
-    end
-    assert_equal "CAPABILITY_POLICY_MISMATCH", error.code
+    owner = Owner.new(runner: drift, status: "REFUSED", inspection_action: "refuse",
+                      inspection_reason: "VERIFICATION_FAILED")
+    result = prepare(service(drift, owner:))
+    assert_equal "REFUSED", result.fetch("status")
+    assert_equal "refuse", result.dig("inspection", "action")
+    assert_nil result.fetch("plan")
   end
 
-  def test_afw_refusal_reports_every_authorized_id_as_deferred
+  def test_afw_refusal_retains_complete_refused_ledger
     ids = %w[ADV-0003 ADV-0004]
     runner = Runner.new(
       authority: authority_projection(ids), afw_root: @afw, ids:, build_success: false
     )
 
-    error = assert_raises(AdventureFinderWorkspace::StagedWorkloadPreparation::Failure) do
-      prepare(service(runner))
+    dispositions = ids.map do |id|
+      {"adventure_id" => id, "disposition" => "refused",
+       "reason" => {"code" => "INVALID_OR_UNSUPPORTED_RECORD", "detail" => "invalid fixture"},
+       "evidence" => {"allocation_sha256" => "d" * 64}}
     end
+    result = prepare(service(runner, owner: Owner.new(runner:, status: "REFUSED", dispositions:)))
 
-    assert_equal "AFW_PREPARATION_REFUSED", error.code
-    ids.each { |id| assert_includes error.message, "#{id}=deferred" }
-    assert_includes error.message, "Page Count is outside the production envelope"
-    refute File.exist?(File.join(@front, "output", "staged-workload-preparations", "v0.1", ID, "result.json"))
+    assert_equal "REFUSED", result.fetch("status")
+    assert_equal ids, result.fetch("refused").map { |entry| entry.fetch("adventure_id") }
+    assert_empty result.fetch("deferred")
+    assert_nil result.fetch("plan")
   end
 
   def test_incompatible_pipeline_authority_stops_before_afw
@@ -238,12 +332,12 @@ class StagedWorkloadPreparationTest < Minitest::Test
 
   private
 
-  def service(runner)
+  def service(runner, owner: Owner.new(runner:))
     AdventureFinderWorkspace::StagedWorkloadPreparation.new(
       front_door_root: @front, project_root: @components, pipeline_root: @pipeline,
       afw_root: @afw, scorer_root: @scorer, source_root: @source,
       catalog_root: @catalog_root, operation_store: @operations, intent_store: @intents,
-      authorization_store: @authorizations, routing: @routing, runner:
+      authorization_store: @authorizations, routing: @routing, runner:, afw_coordinator: owner
     )
   end
 
@@ -350,5 +444,217 @@ class StagedWorkloadPreparationTest < Minitest::Test
   def executable(path)
     write(path, "#!/bin/sh\nexit 0\n")
     FileUtils.chmod(0o755, path)
+  end
+end
+
+class AFWStagedWorkloadCoordinatorTest < Minitest::Test
+  ID = "11111111-1111-4111-8111-111111111111"
+  WORKLOAD = "synthetic-operation-1"
+
+  class OwnerError < StandardError; end
+
+  class StagedInput
+    class << self
+      attr_accessor :authority
+    end
+
+    def initialize(root:, config:)
+      @root = root
+      @config = config
+    end
+
+    def authority!(catalog_path:)
+      self.class.authority
+    end
+
+    def use_selection!(path:, scorer_repo:)
+      @selection = [path, scorer_repo]
+      self
+    end
+  end
+
+  class Selection
+    VERSION = "afw-staged-selection/v0.1"
+    class << self
+      attr_accessor :document, :prepared
+    end
+
+    def initialize(root:, scorer_repo:)
+      @root = root
+      @scorer_repo = scorer_repo
+    end
+
+    def select!(authority:, catalog_path:)
+      [self.class.document, File.join(@root, "selection.json")]
+    end
+
+    def prepare!(**_options)
+      self.class.prepared || {"status" => "PREPARED"}
+    end
+  end
+
+  class Validator
+    def initialize(**_options); end
+  end
+
+  class Inspector
+    CONTRACT_VERSION = "afw-workload-inspection/v0.1"
+    class << self
+      attr_accessor :actions
+    end
+
+    def initialize(**_options); end
+
+    def inspect
+      action = self.class.actions.shift
+      {"contract_version" => CONTRACT_VERSION, "workload_id" => WORKLOAD,
+       "action" => action, "reason_code" => "FIXTURE_#{action.upcase.tr('-', '_')}",
+       "observed" => {}}
+    end
+  end
+
+  class Compiler
+    class << self
+      attr_accessor :builds, :failure
+    end
+
+    def initialize(**_options); end
+
+    def build
+      raise self.class.failure if self.class.failure
+      self.class.builds += 1
+    end
+  end
+
+  def setup
+    @root = Dir.mktmpdir("ig14e-owner-composition")
+    @afw = File.join(@root, "afw")
+    @scorer = File.join(@root, "scorer")
+    @pipeline = File.join(@root, "pipeline")
+    [@afw, @scorer, @pipeline].each { |path| FileUtils.mkdir_p(path) }
+    StagedInput.authority = authority
+    Selection.document = selection
+    Selection.prepared = nil
+    Inspector.actions = []
+    Compiler.builds = 0
+    Compiler.failure = nil
+  end
+
+  def teardown
+    FileUtils.remove_entry(@root)
+  end
+
+  def test_fresh_build_and_regeneration_require_final_reuse
+    Inspector.actions = %w[fresh-build reuse]
+    fresh = coordinator.prepare(operation_id: ID, workload_id: WORKLOAD, catalog_path: "catalog.xlsx")
+    assert_equal "PREPARED", fresh.fetch("status")
+    assert_equal "reuse", fresh.dig("inspection", "action")
+    assert_equal 0, Compiler.builds
+
+    Inspector.actions = %w[regenerate reuse]
+    regenerated = coordinator.prepare(operation_id: ID, workload_id: WORKLOAD, catalog_path: "catalog.xlsx")
+    assert_equal "PREPARED", regenerated.fetch("status")
+    assert_equal 1, Compiler.builds
+
+    Inspector.actions = %w[reuse reuse]
+    reused = coordinator.prepare(operation_id: ID, workload_id: WORKLOAD, catalog_path: "catalog.xlsx")
+    assert_equal "PREPARED", reused.fetch("status")
+    assert_equal "reuse", reused.dig("inspection", "action")
+    assert_equal 1, Compiler.builds
+  end
+
+  def test_refusal_and_all_deferred_never_claim_a_manifest
+    Inspector.actions = ["refuse"]
+    refused = coordinator.prepare(operation_id: ID, workload_id: WORKLOAD, catalog_path: "catalog.xlsx")
+    assert_equal "REFUSED", refused.fetch("status")
+    assert_nil refused.fetch("manifest")
+
+    Selection.document = selection(
+      status: "ALL_DEFERRED", disposition: "legitimately-deferred", selected_ids: []
+    )
+    all_deferred = coordinator.prepare(operation_id: ID, workload_id: WORKLOAD, catalog_path: "catalog.xlsx")
+    assert_equal "ALL_DEFERRED", all_deferred.fetch("status")
+    assert_nil all_deferred.fetch("inspection")
+    assert_empty Inspector.actions
+  end
+
+  def test_compiler_refusal_unsupported_action_and_failed_final_inspection_fail_closed
+    Inspector.actions = ["fresh-build"]
+    Selection.prepared = {
+      "status" => "REFUSED", "reason" => {"code" => "PREPARATION_REFUSED"},
+      "dispositions" => Selection.document.fetch("dispositions")
+    }
+    refused = coordinator.prepare(operation_id: ID, workload_id: WORKLOAD, catalog_path: "catalog.xlsx")
+    assert_equal "REFUSED", refused.fetch("status")
+    assert_equal "PREPARATION_REFUSED", refused.dig("refusal", "reason", "code")
+
+    Selection.prepared = nil
+    Inspector.actions = %w[fresh-build refuse]
+    final_refusal = coordinator.prepare(operation_id: ID, workload_id: WORKLOAD, catalog_path: "catalog.xlsx")
+    assert_equal "REFUSED", final_refusal.fetch("status")
+    assert_equal "refuse", final_refusal.dig("inspection", "action")
+
+    Inspector.actions = ["unknown"]
+    assert_raises(AdventureFinderWorkspace::AFWStagedWorkloadCoordinator::Failure) do
+      coordinator.prepare(operation_id: ID, workload_id: WORKLOAD, catalog_path: "catalog.xlsx")
+    end
+
+    Inspector.actions = ["regenerate"]
+    Compiler.failure = OwnerError.new("compiler refused")
+    error = assert_raises(AdventureFinderWorkspace::AFWStagedWorkloadCoordinator::Failure) do
+      coordinator.prepare(operation_id: ID, workload_id: WORKLOAD, catalog_path: "catalog.xlsx")
+    end
+    assert_includes error.message, "compiler refused"
+  end
+
+  def test_malformed_selection_and_zero_authority_are_rejected
+    Selection.document = selection.merge("allocation" => [])
+    assert_raises(AdventureFinderWorkspace::AFWStagedWorkloadCoordinator::Failure) do
+      coordinator.prepare(operation_id: ID, workload_id: WORKLOAD, catalog_path: "catalog.xlsx")
+    end
+
+    StagedInput.authority = nil
+    assert_raises(AdventureFinderWorkspace::AFWStagedWorkloadCoordinator::Failure) do
+      coordinator.prepare(operation_id: ID, workload_id: WORKLOAD, catalog_path: "catalog.xlsx")
+    end
+  end
+
+  private
+
+  def coordinator
+    AdventureFinderWorkspace::AFWStagedWorkloadCoordinator.new(
+      afw_root: @afw, scorer_root: @scorer, pipeline_root: @pipeline,
+      authority_inputs_path: File.join(@root, "inputs.json"),
+      authority_store: File.join(@root, "authority"),
+      current_project_state_path: File.join(@root, "PROJECT_STATE.yml"),
+      mode: "synthetic",
+      contracts: {
+        error: OwnerError, staged_input: StagedInput, selection: Selection,
+        validator: Validator, inspector: Inspector, compiler: Compiler
+      }
+    )
+  end
+
+  def authority
+    {
+      "authority_id" => "a" * 64,
+      "operation" => {"operation_id" => ID},
+      "allocation" => [{"adventure_id" => "ADV-0003"}]
+    }
+  end
+
+  def selection(status: "SELECTED", disposition: "selected-qualified", selected_ids: ["ADV-0003"])
+    {
+      "schema_version" => "afw-staged-selection/v0.1", "producer" => "af-workloads",
+      "status" => status, "authority_id" => "a" * 64,
+      "operation" => {"operation_id" => ID}, "workload_id" => WORKLOAD,
+      "allocation" => [{"adventure_id" => "ADV-0003"}],
+      "selected_ids" => selected_ids,
+      "dispositions" => [{
+        "adventure_id" => "ADV-0003", "disposition" => disposition,
+        "reason" => {"code" => "FIXTURE"}, "evidence" => {}
+      }],
+      "selection_id" => "b" * 64
+    }
   end
 end

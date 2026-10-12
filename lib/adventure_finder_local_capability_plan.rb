@@ -11,13 +11,20 @@ module AdventureFinderWorkspace
   # frozen AFW execution plan. It observes neither workers nor providers.
   class LocalCapabilityPlan
     CONTRACT_VERSION = "adventurefinder-local-capability-plan/v0.1"
-    PREPARATION_VERSION = "adventurefinder-staged-workload-preparation/v0.1"
+    PREPARATION_VERSION = "adventurefinder-staged-workload-preparation/v0.2"
+    LEGACY_PREPARATION_VERSION = "adventurefinder-staged-workload-preparation/v0.1"
     PLAN_VERSION = "wlo-execution-plan/v0.3"
     SNAPSHOT_VERSION = "afw-workload/v0.1"
     STAGED_VERSION = "afw-staged-scoring-input/v0.1"
-    RESULT_KEYS = %w[
+    LEGACY_RESULT_KEYS = %w[
       contract_version status operation_id intent_id authority_id workload_id plan
       qualified_cases metric_denominator selected deferred execution_authorized
+      catalog_adoption_authorized next_action
+    ].freeze
+    RESULT_KEYS = %w[
+      contract_version status operation_id intent_id authority_id workload_id
+      selection_contract_version selection_id decision inspection plan qualified_cases
+      metric_denominator selected deferred refused execution_authorized
       catalog_adoption_authorized next_action
     ].freeze
     SHA256 = /\A[0-9a-f]{64}\z/
@@ -157,12 +164,22 @@ module AdventureFinderWorkspace
     end
 
     def validate_result!(result, operation_id)
-      valid = result.is_a?(Hash) && result.keys.sort == RESULT_KEYS.sort &&
-              result["contract_version"] == PREPARATION_VERSION && result["status"] == "PREPARED" &&
+      version = result.is_a?(Hash) ? result["contract_version"] : nil
+      keys = version == LEGACY_PREPARATION_VERSION ? LEGACY_RESULT_KEYS : RESULT_KEYS
+      valid = result.is_a?(Hash) && result.keys.sort == keys.sort &&
+              [PREPARATION_VERSION, LEGACY_PREPARATION_VERSION].include?(version) &&
+              result["status"] == "PREPARED" &&
               result["operation_id"] == operation_id && result["execution_authorized"] == false &&
               result["catalog_adoption_authorized"] == false && result["plan"].is_a?(Hash) &&
               result["plan"].keys.sort == %w[path sha256] && SHA256.match?(result["plan"]["sha256"].to_s)
       fail_with("INVALID_PREPARATION_RESULT", "stored preparation is not a bound PREPARED workload") unless valid
+      if version == PREPARATION_VERSION
+        valid_owner = result["selection_contract_version"] == "afw-staged-selection/v0.1" &&
+                      SHA256.match?(result["selection_id"].to_s) && result.fetch("refused").empty? &&
+                      result.dig("inspection", "contract_version") == "afw-workload-inspection/v0.1" &&
+                      result.dig("inspection", "action") == "reuse"
+        fail_with("INVALID_PREPARATION_RESULT", "stored preparation lacks verified AFW owner evidence") unless valid_owner
+      end
       %w[operation_id intent_id authority_id workload_id].each do |key|
         fail_with("INVALID_PREPARATION_RESULT", "#{key} is missing") unless identity?(result[key])
       end
