@@ -68,7 +68,11 @@ module AdventureFinderWorkspace
       operation_dir = Pathname(operation_dir).expand_path.cleanpath
       FileUtils.mkdir_p(operation_dir)
       paths = operation_paths(operation_dir)
-      request = prepare_request(inputs_path, package_path, paths.fetch(:request))
+      request = if File.file?(paths.fetch(:request))
+                  read_json(paths.fetch(:request), "pipeline adoption request")
+                else
+                  prepare_request(inputs_path, package_path, paths.fetch(:request))
+                end
       validate_request_shape!(request, package)
 
       render_review(package, request:)
@@ -142,8 +146,9 @@ module AdventureFinderWorkspace
          "--package", package_path, "--request", request_path, "--decided-by", approver,
          "--output", decision_path], chdir: @pipeline_root.to_s
       )
-      component_failure!("pipeline final-promotion decision", result) unless result.status.success?
       decision = parse_json!(result.stdout, "pipeline adoption decision")
+      expected_exit = disposition == "DECLINE" ? 3 : 0
+      component_failure!("pipeline final-promotion decision", result) unless result.status.exitstatus == expected_exit
       unless decision["schema_version"] == DECISION_SCHEMA && decision["decision"] == disposition &&
              decision["decided_by"] == approver
         raise Error, "pipeline decision does not preserve the exact operator disposition and identity"

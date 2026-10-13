@@ -18,9 +18,12 @@ class FinalPromotionTest < Minitest::Test
   class OwnerRunner
     attr_reader :calls
 
-    def initialize(package:, fail_adopt: false)
+    def initialize(package:, fail_adopt: false, decision_exit: nil, decision_transform: nil, decision_stdout: nil)
       @package = package
       @fail_adopt = fail_adopt
+      @decision_exit = decision_exit
+      @decision_transform = decision_transform
+      @decision_stdout = decision_stdout
       @calls = []
     end
 
@@ -43,8 +46,14 @@ class FinalPromotionTest < Minitest::Test
           "decided_by" => option(argv, "--decided-by"),
           "decision_id" => "d" * 64
         }
+        decision = @decision_transform.call(decision) if @decision_transform
         write(option(argv, "--output"), decision)
-        result(decision)
+        code = @decision_exit.nil? ? (action == "decline" ? 3 : 0) : @decision_exit
+        Result.new(
+          stdout: @decision_stdout || JSON.pretty_generate(decision) + "\n",
+          stderr: code.zero? ? "" : "synthetic decision failure",
+          status: Status.new(code)
+        )
       when ["af-final-release-adoption", "adopt"]
         return Result.new(stdout: JSON.generate("status" => "FAILED"), stderr: "stale package", status: Status.new(2)) if @fail_adopt
 
@@ -186,6 +195,50 @@ class FinalPromotionTest < Minitest::Test
       assert runner.calls.any? { |call| call[0, 2] == ["af-final-release-adoption", "decline"] }
       refute runner.calls.any? { |call| call[0] == "af-project-state" }
       assert_includes output.string, "Final promotion: DECLINED"
+      %w[adoption-decision.json coordination-decision.json adoption-result.json].each do |name|
+        assert File.file?(File.join(paths.fetch(:operation), name)), name
+      end
+    end
+  end
+
+  def test_decision_exit_must_match_the_exact_disposition_contract
+    with_front_door(input: "DECLINE\n", decision_exit: 2) do |door, runner, _output, paths|
+      error = assert_raises(AdventureFinderWorkspace::Error) do
+        door.run(inputs_path: paths[:inputs], package_path: paths[:package],
+                 approver: "David Norris", operation_dir: paths[:operation])
+      end
+      assert_includes error.message, "pipeline final-promotion decision failed"
+      refute runner.calls.any? { |call| call[1] == "adopt" }
+    end
+
+    with_front_door(input: "APPROVE\n", decision_exit: 3) do |door, runner, _output, paths|
+      error = assert_raises(AdventureFinderWorkspace::Error) do
+        door.run(inputs_path: paths[:inputs], package_path: paths[:package],
+                 approver: "David Norris", operation_dir: paths[:operation])
+      end
+      assert_includes error.message, "pipeline final-promotion decision failed"
+      refute runner.calls.any? { |call| call[1] == "adopt" }
+    end
+  end
+
+  def test_decline_decision_rejects_malformed_json_and_wrong_identity
+    with_front_door(input: "DECLINE\n", decision_stdout: "{not-json\n") do |door, runner, _output, paths|
+      error = assert_raises(AdventureFinderWorkspace::Error) do
+        door.run(inputs_path: paths[:inputs], package_path: paths[:package],
+                 approver: "David Norris", operation_dir: paths[:operation])
+      end
+      assert_includes error.message, "pipeline adoption decision returned invalid JSON"
+      refute runner.calls.any? { |call| call[1] == "adopt" }
+    end
+
+    transform = ->(decision) { decision.merge("decided_by" => "Different Operator") }
+    with_front_door(input: "DECLINE\n", decision_transform: transform) do |door, runner, _output, paths|
+      error = assert_raises(AdventureFinderWorkspace::Error) do
+        door.run(inputs_path: paths[:inputs], package_path: paths[:package],
+                 approver: "David Norris", operation_dir: paths[:operation])
+      end
+      assert_includes error.message, "does not preserve the exact operator disposition and identity"
+      refute runner.calls.any? { |call| call[1] == "adopt" }
     end
   end
 
@@ -210,8 +263,24 @@ class FinalPromotionTest < Minitest::Test
       assert_equal 0, replay.run(inputs_path: paths[:inputs], package_path: paths[:package],
                                  approver: "David Norris", operation_dir: paths[:operation])
       replay_calls = runner.calls.drop(calls_after_first)
+      refute replay_calls.any? { |call| call[1] == "prepare" }
       refute replay_calls.any? { |call| %w[approve decline].include?(call[1]) }
       assert replay_calls.any? { |call| call[1] == "adopt" }
+    end
+  end
+
+  def test_restart_before_decision_reuses_request_but_pipeline_revalidates_on_approval
+    with_front_door(input: "") do |door, runner, _output, paths|
+      assert_equal 3, door.run(inputs_path: paths[:inputs], package_path: paths[:package],
+                               approver: "David Norris", operation_dir: paths[:operation])
+      calls_after_prepare = runner.calls.length
+      resumed = build_door(paths, runner, input: StringIO.new("APPROVE\n"), output: StringIO.new)
+      assert_equal 0, resumed.run(inputs_path: paths[:inputs], package_path: paths[:package],
+                                  approver: "David Norris", operation_dir: paths[:operation])
+      resumed_calls = runner.calls.drop(calls_after_prepare)
+      refute resumed_calls.any? { |call| call[1] == "prepare" }
+      assert resumed_calls.any? { |call| call[1] == "approve" }
+      assert resumed_calls.any? { |call| call[1] == "adopt" }
     end
   end
 
@@ -272,11 +341,14 @@ class FinalPromotionTest < Minitest::Test
 
   private
 
-  def with_front_door(root: nil, package: fixture_package, input:, fail_adopt: false)
+  def with_front_door(root: nil, package: fixture_package, input:, fail_adopt: false,
+                      decision_exit: nil, decision_transform: nil, decision_stdout: nil)
     owned_root = root.nil?
     root ||= Dir.mktmpdir("final-promotion-")
     paths = workspace_paths(root, package)
-    runner = OwnerRunner.new(package:, fail_adopt:)
+    runner = OwnerRunner.new(
+      package:, fail_adopt:, decision_exit:, decision_transform:, decision_stdout:
+    )
     output = StringIO.new
     door = build_door(paths, runner, input: StringIO.new(input), output:)
     yield door, runner, output, paths
