@@ -24,14 +24,7 @@ module AdventureFinderWorkspace
     SOURCE_CONTEXT_VERSION = "adventurefinder-catalog-ingest-context/v0.2"
     RECEIPT_VERSION = "pdf-to-llm-md/conversion-receipt/v0.1"
     CONTEXT_ROOTS = IngestOperation::ROOTS.sort.freeze
-    STAGED_SCORING_POLICY = {
-      "schema_version" => "af-staged-scoring-input-policy/v0.1",
-      "policy_id" => "approved-new-records",
-      "policy_version" => "1",
-      "scope" => "operation-approved-new-records",
-      "selection" => "afw-qualified-default",
-      "permissions" => %w[scoring_input workload_preparation]
-    }.freeze
+    STAGED_SCORING_POLICY = StagedScoringIntentStore::SUPPORTED_POLICY
 
     class Failure < Error
       attr_reader :code, :status
@@ -348,6 +341,9 @@ module AdventureFinderWorkspace
     def start_policy(context, policy_definition:, policy_id:, policy_version:,
                      policy_values:, scoring_choice:, selected_by:, selected_at:)
       supplied = [policy_definition, policy_id, policy_version, policy_values]
+      if scoring_choice == "decline" && supplied.any? { |value| !value.nil? }
+        fail_with("INVALID_SCORING_CHOICE", "decline cannot be combined with explicit policy fields")
+      end
       if supplied.all?(&:nil?)
         return nil if scoring_choice == "decline"
         fail_with("MISSING_CHOICE", "select --prepare-staged-scoring or supply an explicit policy") unless

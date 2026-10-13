@@ -189,6 +189,83 @@ class CatalogIngestFrontDoorTest < Minitest::Test
     assert_equal "decline", JSON.parse(File.binread(scoring_decision_path)).fetch("choice")
   end
 
+  def test_decline_with_explicit_policy_fields_is_rejected_before_binding
+    _stdout, stderr, status = run_catalog(*(start_arguments + ["--decline-staged-scoring"]))
+
+    assert_equal 1, status.exitstatus
+    assert_includes stderr, "INVALID_SCORING_CHOICE"
+    refute File.exist?(operation_root)
+    refute File.exist?(@converter_log)
+    refute File.exist?(@forbidden_log)
+  end
+
+  def test_deferred_prepare_refuses_conflicting_immutable_selection
+    policy_path = staged_policy
+    args = start_arguments
+    args[args.index(@policy)] = policy_path
+    args[args.index("standard-scoring-execution")] = "approved-new-records"
+    args[args.index("v0.1")] = "1"
+    args[args.index(JSON.generate("profile" => "standard", "execution" => "deferred"))] =
+      JSON.generate("selection" => "different-selection")
+    _stdout, start_err, started = run_catalog(*args)
+    assert started.success?, start_err
+    assert_equal "approved-new-records", revision_document(0).dig("policy", "policy_id")
+    assert_equal "1", revision_document(0).dig("policy", "policy_version")
+    assert_equal Digest::SHA256.file(policy_path).hexdigest,
+                 revision_document(0).dig("policy", "definition_sha256")
+    assert_equal({"selection" => "different-selection"}, revision_document(0).dig("policy", "selected_values"))
+    assert_equal "David", revision_document(0).dig("policy", "selected_by")
+    before = operation_snapshot
+
+    _stdout, error, status = run_catalog("resume", ID, "--prepare-staged-scoring", "--selected-by", "David")
+
+    assert_equal 1, status.exitstatus
+    assert_includes error, "SCORING_POLICY_MISMATCH"
+    assert_equal before, operation_snapshot
+    refute File.exist?(scoring_decision_path)
+    refute File.exist?(@forbidden_log)
+  end
+
+  def test_deferred_prepare_rechecks_authority_and_replays_without_rebinding
+    policy_path = staged_policy
+    args = start_arguments
+    args[args.index(@policy)] = policy_path
+    args[args.index("standard-scoring-execution")] = "approved-new-records"
+    args[args.index("v0.1")] = "1"
+    args[args.index(JSON.generate("profile" => "standard", "execution" => "deferred"))] =
+      JSON.generate("selection" => "afw-qualified-default")
+    _stdout, start_err, started = run_catalog(*args)
+    assert started.success?, start_err
+    before = operation_snapshot
+    policy_bytes = File.binread(policy_path)
+    File.unlink(policy_path)
+    _stdout, missing_err, missing = run_catalog("resume", ID, "--prepare-staged-scoring", "--selected-by", "David")
+    assert_equal 1, missing.exitstatus
+    assert_includes missing_err, "SCORING_POLICY_MISSING"
+    File.binwrite(policy_path, JSON.generate(JSON.parse(policy_bytes).merge("selection" => "revoked")))
+    _stdout, changed_err, changed = run_catalog("resume", ID, "--prepare-staged-scoring", "--selected-by", "David")
+    assert_equal 1, changed.exitstatus
+    assert_includes changed_err, "SCORING_POLICY_MISMATCH"
+    assert_equal before, operation_snapshot
+    refute File.exist?(scoring_decision_path)
+
+    File.binwrite(policy_path, policy_bytes)
+    _stdout, prepare_err, prepared = run_catalog("resume", ID, "--prepare-staged-scoring", "--selected-by", "David")
+    assert prepared.success?, prepare_err
+    assert_equal before, operation_snapshot.reject { |path, _| path.include?("staged-scoring-intents") }
+    decision_bytes = File.binread(scoring_decision_path)
+    intent_path = File.join(File.dirname(scoring_decision_path), "intent.json")
+    intent_bytes = File.binread(intent_path)
+    assert_equal "post_boundary_resume", JSON.parse(intent_bytes).fetch("interaction")
+    assert_equal "David", JSON.parse(intent_bytes).fetch("selected_by")
+    _stdout, replay_err, replay = run_catalog("resume", ID, "--prepare-staged-scoring", "--selected-by", "David")
+    assert replay.success?, replay_err
+    assert_equal decision_bytes, File.binread(scoring_decision_path)
+    assert_equal intent_bytes, File.binread(intent_path)
+    assert_equal ID, revision_document(0).fetch("operation_id")
+    refute File.exist?(@forbidden_log)
+  end
+
   def test_local_execution_commands_require_explicit_authority_and_exact_handles
     _stdout, stderr, status = dispatch_catalog("local-start", ID)
     assert_equal 1, status

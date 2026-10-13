@@ -17,6 +17,14 @@ module AdventureFinderWorkspace
     INTENT_VERSION = "adventurefinder-staged-scoring-intent/v0.1"
     CHOICES = %w[prepare decline].freeze
     INTERACTIONS = %w[ingest_start post_boundary_resume].freeze
+    SUPPORTED_POLICY = {
+      "schema_version" => "af-staged-scoring-input-policy/v0.1",
+      "policy_id" => "approved-new-records",
+      "policy_version" => "1",
+      "scope" => "operation-approved-new-records",
+      "selection" => "afw-qualified-default",
+      "permissions" => %w[scoring_input workload_preparation]
+    }.freeze
 
     class Failure < Error
       attr_reader :code
@@ -24,6 +32,14 @@ module AdventureFinderWorkspace
       def initialize(code, message)
         @code = code
         super("#{code}: #{message}")
+      end
+    end
+
+    class UniquePolicyObject < Hash
+      def []=(key, value)
+        raise Failure.new("SCORING_POLICY_MISMATCH", "duplicate staged-scoring policy key") if key?(key)
+
+        super
       end
     end
 
@@ -153,7 +169,8 @@ module AdventureFinderWorkspace
     def verify_inert_policy!(operation, policy)
       selected = operation["policy"]
       expected = policy.slice("policy_id", "policy_version").merge(
-        "definition_sha256" => Digest::SHA256.file(policy_path).hexdigest
+        "definition_sha256" => Digest::SHA256.file(policy_path).hexdigest,
+        "selected_values" => {"selection" => policy.fetch("selection")}
       )
       unless selected.is_a?(Hash) && selected.slice(*expected.keys) == expected
         fail_with(
@@ -165,13 +182,13 @@ module AdventureFinderWorkspace
 
     def policy_definition!
       fail_with("SCORING_POLICY_MISSING", "staged-scoring policy is missing: #{policy_path}") unless policy_path.file?
-      value = read_json(policy_path)
-      unless value.is_a?(Hash) && value.keys.sort ==
-             %w[permissions policy_id policy_version schema_version scope selection].sort
-        fail_with("SCORING_POLICY_MISMATCH", "staged-scoring policy has an incompatible shape")
+      value = JSON.parse(File.binread(policy_path), object_class: UniquePolicyObject)
+      unless value == SUPPORTED_POLICY
+        fail_with("SCORING_POLICY_MISMATCH", "restore the exact supported staged-scoring policy definition")
       end
-      %w[policy_id policy_version].each { |key| text!(value[key], "policy #{key}") }
       value
+    rescue JSON::ParserError, SystemCallError
+      fail_with("SCORING_POLICY_MISMATCH", "staged-scoring policy authority is unreadable")
     end
 
     def validate_intent!(intent, operation)

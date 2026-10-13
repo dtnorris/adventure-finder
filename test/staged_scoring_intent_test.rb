@@ -95,9 +95,39 @@ class StagedScoringIntentTest < Minitest::Test
     assert_equal "SCORING_POLICY_MISMATCH", error.code
   end
 
+  def test_deferred_choice_rejects_conflicting_selected_values_before_publication
+    other = "22222222-2222-4222-8222-222222222222"
+    create_operation(operation_id: other, policy_values: {"selection" => "different-selection"})
+    error = assert_raises(Store::Failure) do
+      @store.capture!(
+        operation_id: other, choice: "prepare", selected_by: "David", interaction: "post_boundary_resume"
+      )
+    end
+
+    assert_equal "SCORING_POLICY_MISMATCH", error.code
+    assert_equal({"selection" => "different-selection"},
+                 @operations.validate!(other).dig("policy", "selected_values"))
+    refute @store.intent_path(other).exist?
+  end
+
+  def test_revoked_policy_with_matching_recorded_digest_is_not_supported
+    other = "22222222-2222-4222-8222-222222222222"
+    File.binwrite(@policy, JSON.generate(policy_document.merge("selection" => "revoked")))
+    create_operation(operation_id: other)
+    error = assert_raises(Store::Failure) do
+      @store.capture!(
+        operation_id: other, choice: "prepare", selected_by: "David", interaction: "post_boundary_resume"
+      )
+    end
+
+    assert_equal "SCORING_POLICY_MISMATCH", error.code
+    refute @store.intent_path(other).exist?
+  end
+
   private
 
-  def create_operation(operation_id: ID, policy_sha: Digest::SHA256.file(@policy).hexdigest)
+  def create_operation(operation_id: ID, policy_sha: Digest::SHA256.file(@policy).hexdigest,
+                       policy_values: {"selection" => "afw-qualified-default"})
     selected_at = NOW.strftime("%Y-%m-%dT%H:%M:%SZ")
     choice = ->(value) { {"value" => value, "selected_by" => "David", "selected_at" => selected_at} }
     @operations.create(
@@ -114,7 +144,7 @@ class StagedScoringIntentTest < Minitest::Test
       policy: {
         "policy_id" => "approved-new-records", "policy_version" => "1",
         "definition_sha256" => policy_sha,
-        "selected_values" => {"selection" => "afw-qualified-default"},
+        "selected_values" => policy_values,
         "selected_by" => "David", "selected_at" => selected_at
       }
     )

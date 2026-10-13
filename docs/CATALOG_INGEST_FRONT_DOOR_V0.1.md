@@ -34,7 +34,10 @@ attributed decline with a null inert policy. A start with neither disposition
 still accepts all four explicit `--policy-definition`, `--policy-id`,
 `--policy-version` and `--policy-values` inputs for compatibility. An
 incomplete explicit group is refused; an explicit group combined with prepare
-must match the resolved policy exactly. The selected policy is inert intent.
+must match the resolved policy exactly. An explicit group combined with decline
+is refused before an operation is bound. Deferred preparation rechecks the
+immutable selected values against the exact supported selection before publishing
+an affirmative intent. The selected policy is inert intent.
 It does not authorize scoring,
 inference, execution, retry, recovery, provider capacity, catalog mutation, commit, or
 push. Boundaries, parentage, Adventure IDs, and approval remain explicitly unset.
