@@ -305,8 +305,8 @@ module AdventureFinderWorkspace
       if comprehensive && !(fail_fast && results.any? { |result| result.result != :pass })
         cli = @front_door_root / "bin" / "af-operator-acceptance"
         if cli.file?
+          # No standalone CLI option may claim a scenario was covered by another test run.
           argv = [cli.to_s, "--root", root.to_s]
-          argv << "--covered-front-door" if front&.result == :pass
           execution = runner.shell_capture(Shellwords.join(argv), chdir: @front_door_root,
                                            env: {"AF_PROJECT_ROOT" => root.to_s, "AF_ADVENTURE_FINDER_ROOT" => @front_door_root.to_s})
           out.print execution.stdout

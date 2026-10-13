@@ -99,7 +99,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
       assert_includes out.string, "Operator acceptance phase: NOT RUN"
       assert workspace.test(repos: manifest.selected, comprehensive: true)
       assert_equal 23, runner.calls.length
-      assert_equal "#{front}/bin/af-operator-acceptance --root #{components} --covered-front-door", runner.calls.last.first
+      assert_equal "#{front}/bin/af-operator-acceptance --root #{components}", runner.calls.last.first
       assert_includes out.string, "Operator acceptance phase: PASS"
       assert_equal 2, out.string.scan(/^Total runs:\s+22$/).length
       # A runtime-gated component failure must not hide acceptance or become PASS.

@@ -409,11 +409,12 @@ bin/af-test --comprehensive
 Component, front-door, and operator-acceptance phase results are reported
 separately; a missing or failed required phase fails the combined command.
 The public [operator harness](docs/operator-acceptance.md) retains its network
-guard, credential removal, fake providers, and disposable fixtures. Equivalent
-front-door unit scenarios are reported as covered without rerunning them;
-distinct process/integration and guarded component scenarios still execute.
-Acceptance counts remain separate from suite totals. Serial `--fail-fast` reports
-remaining suites and acceptance as unexecuted when an earlier suite fails.
+guard, credential removal, fake providers, and disposable fixtures. Comprehensive
+mode reruns all registered acceptance scenarios under that guard instead of
+claiming unverified coverage from front-door rake; this deliberately repeats
+three small front-door unit scenarios. Acceptance counts remain separate from
+suite totals. Serial `--fail-fast` reports remaining suites and acceptance as
+unexecuted when an earlier suite fails.
 
 Cross-repository commands deliberately run in a **non-login shell** so they inherit the
 operator's active PATH (for example mise/asdf/Homebrew Ruby) instead of silently falling

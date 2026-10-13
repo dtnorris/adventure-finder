@@ -225,13 +225,8 @@ module AdventureFinderWorkspace
       @scenarios = SCENARIOS
     end
 
-    def run(only: [], covered_front_door: false)
+    def run(only: [])
       selected = select_scenarios(only)
-      if covered_front_door
-        covered = selected.select { |scenario| %w[batch-front-door local-capacity-bootstrap production-context].include?(scenario.name) }
-        covered.each { |scenario| @out.puts "COVERED #{scenario.name}: successful front-door rake (no additional execution)" }
-        selected -= covered
-      end
       roots = resolve_roots
       validate!(selected, roots)
       @out.puts "AdventureFinder offline operator acceptance"
@@ -247,7 +242,7 @@ module AdventureFinderWorkspace
 
       passed = results.count(&:success?)
       @out.puts "Acceptance summary: #{passed}/#{results.length} scenarios passed"
-      complete = passed == results.length
+      complete = !results.empty? && passed == results.length
       @out.puts "Offline proof: fake providers only; inference calls: 0; paid resources: $0" if complete
       complete
     end

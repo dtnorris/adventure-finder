@@ -2,6 +2,8 @@
 
 require "fileutils"
 require "minitest/autorun"
+require "open3"
+require "rbconfig"
 require "stringio"
 require "tmpdir"
 require "adventure_finder_operator_acceptance"
@@ -97,23 +99,36 @@ class OperatorAcceptanceTest < Minitest::Test
     end
   end
 
-  def test_successful_front_door_reuses_only_equivalent_unit_scenarios
+  def test_selected_scenario_runs_without_coverage_bypass
     runner = Runner.new
     out = StringIO.new
-    assert build_harness(runner: runner, out: out).run(covered_front_door: true)
-    expected_executed = AdventureFinderWorkspace::OperatorAcceptance::SCENARIOS.length - 3
-    assert_equal expected_executed, runner.calls.length
-    %w[batch-front-door local-capacity-bootstrap production-context].each do |name|
-      assert_includes out.string, "COVERED #{name}"
-    end
-    assert_includes out.string, "Acceptance summary: #{expected_executed}/#{expected_executed} scenarios passed"
-    files = runner.calls.map { |call| call.fetch(:argv).last }
-    assert_includes files, "test/integration/local_ingest_execution_test.rb"
-    assert_includes files, "test/integration/operator_lifecycle_test.rb"
-    runner.calls.each do |call|
-      assert_nil call.dig(:env, "RUNPOD_API_KEY")
-      assert_includes call.dig(:env, "RUBYOPT"), "offline_network_guard.rb"
-    end
+    harness = build_harness(runner: runner, out: out)
+    assert harness.run(only: ["production-context"])
+    assert_equal 1, runner.calls.length
+    assert_equal "test/production_context_test.rb", runner.calls.first.fetch(:argv).last
+    assert_includes out.string, "Acceptance summary: 1/1 scenarios passed"
+    refute_includes out.string, "COVERED production-context"
+  end
+
+  def test_public_cli_rejects_unverified_coverage_override
+    stdout, stderr, status = Open3.capture3(
+      RbConfig.ruby, File.expand_path("../../bin/af-operator-acceptance", __dir__),
+      "--covered-front-door"
+    )
+    assert_equal 2, status.exitstatus
+    assert_empty stdout
+    assert_includes stderr, "invalid option: --covered-front-door"
+  end
+
+  def test_empty_scenario_registry_cannot_claim_success
+    runner = Runner.new
+    out = StringIO.new
+    harness = build_harness(runner: runner, out: out)
+    harness.instance_variable_set(:@scenarios, [])
+    refute harness.run
+    assert_empty runner.calls
+    assert_includes out.string, "Acceptance summary: 0/0 scenarios passed"
+    refute_includes out.string, "Offline proof: fake providers only"
   end
 
   def test_local_multi_model_requires_real_component_seams_before_execution
