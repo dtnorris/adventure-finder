@@ -10,10 +10,7 @@ bin/af-catalog start INPUT.pdf \
   --pagination-authority "EXPLICIT PAGINATION AUTHORITY" \
   --publisher "EXPLICIT PUBLISHER" \
   --base-catalog /path/to/exact-base.xlsx \
-  --policy-definition /path/to/exact-policy-definition \
-  --policy-id POLICY-ID \
-  --policy-version POLICY-VERSION \
-  --policy-values '{"profile":"SELECTED PROFILE","execution":"SELECTED MODE"}' \
+  --prepare-staged-scoring \
   --selected-by "OPERATOR" \
   --canonical-destination /explicit/source/root/Book_LLM_Edition.md
 
@@ -27,9 +24,18 @@ bin/af-catalog successor-version-authority OPERATION-UUID --json
 ```
 
 Start requires every semantic source declaration, an exact base catalog, and an
-explicit scoring/execution policy selection. The policy-definition file is hashed as
-the immutable definition identity; the ID, version, and nonempty JSON selected-values
-object are recorded as inert operator intent. None of these values authorizes scoring,
+explicit scoring disposition. With `--prepare-staged-scoring`, the front door
+resolves the pipeline's versioned staged-scoring input policy definition and
+records its exact ID, version, byte digest and selected `afw-qualified-default`
+value with the operator attribution. The selected definition is checked against
+the supported pipeline policy contract before an operation is created. A missing
+or changed definition fails closed. `--decline-staged-scoring` records an
+attributed decline with a null inert policy. A start with neither disposition
+still accepts all four explicit `--policy-definition`, `--policy-id`,
+`--policy-version` and `--policy-values` inputs for compatibility. An
+incomplete explicit group is refused; an explicit group combined with prepare
+must match the resolved policy exactly. The selected policy is inert intent.
+It does not authorize scoring,
 inference, execution, retry, recovery, provider capacity, catalog mutation, commit, or
 push. Boundaries, parentage, Adventure IDs, and approval remain explicitly unset.
 
@@ -46,7 +52,7 @@ conflict tests; reusing a handle for different immutable input fails closed.
 
 ## Start behavior
 
-Start hashes the PDF, catalog, and policy definition, creates revision zero through
+Start hashes the PDF, catalog, and any selected policy definition, creates revision zero through
 `IngestOperationStore`, and persists a versioned local resume context. The v0.1
 context contains absolute runtime root mappings only. A v0.2 context additionally
 binds the explicit canonical-destination locator that authorizes source progression.
@@ -88,6 +94,9 @@ the current gate through `IngestOperationRouting`. For a v0.2 source-progression
 context it resumes the same source-only loop, reusing exact compatible component
 outputs and appending only missing compatible operation references. It requires no
 prior shell history or repeated input, catalog, component, or artifact paths.
+When a staged-scoring decision exists, resume also revalidates its public decision
+and frozen policy binding against the current definition; changed or missing
+authority stops rather than substituting a later policy.
 
 An unknown handle, malformed context, corrupt operation, missing bound artifact,
 changed bytes, incompatible version, unsafe locator, or component contract conflict

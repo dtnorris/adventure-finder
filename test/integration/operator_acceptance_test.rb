@@ -78,7 +78,7 @@ class OperatorAcceptanceTest < Minitest::Test
     assert harness.run
     assert_equal AdventureFinderWorkspace::OperatorAcceptance::SCENARIOS.length, runner.calls.length
     assert_includes out.string, "Network/provider/inference access: blocked"
-    assert_includes out.string, "Acceptance summary: 24/24 scenarios passed"
+    assert_includes out.string, "Acceptance summary: 25/25 scenarios passed"
     assert_includes out.string, "Offline proof: fake providers only; inference calls: 0; paid resources: $0"
     runner.calls.each do |call|
       assert_nil call.dig(:env, "RUNPOD_API_KEY")
@@ -243,7 +243,7 @@ class OperatorAcceptanceTest < Minitest::Test
     refute harness.run
     assert_equal AdventureFinderWorkspace::OperatorAcceptance::SCENARIOS.length, runner.calls.length
     assert_includes err.string, "FAIL rpof-campaign-lifecycle"
-    assert_includes out.string, "Acceptance summary: 23/24 scenarios passed"
+    assert_includes out.string, "Acceptance summary: 24/25 scenarios passed"
   end
 
   def test_operator_lifecycle_uses_rpof_bundle_while_running_from_workspace_repo
