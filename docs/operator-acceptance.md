@@ -18,6 +18,7 @@ bin/af-operator-acceptance --only ig19b-source-exceptions
 bin/af-operator-acceptance --only ig19b-boundary-exceptions
 bin/af-operator-acceptance --only ig19c-execution-exceptions
 bin/af-operator-acceptance --only ig19c-evidence-review-exceptions
+bin/af-operator-acceptance --only final-promotion
 ```
 
 ## Automatic local multi-model proof
@@ -167,3 +168,22 @@ HTTP guard, so its expected provider/inference cost remains `$0`.
 On complete success the summary is evidence that all listed tests ran behind the hard
 network guard with fake-only provider access, zero inference calls, and zero paid
 resources.
+
+## Final promotion matrix
+
+`final-promotion` is the IG-18C executable composition proof. It runs the
+AdventureFinder review and persistence handoff against the pipeline's public
+package, adoption, catalog-transaction, and `ProjectState` interfaces. The
+clean fixture uses standing-directive acceptance with zero individual-human and
+zero IG-16B-machine acceptances; the optional frontier cases remain separate.
+
+The matrix also executes the pipeline owner's landed refusal cases for changed
+candidate, package, referenced evidence, manifest, catalog role, and repository
+HEAD; incompatible lineage and a scoring-safe-but-promotion-unsafe advanced
+catalog; decline and interrupted import; destination collision; and identical
+replay. The composed success case snapshots catalog HEAD, refs, index, preserved
+roles, existing workbooks, and an unrelated dirty file. Promotion leaves Git
+state untouched, prints only scoped workflow-owned persistence paths, and a
+second invocation reports `ALREADY_PROMOTED` without replacing the durable
+`PROMOTED` result or mutating the catalog again. All repositories and
+workbooks are disposable synthetic fixtures.
