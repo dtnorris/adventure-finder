@@ -2,6 +2,8 @@
 
 require "fileutils"
 require "minitest/autorun"
+require "open3"
+require "rbconfig"
 require "stringio"
 require "tmpdir"
 require "adventure_finder_operator_acceptance"
@@ -95,6 +97,38 @@ class OperatorAcceptanceTest < Minitest::Test
       assert_equal @pipeline, call.dig(:env, "AF_DATA_PIPELINE_ROOT")
       assert_equal @scorer, call.dig(:env, "AF_SCORER_ROOT")
     end
+  end
+
+  def test_selected_scenario_runs_without_coverage_bypass
+    runner = Runner.new
+    out = StringIO.new
+    harness = build_harness(runner: runner, out: out)
+    assert harness.run(only: ["production-context"])
+    assert_equal 1, runner.calls.length
+    assert_equal "test/production_context_test.rb", runner.calls.first.fetch(:argv).last
+    assert_includes out.string, "Acceptance summary: 1/1 scenarios passed"
+    refute_includes out.string, "COVERED production-context"
+  end
+
+  def test_public_cli_rejects_unverified_coverage_override
+    stdout, stderr, status = Open3.capture3(
+      RbConfig.ruby, File.expand_path("../../bin/af-operator-acceptance", __dir__),
+      "--covered-front-door"
+    )
+    assert_equal 2, status.exitstatus
+    assert_empty stdout
+    assert_includes stderr, "invalid option: --covered-front-door"
+  end
+
+  def test_empty_scenario_registry_cannot_claim_success
+    runner = Runner.new
+    out = StringIO.new
+    harness = build_harness(runner: runner, out: out)
+    harness.instance_variable_set(:@scenarios, [])
+    refute harness.run
+    assert_empty runner.calls
+    assert_includes out.string, "Acceptance summary: 0/0 scenarios passed"
+    refute_includes out.string, "Offline proof: fake providers only"
   end
 
   def test_local_multi_model_requires_real_component_seams_before_execution

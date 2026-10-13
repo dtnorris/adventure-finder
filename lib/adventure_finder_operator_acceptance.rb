@@ -242,7 +242,7 @@ module AdventureFinderWorkspace
 
       passed = results.count(&:success?)
       @out.puts "Acceptance summary: #{passed}/#{results.length} scenarios passed"
-      complete = passed == results.length
+      complete = !results.empty? && passed == results.length
       @out.puts "Offline proof: fake providers only; inference calls: 0; paid resources: $0" if complete
       complete
     end

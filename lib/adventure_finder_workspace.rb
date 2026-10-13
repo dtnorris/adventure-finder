@@ -4,6 +4,7 @@ require "digest"
 require "fileutils"
 require "open3"
 require "pathname"
+require "shellwords"
 require "thread"
 require "time"
 require "yaml"
@@ -120,7 +121,7 @@ module AdventureFinderWorkspace
 
     attr_reader :manifest, :root, :runner, :out, :err
 
-    def initialize(manifest:, root:, front_door_root: File.expand_path("..", __dir__),
+    def initialize(manifest:, root:, front_door_root: ENV.fetch("AF_ADVENTURE_FINDER_ROOT", File.expand_path("..", __dir__)),
                    adjacent_root: nil, runner: CommandRunner.new, out: $stdout, err: $stderr)
       @manifest = manifest
       @root = Pathname(root).expand_path
@@ -276,13 +277,15 @@ module AdventureFinderWorkspace
       failures.empty?
     end
 
-    def test(repos:, fail_fast: false, jobs: 1)
+    def test(repos:, fail_fast: false, jobs: 1, comprehensive: false, include_front_door: true)
       unless jobs.is_a?(Integer) && jobs >= 1
         raise Error, "jobs must be an integer >= 1"
       end
       raise Error, "fail_fast requires jobs: 1" if fail_fast && jobs != 1
 
       testable = repos.select { |repo| repo["test"] }
+      unconfigured = repos.reject { |repo| repo["test"] }
+      testable += [{"name" => "adventure-finder", "test" => "rake", "front_door" => true}] if include_front_door
       @test_duration_history = load_test_duration_history
       workspace_started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       results = if jobs == 1
@@ -290,11 +293,40 @@ module AdventureFinderWorkspace
                 else
                   run_tests_parallel(testable, jobs: jobs)
                 end
+      unexecuted = testable.map { |repo| repo.fetch("name") } - results.map(&:name)
+      components = results.reject { |result| result.name == "adventure-finder" }
+      front = results.find { |result| result.name == "adventure-finder" }
+      out.puts "Component phase: #{components.count { |result| result.result == :pass }}/#{testable.count { |repo| !repo['front_door'] }} passed"
+      out.puts "Front-door phase: #{front ? front.result.to_s.upcase : 'NOT RUN'}"
+      out.puts "Unconfigured selected entries: #{unconfigured.length}"
+      unconfigured.each { |repo| out.puts "#{repo.fetch('name')} UNCONFIGURED" }
+      out.puts "Unexecuted suites: #{unexecuted.join(', ')}" unless unexecuted.empty?
+      acceptance_ok = true
+      if comprehensive && !(fail_fast && results.any? { |result| result.result != :pass })
+        cli = @front_door_root / "bin" / "af-operator-acceptance"
+        if cli.file?
+          # No standalone CLI option may claim a scenario was covered by another test run.
+          argv = [cli.to_s, "--root", root.to_s]
+          execution = runner.shell_capture(Shellwords.join(argv), chdir: @front_door_root,
+                                           env: {"AF_PROJECT_ROOT" => root.to_s, "AF_ADVENTURE_FINDER_ROOT" => @front_door_root.to_s})
+          out.print execution.stdout
+          acceptance_ok = execution.success?
+          out.puts "Operator acceptance phase: #{acceptance_ok ? 'PASS' : 'FAIL'}"
+        else
+          out.puts "Operator acceptance phase: MISSING #{cli}"
+          acceptance_ok = false
+        end
+      else
+        out.puts "Operator acceptance phase: NOT RUN#{comprehensive ? ' (fail-fast)' : ' (use --comprehensive)'}"
+        acceptance_ok = false if comprehensive
+      end
       workspace_elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - workspace_started_at
 
       print_test_summary(results, workspace_elapsed: workspace_elapsed, jobs: jobs)
-      record_test_timing_history(results, workspace_elapsed: workspace_elapsed, jobs: jobs)
-      results.all? { |result| result.result == :pass }
+      unless include_front_door && front&.result == :missing
+        record_test_timing_history(results, workspace_elapsed: workspace_elapsed, jobs: jobs)
+      end
+      acceptance_ok && unexecuted.empty? && results.all? { |result| result.result == :pass }
     end
 
     def doctor(repos:, strict: false)
@@ -398,7 +430,8 @@ module AdventureFinderWorkspace
       results = []
 
       testable.each do |repo|
-        result = run_test_repo(repo, capture: false)
+        result = run_test_repo(repo, capture: true)
+        print_buffered_test_output(result)
         results << result
         break if fail_fast && result.result != :pass
       end
@@ -456,11 +489,14 @@ module AdventureFinderWorkspace
     def run_test_repo(repo, capture:, contended: false)
       name = repo.fetch("name")
       command = repo.fetch("test")
-      path = repo_path(repo)
-      test_env = {"AF_PROJECT_ROOT" => root.to_s}
+      path = repo["front_door"] ? @front_door_root : repo_path(repo)
+      test_env = {"AF_PROJECT_ROOT" => root.to_s, "AF_ADVENTURE_FINDER_ROOT" => @front_door_root.to_s}
+      test_env.merge!("BUNDLE_GEMFILE" => nil, "BUNDLE_LOCKFILE" => nil) if repo["front_door"]
       test_env["AF_TEST_CONTENDED"] = "1" if contended
 
-      unless git_checkout?(path)
+      valid = repo["front_door"] ? path.directory? && (path / "Rakefile").file? && (path / "lib/adventure_finder_workspace.rb").file? : git_checkout?(path)
+      unless valid
+        err.puts "MISSING #{name}: invalid or missing suite root #{path}"
         return TestResult.new(
           name: name,
           command: command,
@@ -546,13 +582,38 @@ module AdventureFinderWorkspace
       pattern = /\b(\d+) runs, (\d+) assertions, (\d+) failures, (\d+) errors, (\d+) skips\b/
 
       results.each do |result|
-        result.output.to_s.scan(pattern) do |runs, assertions, failures, errors, skips|
-          totals[:runs] += Integer(runs)
-          totals[:assertions] += Integer(assertions)
-          totals[:failures] += Integer(failures)
-          totals[:errors] += Integer(errors)
-          totals[:skips] += Integer(skips)
+        summaries = []
+        worker_start = nil
+        aggregate_next = false
+        result.output.to_s.each_line do |line|
+          if aggregate_next && !line.strip.empty? && !line.match?(pattern)
+            err.puts "WARNING #{result.name}: worker aggregate summary missing; reporting observed subtotals"
+            worker_start = nil
+            aggregate_next = false
+          end
+          if line.match?(/^Running \d+ tests in \d+ isolated Ruby workers \(seed \d+\)/)
+            worker_start = summaries.length
+          elsif worker_start && line.match?(/^Finished in [\d.]+s across all workers\.$/)
+            aggregate_next = true
+          end
+          match = line.match(pattern)
+          next unless match
+
+          counts = match.captures.map { |value| Integer(value) }
+          if aggregate_next
+            # This explicit parent summary replaces only its worker subtotals.
+            # Independent invocations before/after this block remain additive.
+            workers = summaries.slice!(worker_start..-1)
+            worker_totals = Array.new(5) { |column| workers.sum { |worker| worker[column] } }
+            err.puts "WARNING #{result.name}: worker and aggregate test accounting differ" unless worker_totals == counts
+            worker_start = nil
+            aggregate_next = false
+          end
+          summaries << counts
         end
+        err.puts "WARNING #{result.name}: worker aggregate summary missing; reporting observed subtotals" if worker_start
+        err.puts "WARNING #{result.name}: no parseable Minitest summary; test counts unknown" if summaries.empty? && result.result != :missing
+        summaries.each { |counts| totals.keys.each_with_index { |key, column| totals[key] += counts[column] } }
       end
 
       totals
