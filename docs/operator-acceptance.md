@@ -35,26 +35,27 @@ bin/af-operator-acceptance --only ig19c-evidence-review-exceptions
 bin/af-operator-acceptance --only final-promotion
 ```
 
-## IG-19A admission diagnostic
+## IG-19A public entry proof
 
-The task-specific `ig19a-entry-contract` scenario is an admission diagnostic,
-not the continuous V2 journey. It invokes the real public `start` parser with
-source facts and scoring intent, without reconstructing internal policy paths
-or values. The current parser requires four additional policy arguments, so
-this scenario deliberately reports FAIL (class D, AdventureFinder ownership)
-and marks all downstream stages BLOCKED. It uses no source/workbook fixture,
-creates no operation, and grants no acceptance or promotion authority. A changed
-diagnostic reports BLOCKED for investigation rather than claiming the journey
-passed. Run it independently without any remote-capacity checkout.
+`ig19a-entry-contract` runs the public `af-catalog start` CLI against a
+disposable synthetic PDF and valid XLSX catalog. The existing IG-07C fixture
+supplies the supported fake converter IO; the scenario uses the pipeline's
+real read-only `af-ingest-next` routing command and AdventureFinder's durable
+operation store. It selects an explicit staged-scoring decline, so no policy
+definition, ID, version or JSON values are supplied at admission. Assertions
+cover the source and catalog byte bindings, attribution, conversion receipt,
+decline decision, exactly one operation, and two fresh-process resumes that
+leave durable evidence unchanged. Missing choices, missing policy authority,
+invalid source or catalog paths and conflicting choices fail before admission.
+The scenario needs the af-data-pipeline checkout and bundle, but no remote
+capacity component.
 
-This diagnostic preserves the IG-19A requirement for three meaningful decision
-episodes and zero manual intermediate commands. The narrower
-[staged-workload procedure](STAGED_WORKLOAD_PREPARATION_V0.1.md) still documents
-explicit path-based preparation and local-start authorization; those interfaces
-must not be silently automated by an acceptance-only driver to claim the
-three-episode target. Resolving the front-door composition requires a separately
-authorized owner task before a continuous production-shaped proof can replace
-this diagnostic. Component proofs below retain their individual scope.
+Its successful gate is `NEEDS_CANONICAL_MARKDOWN_PLACEMENT`. This proves entry,
+conversion handoff and restart/replay only; it does not approve a boundary,
+prepare or execute scoring, apply standing acceptance, or promote a catalog.
+The continuous three-decision V2 journey remains a separate proof. The
+[staged-workload procedure](STAGED_WORKLOAD_PREPARATION_V0.1.md) retains its
+explicit path-based preparation and local-start authority.
 
 ## Automatic local multi-model proof
 

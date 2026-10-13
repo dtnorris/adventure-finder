@@ -64,7 +64,11 @@ class OperatorAcceptanceTest < Minitest::Test
       test/rpof_campaign_cli_test.rb
       test/runpod_budget_guardian_test.rb
     ])
-    build_component(@pipeline, ["test/standing_bulk_score_release_test.rb", "bin/af-final-release-adoption"])
+    build_component(@pipeline, [
+      "test/standing_bulk_score_release_test.rb",
+      "bin/af-final-release-adoption",
+      "bin/af-ingest-next"
+    ])
     build_component(@scorer, ["bin/af-score"])
   end
 
@@ -186,6 +190,33 @@ class OperatorAcceptanceTest < Minitest::Test
       assert_equal "af-data-pipeline", scenario.bundle_repository
       assert_equal test_file, scenario.test_file
     end
+  end
+
+  def test_ig19a_entry_invokes_the_real_scenario_with_pipeline_bundle_and_offline_guard
+    scenario = AdventureFinderWorkspace::OperatorAcceptance::SCENARIOS.find do |entry|
+      entry.name == "ig19a-entry-contract"
+    end
+    refute_nil scenario
+    assert_equal "acceptance/ig19a_entry_contract.rb", scenario.test_file
+    assert_equal "af-data-pipeline", scenario.bundle_repository
+    assert_equal({"af-data-pipeline" => "bin/af-ingest-next"}, scenario.required_paths)
+
+    runner = Runner.new
+    harness = build_harness(runner:)
+    File.delete(File.join(@pipeline, "bin/af-ingest-next"))
+    error = assert_raises(AdventureFinderWorkspace::Error) do
+      harness.run(only: ["ig19a-entry-contract"])
+    end
+    assert_includes error.message, "acceptance public seam is missing"
+    assert_empty runner.calls
+    build_component(@pipeline, ["bin/af-ingest-next"])
+
+    assert harness.run(only: ["ig19a-entry-contract"])
+    call = runner.calls.fetch(0)
+    assert_equal ["bundle", "exec"], call.fetch(:argv).first(2)
+    assert_equal "acceptance/ig19a_entry_contract.rb", call.fetch(:argv).last
+    assert_equal File.join(@pipeline, "Gemfile"), call.dig(:env, "BUNDLE_GEMFILE")
+    assert_includes call.dig(:env, "RUBYOPT"), "offline_network_guard.rb"
   end
 
   def test_ig19c_exception_matrices_are_unbundled_front_door_scenarios

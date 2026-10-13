@@ -17,9 +17,11 @@ module AdventureFinderWorkspace
     SCENARIOS = [
       Scenario.new(
         name: "ig19a-entry-contract",
-        description: "IG-19A public entry admission diagnostic; downstream journey remains unproven",
+        description: "IG-19A public start, conversion receipt, durable binding and restart/replay",
         repository: "adventure-finder",
-        test_file: "acceptance/ig19a_entry_contract.rb"
+        test_file: "acceptance/ig19a_entry_contract.rb",
+        bundle_repository: "af-data-pipeline",
+        required_paths: {"af-data-pipeline" => "bin/af-ingest-next"}
       ),
       Scenario.new(
         name: "local-multi-model",
