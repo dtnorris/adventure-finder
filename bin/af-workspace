@@ -104,18 +104,22 @@ module AdventureFinderWorkspace
     end
 
     def test(manifest)
-      options = common_options(manifest).merge(fail_fast: false, jobs: 1)
+      options = common_options(manifest).merge(fail_fast: false, jobs: 1, comprehensive: false,
+        front_door_root: ENV.fetch("AF_ADVENTURE_FINDER_ROOT", File.expand_path("..", __dir__)))
       parser = OptionParser.new do |p|
         p.banner = "Usage: bin/af-workspace test [options]"
         add_selection_options(p, options)
+        p.on("--front-door-root PATH", "Detached front-door root (default: AF_ADVENTURE_FINDER_ROOT or this checkout)") { |v| options[:front_door_root] = v }
+        p.on("--comprehensive", "Also run offline cross-component operator acceptance") { options[:comprehensive] = true }
         p.on("-j N", "--jobs N", Integer, "Run up to N repository test suites concurrently (default: 1)") { |v| options[:jobs] = v }
         p.on("--fail-fast", "Stop after the first missing/failing suite (requires --jobs 1)") { options[:fail_fast] = true }
       end
       parser.parse!(@argv)
-      Workspace.new(manifest: manifest, root: options[:root], adjacent_root: options[:adjacent_root]).test(
+      Workspace.new(manifest: manifest, root: options[:root], adjacent_root: options[:adjacent_root], front_door_root: options[:front_door_root]).test(
         repos: selected(manifest, options),
         fail_fast: options[:fail_fast],
-        jobs: options[:jobs]
+        jobs: options[:jobs],
+        comprehensive: options[:comprehensive]
       ) ? 0 : 1
     end
 
@@ -255,7 +259,7 @@ module AdventureFinderWorkspace
           bin/af-workspace bootstrap [--setup] [--core|--all]
           bin/af-workspace status [--core|--all]
           bin/af-workspace sync [--core|--all]
-          bin/af-workspace test [-j N|--jobs N] [--fail-fast] [--core|--all]
+          bin/af-workspace test [-j N|--jobs N] [--fail-fast] [--comprehensive] [--core|--all]
           bin/af-workspace doctor [--strict] [--core|--all]
           bin/af-doctor job 39 JOB [--logs] [--lines N] [--json]
           bin/af-doctor pod POD [--logs] [--lines N] [--json]

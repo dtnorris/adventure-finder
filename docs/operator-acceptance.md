@@ -6,6 +6,20 @@ and HTTP guard from `test/support/offline_network_guard.rb`. Scenario state is k
 temporary directories. The harness neither starts Ollama nor makes inference or cloud
 provider calls.
 
+`bin/af-test --comprehensive` invokes this public entrypoint after component and
+front-door suites. When front-door `rake` succeeds, it passes
+`--covered-front-door`: `batch-front-door`, `local-capacity-bootstrap`, and
+`production-context` are equivalent unit files already included by rake and are
+reported `COVERED`, outside the executed scenario count. Use that option only
+with a successful rake result for the same checkout. Standalone acceptance runs
+all 24 scenarios by default; composed acceptance executes 21 and reuses three.
+The local execution and operator lifecycle scenarios retain separate process
+execution and bundle/environment contracts. Component-file scenarios and the
+exception matrices deliberately repeat selected owner tests under the harness's
+offline guard and credential-free child environment; suite execution alone does
+not establish that acceptance contract. This overlap is counted only in the
+acceptance phase, never added to component/front-door totals.
+
 Run the complete surface or the coherent lifecycle alone:
 
 ```bash

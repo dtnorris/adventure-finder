@@ -386,11 +386,34 @@ It **never** resets, stashes, commits, merges, rebases, force-updates, or pushes
 
 ### `bin/af-test`
 
-Run the repository-owned test suite for each current/default code repository:
+Run the ten configured current/default component commands and the detached
+front-door Ruby suite via plain `rake` (including its existing coverage gate):
 
 ```bash
 bin/af-test
 ```
+
+The component root is `AF_PROJECT_ROOT` or `--root`; the front-door root is
+independently `AF_ADVENTURE_FINDER_ROOT` or `--front-door-root`, otherwise this
+checkout. A missing or invalid front door fails without falling back to another
+checkout. Selected entries without test commands are labeled `UNCONFIGURED`,
+not passed or skipped. Normal runs do not execute cross-component acceptance.
+No ACT, production twin, or new data-integrity suite is selected.
+
+Request the combined offline test and acceptance surface explicitly:
+
+```bash
+bin/af-test --comprehensive
+```
+
+Component, front-door, and operator-acceptance phase results are reported
+separately; a missing or failed required phase fails the combined command.
+The public [operator harness](docs/operator-acceptance.md) retains its network
+guard, credential removal, fake providers, and disposable fixtures. Equivalent
+front-door unit scenarios are reported as covered without rerunning them;
+distinct process/integration and guarded component scenarios still execute.
+Acceptance counts remain separate from suite totals. Serial `--fail-fast` reports
+remaining suites and acceptance as unexecuted when an earlier suite fails.
 
 Cross-repository commands deliberately run in a **non-login shell** so they inherit the
 operator's active PATH (for example mise/asdf/Homebrew Ruby) instead of silently falling
@@ -405,6 +428,10 @@ convenience wrapper is `bin/af-test-4`:
 bin/af-test --jobs 4
 bin/af-test-4
 ```
+
+`bin/af-test-3` retains the three-job alias. An already installed global wrapper
+may point to that alias; inspect the installed wrapper to establish its job count
+and checkout independently of the serial repository default.
 
 When more than one repository test worker is active, `af-test` automatically
 marks child suites as contended. Runtime-gated repositories use that context to

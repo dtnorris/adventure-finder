@@ -53,6 +53,120 @@ class AdventureFinderWorkspaceTest < Minitest::Test
     )
   end
 
+  class RecordingRunner
+    attr_reader :calls
+
+    def initialize(fail_command: nil)
+      @calls = []
+      @fail_command = fail_command
+    end
+
+    def shell_capture(command, chdir:, env: {})
+      @calls << [command, chdir.to_s, env]
+      AdventureFinderWorkspace::CommandRunner::Result.new(
+        stdout: "2 runs, 3 assertions, 0 failures, 0 errors, 0 skips\n",
+        stderr: "", status: FakeStatus.new(command != @fail_command)
+      )
+    end
+  end
+
+  def test_default_and_comprehensive_use_detached_front_door_and_truthful_counts
+    Dir.mktmpdir do |dir|
+      components = File.join(dir, "components")
+      front = File.join(dir, "detached-front")
+      FileUtils.mkdir_p(File.join(front, "lib"))
+      FileUtils.mkdir_p(File.join(front, "bin"))
+      File.write(File.join(front, "Rakefile"), "")
+      File.write(File.join(front, "lib", "adventure_finder_workspace.rb"), "")
+      File.write(File.join(front, "bin", "af-operator-acceptance"), "")
+      configured = manifest.selected.select { |repo| repo["test"] }
+      assert_equal 10, configured.length
+      configured.each { |repo| FileUtils.mkdir_p(File.join(components, repo.fetch("name"), ".git")) }
+      runner = RecordingRunner.new
+      out = StringIO.new
+      workspace = AdventureFinderWorkspace::Workspace.new(manifest: manifest, root: components,
+        front_door_root: front, runner: runner, out: out, err: StringIO.new)
+      Dir.chdir(dir) { assert workspace.test(repos: manifest.selected) }
+      assert_equal configured.map { |repo| repo.fetch("test") } + ["rake"], runner.calls.map(&:first)
+      assert_equal front, runner.calls.last[1]
+      assert_equal components, runner.calls.last[2]["AF_PROJECT_ROOT"]
+      assert_equal front, runner.calls.last[2]["AF_ADVENTURE_FINDER_ROOT"]
+      assert_nil runner.calls.last[2]["BUNDLE_GEMFILE"]
+      refute File.exist?(File.join(front, "Gemfile"))
+      assert_includes out.string, "Unconfigured selected entries: 4"
+      assert_includes out.string, "11/11 suites passed."
+      assert_match(/^Total runs:\s+22$/, out.string)
+      assert_includes out.string, "Operator acceptance phase: NOT RUN"
+      assert workspace.test(repos: manifest.selected, comprehensive: true)
+      assert_equal 23, runner.calls.length
+      assert_equal "#{front}/bin/af-operator-acceptance --root #{components} --covered-front-door", runner.calls.last.first
+      assert_includes out.string, "Operator acceptance phase: PASS"
+      assert_equal 2, out.string.scan(/^Total runs:\s+22$/).length
+      # A runtime-gated component failure must not hide acceptance or become PASS.
+      failed_component = RecordingRunner.new(fail_command: configured.first.fetch("test"))
+      failed_out = StringIO.new
+      failed_workspace = AdventureFinderWorkspace::Workspace.new(manifest: manifest, root: components,
+        front_door_root: front, runner: failed_component, out: failed_out, err: StringIO.new)
+      refute failed_workspace.test(repos: manifest.selected, comprehensive: true)
+      assert_equal 12, failed_component.calls.length
+      assert_includes failed_out.string, "Component phase: 8/10 passed"
+      assert_includes failed_out.string, "Front-door phase: PASS"
+      assert_includes failed_out.string, "Operator acceptance phase: PASS"
+      FileUtils.rm_f(File.join(front, "bin", "af-operator-acceptance"))
+      refute failed_workspace.test(repos: [], comprehensive: true)
+      assert_includes failed_out.string, "Operator acceptance phase: MISSING"
+      File.write(File.join(front, "bin", "af-operator-acceptance"), "")
+      failing = RecordingRunner.new(fail_command: runner.calls.last.first)
+      workspace = AdventureFinderWorkspace::Workspace.new(manifest: manifest, root: components,
+        front_door_root: front, runner: failing, out: StringIO.new, err: StringIO.new)
+      refute workspace.test(repos: [], comprehensive: true)
+    end
+  end
+
+  def test_missing_front_door_and_serial_fail_fast_report_unexecuted_work
+    Dir.mktmpdir do |dir|
+      runner = RecordingRunner.new
+      out = StringIO.new
+      err = StringIO.new
+      workspace = AdventureFinderWorkspace::Workspace.new(manifest: manifest, root: dir,
+        front_door_root: File.join(dir, "absent"), runner: runner, out: out, err: err)
+      refute workspace.test(repos: [])
+      assert_empty runner.calls
+      assert_includes out.string, "Front-door phase: MISSING"
+      assert_includes err.string, "invalid or missing suite root"
+      refute workspace.test(repos: [{"name" => "missing", "test" => "bin/test"}],
+        fail_fast: true, comprehensive: true)
+      assert_includes out.string, "Unexecuted suites: adventure-finder"
+      assert_includes out.string, "Operator acceptance phase: NOT RUN (fail-fast)"
+      assert_empty runner.calls
+    end
+  end
+
+  def test_cli_front_door_environment_and_explicit_override_from_other_directory
+    Dir.mktmpdir do |dir|
+      front = File.join(dir, "front")
+      tools = File.join(dir, "tools")
+      FileUtils.mkdir_p(File.join(front, "lib"))
+      FileUtils.mkdir_p(tools)
+      File.write(File.join(front, "Rakefile"), "")
+      File.write(File.join(front, "lib", "adventure_finder_workspace.rb"), "")
+      fake_rake = File.join(tools, "rake")
+      File.write(fake_rake, "#!/bin/sh\nprintf '2 runs, 3 assertions, 0 failures, 0 errors, 0 skips\\n'\n")
+      File.chmod(0o755, fake_rake)
+      cli = File.expand_path("../bin/af-test", __dir__)
+      environment = {"AF_PROJECT_ROOT" => File.join(dir, "empty-components"),
+        "AF_ADVENTURE_FINDER_ROOT" => front, "PATH" => "#{tools}:#{ENV.fetch('PATH')}"}
+      output, status = Open3.capture2e(environment, cli, chdir: dir)
+      refute status.success?, "missing configured components must fail"
+      assert_includes output, "Front-door phase: PASS"
+      assert_includes output, "Unconfigured selected entries: 4"
+      output, status = Open3.capture2e(environment, cli, "--front-door-root", File.join(dir, "absent"), chdir: dir)
+      refute status.success?
+      assert_includes output, "Front-door phase: MISSING"
+      refute_includes output, "Front-door phase: PASS"
+    end
+  end
+
   def test_manifest_schema_and_unique_repository_names
     assert_equal "adventurefinder-workspace/v0.1", manifest.data["schema_version"]
     names = manifest.repositories.map { |repo| repo.fetch("name") }
@@ -226,9 +340,9 @@ class AdventureFinderWorkspaceTest < Minitest::Test
     runner_class = Class.new do
       attr_reader :env
 
-      def shell(_command, chdir:, env: {})
+      def shell_capture(_command, chdir:, env: {})
         @env = env
-        true
+        AdventureFinderWorkspace::CommandRunner::Result.new(stdout: "", stderr: "", status: AdventureFinderWorkspaceTest::FakeStatus.new(true))
       end
     end
 
@@ -248,7 +362,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
         err: StringIO.new
       )
 
-      assert workspace.test(repos: [repo])
+      assert workspace.test(include_front_door: false, repos: [repo])
       refute_includes runner.env, "AF_TEST_CONTENDED"
       assert_match(/^timed-suite\s+PASS\s+\d+\.\d{2}s$/, out.string)
       assert_match(/^1\/1 suites passed\.$/, out.string)
@@ -287,7 +401,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
         err: StringIO.new
       )
 
-      assert workspace.test(repos: repos, jobs: 3)
+      assert workspace.test(include_front_door: false, repos: repos, jobs: 3)
       assert_equal 3, runner.max_active
       assert runner.envs.all? { |env| env["AF_TEST_CONTENDED"] == "1" }
 
@@ -447,7 +561,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
         err: StringIO.new
       )
 
-      refute workspace.test(repos: repos, jobs: 2)
+      refute workspace.test(include_front_door: false, repos: repos, jobs: 2)
       assert_match(/^suite-a\s+PASS\s+\d+\.\d{2}s$/, out.string)
       assert_match(/^suite-b\s+FAIL\s+\d+\.\d{2}s$/, out.string)
       assert_match(/^suite-c\s+PASS\s+\d+\.\d{2}s$/, out.string)
@@ -492,6 +606,42 @@ class AdventureFinderWorkspaceTest < Minitest::Test
     assert_match(/^Total skips:\s+4$/, out.string)
   end
 
+  def test_worker_aggregate_replaces_twelve_subtotals_and_retains_independent_invocations
+    workers = 12.times.map do |index|
+      assertions = index == 11 ? 367 : 360
+      "Worker #{index + 1}:\nFinished in 15.0s\n41 runs, #{assertions} assertions, 0 failures, 0 errors, 0 skips\n"
+    end.join
+    captured = "Running 492 tests in 12 isolated Ruby workers (seed 123)\n#{workers}" \
+      "Finished in 15.000000s across all workers.\n492 runs, 4327 assertions, 0 failures, 0 errors, 0 skips\n"
+    err = StringIO.new
+    workspace = AdventureFinderWorkspace::Workspace.new(manifest: manifest, root: Dir.tmpdir,
+      out: StringIO.new, err: err)
+    result = AdventureFinderWorkspace::Workspace::TestResult.new(name: "af-data-pipeline", result: :pass, output: captured)
+    expected = {runs: 492, assertions: 4327, failures: 0, errors: 0, skips: 0}
+    assert_equal expected, workspace.send(:aggregate_minitest_totals, [result])
+    assert_empty err.string
+    independent = "2 runs, 7 assertions, 1 failures, 0 errors, 1 skips\n"
+    result.output = independent + captured + independent + captured
+    assert_equal({runs: 988, assertions: 8668, failures: 2, errors: 0, skips: 2},
+      workspace.send(:aggregate_minitest_totals, [result]))
+  end
+
+  def test_missing_or_unparseable_worker_aggregate_reports_observed_counts_and_warning
+    err = StringIO.new
+    workspace = AdventureFinderWorkspace::Workspace.new(manifest: manifest, root: Dir.tmpdir,
+      out: StringIO.new, err: err)
+    result = AdventureFinderWorkspace::Workspace::TestResult.new(name: "fixture", result: :fail,
+      output: "Running 2 tests in 1 isolated Ruby workers (seed 1)\nWorker 1:\n" \
+        "2 runs, 7 assertions, 0 failures, 0 errors, 0 skips\nFinished in 1.0s across all workers.\n" \
+        "unparseable\nRun options: --seed 2\n3 runs, 8 assertions, 0 failures, 0 errors, 1 skips\n")
+    assert_equal 5, workspace.send(:aggregate_minitest_totals, [result]).fetch(:runs)
+    assert_includes err.string, "worker aggregate summary missing"
+    result.output = "unparseable"
+    assert_equal 0, workspace.send(:aggregate_minitest_totals, [result]).fetch(:runs)
+    assert_includes err.string, "test counts unknown"
+    assert_equal :fail, result.result
+  end
+
   def test_parallel_cross_repo_tests_report_missing_repositories
     repos = [
       {"name" => "present-suite", "test" => "bin/test"},
@@ -511,7 +661,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
         err: StringIO.new
       )
 
-      refute workspace.test(repos: repos, jobs: 2)
+      refute workspace.test(include_front_door: false, repos: repos, jobs: 2)
       assert_match(/^missing-suite\s+MISSING\s+-$/, out.string)
       assert_match(/^1\/2 suites passed\.$/, out.string)
     end
@@ -526,10 +676,10 @@ class AdventureFinderWorkspaceTest < Minitest::Test
     )
 
     assert_raises(AdventureFinderWorkspace::Error) do
-      workspace.test(repos: [], jobs: 0)
+      workspace.test(include_front_door: false, repos: [], jobs: 0)
     end
     assert_raises(AdventureFinderWorkspace::Error) do
-      workspace.test(repos: [], jobs: 2, fail_fast: true)
+      workspace.test(include_front_door: false, repos: [], jobs: 2, fail_fast: true)
     end
   end
 

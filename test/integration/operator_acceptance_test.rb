@@ -97,6 +97,25 @@ class OperatorAcceptanceTest < Minitest::Test
     end
   end
 
+  def test_successful_front_door_reuses_only_equivalent_unit_scenarios
+    runner = Runner.new
+    out = StringIO.new
+    assert build_harness(runner: runner, out: out).run(covered_front_door: true)
+    expected_executed = AdventureFinderWorkspace::OperatorAcceptance::SCENARIOS.length - 3
+    assert_equal expected_executed, runner.calls.length
+    %w[batch-front-door local-capacity-bootstrap production-context].each do |name|
+      assert_includes out.string, "COVERED #{name}"
+    end
+    assert_includes out.string, "Acceptance summary: #{expected_executed}/#{expected_executed} scenarios passed"
+    files = runner.calls.map { |call| call.fetch(:argv).last }
+    assert_includes files, "test/integration/local_ingest_execution_test.rb"
+    assert_includes files, "test/integration/operator_lifecycle_test.rb"
+    runner.calls.each do |call|
+      assert_nil call.dig(:env, "RUNPOD_API_KEY")
+      assert_includes call.dig(:env, "RUBYOPT"), "offline_network_guard.rb"
+    end
+  end
+
   def test_local_multi_model_requires_real_component_seams_before_execution
     runner = Runner.new
     harness = build_harness(runner:)
