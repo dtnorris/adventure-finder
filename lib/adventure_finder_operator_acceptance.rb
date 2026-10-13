@@ -57,6 +57,28 @@ module AdventureFinderWorkspace
         }
       ),
       Scenario.new(
+        name: "ig19c-execution-exceptions",
+        description: "standing-ingestion eligibility, local capability, WLO execution, and explicit recovery matrix",
+        repository: "adventure-finder",
+        test_file: "acceptance/ig19c_execution_exception_matrix.rb",
+        required_paths: {
+          "local-ollama-workers" => "lib/local_ollama_workers/cli.rb",
+          "af-workloads" => "test/staged_selection_test.rb",
+          "workload-orchestrator" => "test/retry_test.rb"
+        }
+      ),
+      Scenario.new(
+        name: "ig19c-evidence-review-exceptions",
+        description: "current evidence, complete accounting, standing authority, and review-routing matrix",
+        repository: "adventure-finder",
+        test_file: "acceptance/ig19c_evidence_review_exception_matrix.rb",
+        required_paths: {
+          "af-workloads" => "test/workload_evidence_manifest_test.rb",
+          "af-data-pipeline" => "test/standing_bulk_score_release_test.rb",
+          "af-cli-scoring-utility" => "bin/af-score"
+        }
+      ),
+      Scenario.new(
         name: "wlo-multi-source-registry",
         description: "local-only, remote-only, mixed, namespace-preserving scheduling and scoped loss",
         repository: "workload-orchestrator",
@@ -233,7 +255,7 @@ module AdventureFinderWorkspace
 
     def resolve_roots
       registered = @manifest.repositories.to_h { |repository| [repository.fetch("name"), repository] }
-      %w[af-data-pipeline workload-orchestrator runpod-ollama-fleet].each do |name|
+      %w[af-data-pipeline workload-orchestrator runpod-ollama-fleet af-cli-scoring-utility].each do |name|
         raise Error, "acceptance component is not registered in repos.yml: #{name}" unless registered.key?(name)
       end
 
@@ -242,6 +264,7 @@ module AdventureFinderWorkspace
         "local-ollama-workers" => component_root("local-ollama-workers", "LOW_REPO_ROOT"),
         "af-workloads" => component_root("af-workloads", "AF_AFW_SOURCE_ROOT"),
         "af-data-pipeline" => component_root("af-data-pipeline", "AF_DATA_PIPELINE_ROOT"),
+        "af-cli-scoring-utility" => component_root("af-cli-scoring-utility", "AF_SCORER_ROOT"),
         "workload-orchestrator" => component_root("workload-orchestrator", "WLO_REPO_ROOT"),
         "runpod-ollama-fleet" => component_root("runpod-ollama-fleet", "RPOF_REPO_ROOT")
       }
@@ -297,6 +320,8 @@ module AdventureFinderWorkspace
         "AF_OPERATOR_ACCEPTANCE_OFFLINE" => "1",
         "BUNDLE_LOCKFILE" => nil,
         "AF_IG19B_PIPELINE_SOURCE_ROOT" => roots.fetch("af-data-pipeline"),
+        "AF_DATA_PIPELINE_ROOT" => roots.fetch("af-data-pipeline"),
+        "AF_SCORER_ROOT" => roots.fetch("af-cli-scoring-utility"),
         "WLO_REPO_ROOT" => roots.fetch("workload-orchestrator"),
         "LOW_REPO_ROOT" => roots.fetch("local-ollama-workers"),
         "AF_AFW_SOURCE_ROOT" => roots.fetch("af-workloads"),

@@ -34,10 +34,15 @@ class OperatorAcceptanceTest < Minitest::Test
     @wlo = File.join(@tmp, "workload-orchestrator")
     @rpof = File.join(@tmp, "runpod-ollama-fleet")
     @pipeline = File.join(@tmp, "af-data-pipeline")
+    @scorer = File.join(@tmp, "af-cli-scoring-utility")
     @low = File.join(@tmp, "local-ollama-workers")
     @afw = File.join(@tmp, "af-workloads")
     build_component(@low, ["lib/local_ollama_workers/cli.rb"])
-    build_component(@afw, ["test/support/afw_wlo_v0_3_contract.rb"])
+    build_component(@afw, %w[
+      test/support/afw_wlo_v0_3_contract.rb
+      test/staged_selection_test.rb
+      test/workload_evidence_manifest_test.rb
+    ])
     build_component(@wlo, %w[
       bin/wlo
       test/dynamic_cli_test.rb
@@ -57,7 +62,8 @@ class OperatorAcceptanceTest < Minitest::Test
       test/rpof_campaign_cli_test.rb
       test/runpod_budget_guardian_test.rb
     ])
-    build_component(@pipeline, ["bin/af-final-release-adoption"])
+    build_component(@pipeline, ["test/standing_bulk_score_release_test.rb", "bin/af-final-release-adoption"])
+    build_component(@scorer, ["bin/af-score"])
   end
 
   def teardown
@@ -72,7 +78,7 @@ class OperatorAcceptanceTest < Minitest::Test
     assert harness.run
     assert_equal AdventureFinderWorkspace::OperatorAcceptance::SCENARIOS.length, runner.calls.length
     assert_includes out.string, "Network/provider/inference access: blocked"
-    assert_includes out.string, "Acceptance summary: 22/22 scenarios passed"
+    assert_includes out.string, "Acceptance summary: 24/24 scenarios passed"
     assert_includes out.string, "Offline proof: fake providers only; inference calls: 0; paid resources: $0"
     runner.calls.each do |call|
       assert_nil call.dig(:env, "RUNPOD_API_KEY")
@@ -86,6 +92,8 @@ class OperatorAcceptanceTest < Minitest::Test
       assert_equal @afw, call.dig(:env, "AF_AFW_SOURCE_ROOT")
       assert_equal @rpof, call.dig(:env, "RPOF_REPO_ROOT")
       assert_equal @pipeline, call.dig(:env, "AF_IG19B_PIPELINE_SOURCE_ROOT")
+      assert_equal @pipeline, call.dig(:env, "AF_DATA_PIPELINE_ROOT")
+      assert_equal @scorer, call.dig(:env, "AF_SCORER_ROOT")
     end
   end
 
@@ -142,6 +150,21 @@ class OperatorAcceptanceTest < Minitest::Test
       refute_nil scenario
       assert_equal "adventure-finder", scenario.repository
       assert_equal "af-data-pipeline", scenario.bundle_repository
+      assert_equal test_file, scenario.test_file
+    end
+  end
+
+  def test_ig19c_exception_matrices_are_unbundled_front_door_scenarios
+    expected = {
+      "ig19c-execution-exceptions" => "acceptance/ig19c_execution_exception_matrix.rb",
+      "ig19c-evidence-review-exceptions" => "acceptance/ig19c_evidence_review_exception_matrix.rb"
+    }
+
+    expected.each do |name, test_file|
+      scenario = AdventureFinderWorkspace::OperatorAcceptance::SCENARIOS.find { |entry| entry.name == name }
+      refute_nil scenario
+      assert_equal "adventure-finder", scenario.repository
+      assert_nil scenario.bundle_repository
       assert_equal test_file, scenario.test_file
     end
   end
@@ -220,7 +243,7 @@ class OperatorAcceptanceTest < Minitest::Test
     refute harness.run
     assert_equal AdventureFinderWorkspace::OperatorAcceptance::SCENARIOS.length, runner.calls.length
     assert_includes err.string, "FAIL rpof-campaign-lifecycle"
-    assert_includes out.string, "Acceptance summary: 21/22 scenarios passed"
+    assert_includes out.string, "Acceptance summary: 23/24 scenarios passed"
   end
 
   def test_operator_lifecycle_uses_rpof_bundle_while_running_from_workspace_repo
@@ -255,6 +278,7 @@ class OperatorAcceptanceTest < Minitest::Test
       workspace_root: @tmp,
       component_roots: {
         "af-data-pipeline" => @pipeline,
+        "af-cli-scoring-utility" => @scorer,
         "local-ollama-workers" => @low,
         "af-workloads" => @afw,
         "workload-orchestrator" => @wlo,
