@@ -116,6 +116,7 @@ module AdventureFinderWorkspace
 
     def start(operation_id:, selected_by:, capability_plan:)
       paths = execution_paths(operation_id)
+      validate_operation_binding!(capability_plan, paths)
       intent = intent_store.capture!(
         operation_id:, selected_by:, capability_plan:,
         components: paths.fetch(:components), workdir: paths.fetch(:afw), output: paths.fetch(:output)
@@ -191,9 +192,9 @@ module AdventureFinderWorkspace
             fail_with("WLO_EXECUTION_GATE", action_message(action))
           end
 
-          step = step_for_start(capability_plan, state, report)
-          step ||= demanded_missing_step(capability_plan, operator_demand, report) if operator_demand
-          ensure_ready!(paths, capability_plan, step) if step
+          step = pending_step(capability_plan, report) if report
+          step ||= step_for_start(capability_plan, state, report)
+          ensure_ready!(paths, capability_plan, step, force: !report.nil?) if step
           command = report ? "resume" : "run"
           phase = command == "resume" ? "resuming" : "running"
           state = persist_state(paths, intent, state.merge("phase" => phase, "step" => step&.fetch("step")))
@@ -217,13 +218,16 @@ module AdventureFinderWorkspace
             if report.fetch("status") == "completed" && process_status.success?
               return finish_complete(intent, capability_plan, paths, report)
             end
-            if report.fetch("paused") && !report.fetch("executor_active") && state.fetch("phase") == "draining"
-              demands = demands(paths, capability_plan)
-              unless drained?(demands)
-                fail_with("LOCAL_TRANSITION_GATE", "WLO pause returned before public demand proved a drained execution")
+            if report.fetch("paused") && !report.fetch("executor_active")
+              if state.fetch("phase") == "draining"
+                demands = demands(paths, capability_plan)
+                unless drained?(demands)
+                  fail_with("LOCAL_TRANSITION_GATE", "WLO pause returned before public demand proved a drained execution")
+                end
+                persist_state(paths, intent, state.merge("phase" => "drained"))
+                return :drained
               end
-              persist_state(paths, intent, state.merge("phase" => "drained"))
-              return :drained
+              fail_with("OPERATOR_PAUSE", "WLO is operator-paused; continuing requires explicit operator authority")
             end
             fail_with("WLO_EXECUTION_GATE", "WLO exited #{status_detail(process_status)} with #{report.fetch('status')}")
           end
@@ -266,6 +270,10 @@ module AdventureFinderWorkspace
             next
           end
           if report.fetch("paused") && !%w[draining resuming].include?(state.fetch("phase"))
+            if report.fetch("executor_active")
+              @sleeper.call(@poll_interval)
+              next
+            end
             fail_with("OPERATOR_PAUSE", "WLO was paused outside this coordinator's transition")
           end
 
@@ -315,6 +323,13 @@ module AdventureFinderWorkspace
       nil
     end
 
+    def pending_step(capability_plan, report)
+      pools = report.fetch("pool_status").to_h { |row| [row.fetch("pool_id"), row] }
+      capability_plan.fetch("sequence").find do |step|
+        step.fetch("pool_ids").sum { |pool_id| pools.fetch(pool_id).dig("jobs", "pending") }.positive?
+      end
+    end
+
     def step_for_start(capability_plan, state, report)
       if %w[drained resuming].include?(state.fetch("phase"))
         return capability_plan.fetch("sequence").find { |row| row.fetch("step") == state.fetch("step") } ||
@@ -325,9 +340,9 @@ module AdventureFinderWorkspace
       capability_plan.fetch("sequence").first
     end
 
-    def ensure_ready!(paths, capability_plan, step)
+    def ensure_ready!(paths, capability_plan, step, force: false)
       snapshot = low_snapshot(paths)
-      return if ready_for_step?(snapshot, paths, capability_plan, step)
+      return if !force && ready_for_step?(snapshot, paths, capability_plan, step)
 
       capability = capability_for(capability_plan, step)
       request_path = request_path(paths, step)
@@ -478,6 +493,7 @@ module AdventureFinderWorkspace
 
     def validate_binding!(operation_id, capability_plan, intent)
       paths = execution_paths(operation_id)
+      validate_operation_binding!(capability_plan, paths)
       workload = capability_plan.fetch("workload")
       sequence_digest = LocalExecutionIntentStore.digest(
         "capabilities" => capability_plan.fetch("capabilities"), "sequence" => capability_plan.fetch("sequence")
@@ -497,6 +513,14 @@ module AdventureFinderWorkspace
       paths
     end
 
+    def validate_operation_binding!(capability_plan, paths)
+      operation = capability_plan.fetch("operation")
+      fail_with("STALE_LOCAL_EXECUTION", "operation-bound authority changed") unless
+        operation == paths.fetch(:operation_binding)
+    rescue KeyError, TypeError
+      fail_with("STALE_LOCAL_EXECUTION", "operation-bound authority is missing or invalid")
+    end
+
     def execution_paths(operation_id)
       afw = Pathname(env.fetch("AF_AFW_ROOT", project_root.join("af-workloads").to_s)).expand_path
       low = Pathname(env.fetch("LOW_REPO_ROOT", project_root.join("local-ollama-workers").to_s)).expand_path
@@ -514,6 +538,7 @@ module AdventureFinderWorkspace
       {
         afw:, low:, wlo:, coordination:, output:, plan:, plan_sha256: plan_sha,
         plan_id: preparation.fetch("workload_id"), consumer_id: consumer,
+        operation_binding: preparation.slice("operation_id", "intent_id", "authority_id"),
         worker_sources: coordination.join("worker-sources.yml"),
         state: coordination.join("state.json"), lock: coordination.join(".coordination.lock"),
         low_state: Pathname(env.fetch("LOW_STATE_ROOT", Pathname(Dir.home).join(".local/state/local-ollama-workers").to_s)).expand_path,

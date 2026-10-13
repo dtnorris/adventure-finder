@@ -30,6 +30,30 @@ checks one-worker exclusivity. Runtime observations contain only one resident mo
 at a time. LOW alone retains capability evidence and publishes snapshots, including
 legitimately retained capabilities; WLO alone retains dispatch and attempts.
 
+The scenario also runs the IG-15D interruption and recovery matrix. Fresh
+coordinator processes stop before the first capability request, during LOW
+establishment, after READY but before WLO launch, and after completed work but
+before the next capability request. Each restart reuses the same operation,
+plan, output and WLO consumer identity. The matrix additionally exercises a
+public operator pause, foreground cancellation with an unrelated sentinel,
+detached WLO owner loss, selected retry and a tripped breaker. Faults target
+only fixture-owned processes; no LOW or WLO retained file is edited to produce
+a recovery state.
+
+| Checkpoint | Required public result | Explicit next action |
+|---|---|---|
+| Before the first capability request | No WLO execution exists; resume reconstructs the first LOW bootstrap. | `bin/af-catalog local-resume OPERATION` |
+| During LOW establishment | No READY evidence is assumed from process exit or partial runtime mutation; resume re-observes and bootstraps. | `bin/af-catalog local-resume OPERATION` |
+| READY before WLO launch | The retained intent and exact READY publication are reused; one WLO execution is launched. | `bin/af-catalog local-resume OPERATION` |
+| WLO active | A second driver is refused or observes the public active owner; it never launches a duplicate execution. | Observe with `bin/af-catalog local-status OPERATION`. |
+| Completed work before a capability change | Completed attempts remain byte-identical and at attempt 1; current LOW generation/readiness determines the next transition. | `bin/af-catalog local-resume OPERATION` |
+| Intentional operator pause | A zero exit and `paused` report remain `OPERATOR_PAUSE`; ordinary resume does not clear it. | After review, `bin/af-catalog local-resume OPERATION --continue-operator-pause`. |
+| Foreground SIGINT/SIGTERM | WLO retains interrupted evidence and cancels only its process groups. Ordinary resume remains blocked. | Inspect WLO recovery evidence, then select exact jobs with `bin/wlo retry-failed PLAN --workdir WORKDIR --output OUTPUT --job JOB --reason REASON`. |
+| One failed or interrupted job | Retry authorization archives the prior attempt and queues only the selected job; it does not execute it. | Run the reviewed `retry-failed` command, then explicitly continue the paused local execution. |
+| Circuit breaker | Retry without `--acknowledge-circuit-breaker` is rejected without mutation. | A separately authorized retry must add `--acknowledge-circuit-breaker`; ordinary local resume never supplies it. |
+| Detached WLO manager loss | Running attempts are reported as orphaned/uncertain; neither the coordinator nor a zero exit claims cleanup. | Inspect public WLO status/recovery evidence and resolve the WLO-owned recovery gate before any retry. |
+| Changed operation authority, plan, sequence, request or output locator | Reuse fails with `STALE_LOCAL_EXECUTION`; no replacement workload or output is invented. | Return to the bound preparation; create a separately authorized operation only if the underlying intent truly changed. |
+
 The scenario emits a JSON evidence line binding the operation, plan, sequence,
 consumer, safe transition observations, LOW registry hashes/revisions, and all
 successful attempts. Disposable artifacts are inspected read-only and removed.

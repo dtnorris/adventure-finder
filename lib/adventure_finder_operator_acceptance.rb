@@ -17,7 +17,7 @@ module AdventureFinderWorkspace
     SCENARIOS = [
       Scenario.new(
         name: "local-multi-model",
-        description: "IG-15C3 one-worker LOW publication and retained WLO capability transition proof",
+        description: "IG-15C3/IG-15D one-worker capability transition, interruption and explicit recovery proof",
         repository: "adventure-finder",
         test_file: "test/integration/local_ingest_execution_test.rb",
         required_paths: {
@@ -291,8 +291,7 @@ module AdventureFinderWorkspace
         "LOW_REPO_ROOT" => roots.fetch("local-ollama-workers"),
         "AF_AFW_SOURCE_ROOT" => roots.fetch("af-workloads"),
         "RPOF_REPO_ROOT" => roots.fetch("runpod-ollama-fleet"),
-        "RUBYOPT" => rubyopt,
-        "BUNDLE_LOCKFILE" => nil
+        "RUBYOPT" => rubyopt
       )
       bundle_repository = scenario.bundle_repository ||
                           (scenario.repository unless scenario.repository == "adventure-finder")
