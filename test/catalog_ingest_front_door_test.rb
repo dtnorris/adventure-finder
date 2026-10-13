@@ -96,6 +96,99 @@ class CatalogIngestFrontDoorTest < Minitest::Test
     refute File.exist?(operation_root)
   end
 
+  def test_public_prepare_resolves_exact_policy_without_internal_options
+    policy_path = staged_policy
+    args = start_arguments_without_policy + ["--prepare-staged-scoring"]
+    stdout, stderr, status = run_catalog(*args)
+
+    assert status.success?, stderr
+    assert_includes stdout, "Operation handle: #{ID}"
+    assert_equal 1, revision_document(1).fetch("revision")
+    assert_equal({
+      "policy_id" => "approved-new-records",
+      "policy_version" => "1",
+      "definition_sha256" => Digest::SHA256.file(policy_path).hexdigest,
+      "selected_values" => {"selection" => "afw-qualified-default"},
+      "selected_by" => "David"
+    }, revision_document(0).fetch("policy").except("selected_at"))
+    assert_equal "prepare", JSON.parse(File.binread(scoring_decision_path)).fetch("choice")
+    before = operation_snapshot
+
+    _stdout, resume_err, resumed = run_catalog("resume", ID)
+    assert resumed.success?, resume_err
+    assert_equal before, operation_snapshot
+    refute File.exist?(@forbidden_log)
+  end
+
+  def test_source_facts_without_policy_or_scoring_choice_need_one_explicit_decision
+    _stdout, stderr, status = run_catalog(*start_arguments_without_policy)
+    refute status.success?
+    assert_includes stderr, "MISSING_CHOICE"
+    assert_includes stderr, "--prepare-staged-scoring"
+    refute File.exist?(operation_root)
+    refute File.exist?(@converter_log)
+  end
+
+  def test_missing_or_incompatible_policy_authority_refuses_before_operation
+    args = start_arguments_without_policy + ["--prepare-staged-scoring"]
+    _stdout, missing_err, missing = run_catalog(*args)
+    refute missing.success?
+    assert_includes missing_err, "SCORING_POLICY_MISSING"
+    refute File.exist?(operation_root)
+
+    path = staged_policy
+    File.binwrite(path, JSON.generate(JSON.parse(File.binread(path)).merge("status" => "REVOKED")))
+    _stdout, changed_err, changed = run_catalog(*args)
+    refute changed.success?
+    assert_includes changed_err, "SCORING_POLICY_MISMATCH"
+    refute File.exist?(operation_root)
+    refute File.exist?(@converter_log)
+
+    staged_policy
+    File.binwrite(path, File.binread(path).sub(
+      '"policy_id":"approved-new-records"',
+      '"policy_id":"approved-new-records","policy_id":"approved-new-records"'
+    ))
+    _stdout, duplicate_err, duplicate = run_catalog(*args)
+    refute duplicate.success?
+    assert_includes duplicate_err, "SCORING_POLICY_MISMATCH"
+    refute File.exist?(operation_root)
+  end
+
+  def test_partial_and_conflicting_explicit_policy_inputs_fail_before_operation
+    staged_policy
+    args = start_arguments_without_policy + ["--prepare-staged-scoring"]
+    _stdout, partial_err, partial = run_catalog(*(args + ["--policy-id", "approved-new-records"]))
+    refute partial.success?
+    assert_includes partial_err, "MISSING_CHOICE"
+    refute File.exist?(operation_root)
+
+    _stdout, conflict_err, conflict = run_catalog(*(start_arguments + ["--prepare-staged-scoring"]))
+    refute conflict.success?
+    assert_includes conflict_err, "SCORING_POLICY_MISMATCH"
+    refute File.exist?(operation_root)
+  end
+
+  def test_policy_change_after_public_prepare_blocks_resume_without_rebinding
+    path = staged_policy
+    _stdout, start_err, started = run_catalog(*(start_arguments_without_policy + ["--prepare-staged-scoring"]))
+    assert started.success?, start_err
+    policy_before = revision_document(0).fetch("policy")
+    File.binwrite(path, JSON.generate(JSON.parse(File.binread(path)).merge("selection" => "different")))
+    _stdout, resume_err, resumed = run_catalog("resume", ID)
+    refute resumed.success?
+    assert_includes resume_err, "SCORING_POLICY_MISMATCH"
+    assert_equal policy_before, revision_document(0).fetch("policy")
+    assert_equal 1, File.readlines(@converter_log).length
+  end
+
+  def test_explicit_decline_needs_no_inert_policy
+    _stdout, stderr, status = run_catalog(*(start_arguments_without_policy + ["--decline-staged-scoring"]))
+    assert status.success?, stderr
+    assert_nil revision_document(0).fetch("policy")
+    assert_equal "decline", JSON.parse(File.binread(scoring_decision_path)).fetch("choice")
+  end
+
   def test_local_execution_commands_require_explicit_authority_and_exact_handles
     _stdout, stderr, status = dispatch_catalog("local-start", ID)
     assert_equal 1, status
@@ -278,6 +371,8 @@ class CatalogIngestFrontDoorTest < Minitest::Test
     arguments[arguments.index(@policy)] = policy
     arguments[arguments.index("standard-scoring-execution")] = "approved-new-records"
     arguments[arguments.index("v0.1")] = "1"
+    arguments[arguments.index(JSON.generate("profile" => "standard", "execution" => "deferred"))] =
+      JSON.generate("selection" => "afw-qualified-default")
     arguments << "--prepare-staged-scoring"
 
     _stdout, stderr, status = run_catalog(*arguments)
@@ -341,6 +436,31 @@ class CatalogIngestFrontDoorTest < Minitest::Test
       "--policy-values", JSON.generate("profile" => "standard", "execution" => "deferred"),
       "--selected-by", "David"
     ]
+  end
+
+  def start_arguments_without_policy
+    args = start_arguments
+    %w[--policy-definition --policy-id --policy-version --policy-values].each do |flag|
+      index = args.index(flag)
+      args.slice!(index, 2)
+    end
+    args
+  end
+
+  def staged_policy
+    write(
+      File.join(@pipeline, "config", "staged_scoring_input_policy_v0.1.json"),
+      JSON.generate(
+        "schema_version" => "af-staged-scoring-input-policy/v0.1",
+        "policy_id" => "approved-new-records", "policy_version" => "1",
+        "scope" => "operation-approved-new-records", "selection" => "afw-qualified-default",
+        "permissions" => %w[scoring_input workload_preparation]
+      )
+    )
+  end
+
+  def scoring_decision_path
+    File.join(@front, "output", "staged-scoring-intents", "v0.1", ID, "decision.json")
   end
 
   def run_catalog(*arguments)

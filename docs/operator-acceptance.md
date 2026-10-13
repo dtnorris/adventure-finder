@@ -14,12 +14,34 @@ bin/af-operator-acceptance --only local-multi-model
 bin/af-operator-acceptance --only operator-lifecycle
 bin/af-operator-acceptance --only batch-front-door
 bin/af-operator-acceptance --only audited-recovery
+bin/af-operator-acceptance --only ig19a-entry-contract
 bin/af-operator-acceptance --only ig19b-source-exceptions
 bin/af-operator-acceptance --only ig19b-boundary-exceptions
 bin/af-operator-acceptance --only ig19c-execution-exceptions
 bin/af-operator-acceptance --only ig19c-evidence-review-exceptions
 bin/af-operator-acceptance --only final-promotion
 ```
+
+## IG-19A admission diagnostic
+
+The task-specific `ig19a-entry-contract` scenario is an admission diagnostic,
+not the continuous V2 journey. It invokes the real public `start` parser with
+source facts and scoring intent, without reconstructing internal policy paths
+or values. The current parser requires four additional policy arguments, so
+this scenario deliberately reports FAIL (class D, AdventureFinder ownership)
+and marks all downstream stages BLOCKED. It uses no source/workbook fixture,
+creates no operation, and grants no acceptance or promotion authority. A changed
+diagnostic reports BLOCKED for investigation rather than claiming the journey
+passed. Run it independently without any remote-capacity checkout.
+
+This diagnostic preserves the IG-19A requirement for three meaningful decision
+episodes and zero manual intermediate commands. The narrower
+[staged-workload procedure](STAGED_WORKLOAD_PREPARATION_V0.1.md) still documents
+explicit path-based preparation and local-start authorization; those interfaces
+must not be silently automated by an acceptance-only driver to claim the
+three-episode target. Resolving the front-door composition requires a separately
+authorized owner task before a continuous production-shaped proof can replace
+this diagnostic. Component proofs below retain their individual scope.
 
 ## Automatic local multi-model proof
 

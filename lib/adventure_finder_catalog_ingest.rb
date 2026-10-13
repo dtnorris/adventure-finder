@@ -24,6 +24,14 @@ module AdventureFinderWorkspace
     SOURCE_CONTEXT_VERSION = "adventurefinder-catalog-ingest-context/v0.2"
     RECEIPT_VERSION = "pdf-to-llm-md/conversion-receipt/v0.1"
     CONTEXT_ROOTS = IngestOperation::ROOTS.sort.freeze
+    STAGED_SCORING_POLICY = {
+      "schema_version" => "af-staged-scoring-input-policy/v0.1",
+      "policy_id" => "approved-new-records",
+      "policy_version" => "1",
+      "scope" => "operation-approved-new-records",
+      "selection" => "afw-qualified-default",
+      "permissions" => %w[scoring_input workload_preparation]
+    }.freeze
 
     class Failure < Error
       attr_reader :code, :status
@@ -32,6 +40,14 @@ module AdventureFinderWorkspace
         @code = code
         @status = status
         super("#{code}: #{message}")
+      end
+    end
+
+    class UniquePolicyObject < Hash
+      def []=(key, value)
+        raise Failure.new("SCORING_POLICY_MISMATCH", "duplicate staged-scoring policy key") if key?(key)
+
+        super
       end
     end
 
@@ -44,27 +60,20 @@ module AdventureFinderWorkspace
       @env = env
     end
 
-    def start(pdf:, base_catalog:, source_declaration:, policy_definition:, policy_id:,
-              policy_version:, policy_values:, selected_by:, operation_id: SecureRandom.uuid,
+    def start(pdf:, base_catalog:, source_declaration:, policy_definition: nil, policy_id: nil,
+              policy_version: nil, policy_values: nil, selected_by:, operation_id: SecureRandom.uuid,
               canonical_destination: nil, scoring_choice: nil)
       input = required_file(pdf, "input PDF")
       fail_with("UNSUPPORTED_INPUT", "input must be a .pdf file") unless input.extname.casecmp?(".pdf")
       catalog = required_file(base_catalog, "base catalog")
-      policy_path = required_file(policy_definition, "policy definition")
       selected_at = utc_now
       context = build_context(operation_id, input:, catalog:, canonical_destination:)
+      policy = start_policy(context, policy_definition:, policy_id:, policy_version:,
+                            policy_values:, scoring_choice:, selected_by:, selected_at:)
       store = store_for(context)
       choices = source_declaration.to_h do |key, value|
         [key, choice(value, selected_by:, selected_at:)]
       end
-      policy = {
-        "policy_id" => required_text(policy_id, "policy ID"),
-        "policy_version" => required_text(policy_version, "policy version"),
-        "definition_sha256" => Digest::SHA256.file(policy_path).hexdigest,
-        "selected_values" => policy_values,
-        "selected_by" => required_text(selected_by, "selected by"),
-        "selected_at" => selected_at
-      }
 
       operation = store.create(
         operation_id:,
@@ -104,17 +113,34 @@ module AdventureFinderWorkspace
       result["status"] == "REJECTED" ? 2 : 0
     rescue IngestOperationStore::Failure => e
       fail_with(e.code, e.message.sub(/\A[^:]+: /, ""))
+    rescue StagedScoringIntentStore::Failure => e
+      fail_with(e.code, e.message.sub(/\A[^:]+: /, ""))
     end
 
     def resume(operation_id, scoring_choice: nil, selected_by: nil)
       context = load_context(operation_id)
       store = store_for(context)
+      routing = routing_for(store, context)
+      inspection = routing.source_continuation_input(operation_id)
+      if inspection.is_a?(Hash) && inspection["status"] == "REJECTED"
+        routing.render(inspection, out:)
+        return 2
+      end
+      # The public decision validator checks the frozen policy definition and
+      # intent again, even when this invocation makes no new decision.
+      begin
+        scoring_intent_store_for(context, store).decision(operation_id)
+      rescue StagedScoringIntentStore::Failure => e
+        raise unless e.code == "MISSING_SCORING_INTENT"
+      end
       capture_scoring_choice!(context, store, operation_id, scoring_choice,
                               selected_by:, interaction: "post_boundary_resume") if scoring_choice
       result = continue_or_route(store, context, operation_id)
       routing_for(store, context).render(result, out:)
       result["status"] == "REJECTED" ? 2 : 0
     rescue IngestOperationStore::Failure => e
+      fail_with(e.code, e.message.sub(/\A[^:]+: /, ""))
+    rescue StagedScoringIntentStore::Failure => e
       fail_with(e.code, e.message.sub(/\A[^:]+: /, ""))
     end
 
@@ -317,6 +343,57 @@ module AdventureFinderWorkspace
           "config", "staged_scoring_input_policy_v0.1.json"
         )
       )
+    end
+
+    def start_policy(context, policy_definition:, policy_id:, policy_version:,
+                     policy_values:, scoring_choice:, selected_by:, selected_at:)
+      supplied = [policy_definition, policy_id, policy_version, policy_values]
+      if supplied.all?(&:nil?)
+        return nil if scoring_choice == "decline"
+        fail_with("MISSING_CHOICE", "select --prepare-staged-scoring or supply an explicit policy") unless
+          scoring_choice == "prepare"
+        policy_definition, definition = staged_scoring_policy(context)
+        policy_id = definition.fetch("policy_id")
+        policy_version = definition.fetch("policy_version")
+        policy_values = {"selection" => definition.fetch("selection")}
+      elsif supplied.any?(&:nil?)
+        fail_with("MISSING_CHOICE", "supply all four explicit policy fields or none")
+      end
+
+      path = required_file(policy_definition, "policy definition")
+      policy = {
+        "policy_id" => required_text(policy_id, "policy ID"),
+        "policy_version" => required_text(policy_version, "policy version"),
+        "definition_sha256" => Digest::SHA256.file(path).hexdigest,
+        "selected_values" => policy_values,
+        "selected_by" => required_text(selected_by, "selected by"),
+        "selected_at" => selected_at
+      }
+      if scoring_choice == "prepare"
+        expected_path, definition = staged_scoring_policy(context)
+        expected_values = {"selection" => definition.fetch("selection")}
+        unless policy.slice("policy_id", "policy_version", "definition_sha256", "selected_values") == {
+          "policy_id" => definition.fetch("policy_id"),
+          "policy_version" => definition.fetch("policy_version"),
+          "definition_sha256" => Digest::SHA256.file(expected_path).hexdigest,
+          "selected_values" => expected_values
+        }
+          fail_with("SCORING_POLICY_MISMATCH", "explicit policy conflicts with the selected staged-scoring authority")
+        end
+      end
+      policy
+    end
+
+    def staged_scoring_policy(context)
+      path = Pathname(context.fetch("pipeline_root")).join("config", "staged_scoring_input_policy_v0.1.json")
+      fail_with("SCORING_POLICY_MISSING", "restore the supported staged-scoring policy definition") unless path.file?
+      definition = JSON.parse(File.binread(path), object_class: UniquePolicyObject)
+      unless definition == STAGED_SCORING_POLICY
+        fail_with("SCORING_POLICY_MISMATCH", "restore the exact supported staged-scoring policy definition")
+      end
+      [path, definition]
+    rescue JSON::ParserError, SystemCallError
+      fail_with("SCORING_POLICY_MISMATCH", "staged-scoring policy authority is unreadable")
     end
 
     def capture_scoring_choice!(context, store, operation_id, choice, selected_by:, interaction:)
@@ -571,7 +648,7 @@ module AdventureFinderWorkspace
 
   class CatalogIngestCLI
     REQUIRED_START_OPTIONS = %i[source_id edition pagination_authority publisher base_catalog
-                                policy_definition policy_id policy_version policy_values selected_by].freeze
+                                selected_by].freeze
 
     def self.run(argv, front_door_root:, project_root:, out: $stdout, err: $stderr, env: ENV)
       command = argv.shift

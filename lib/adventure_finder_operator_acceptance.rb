@@ -16,6 +16,12 @@ module AdventureFinderWorkspace
 
     SCENARIOS = [
       Scenario.new(
+        name: "ig19a-entry-contract",
+        description: "IG-19A public entry admission diagnostic; downstream journey remains unproven",
+        repository: "adventure-finder",
+        test_file: "acceptance/ig19a_entry_contract.rb"
+      ),
+      Scenario.new(
         name: "local-multi-model",
         description: "IG-15C3/IG-15D one-worker capability transition, interruption and explicit recovery proof",
         repository: "adventure-finder",
