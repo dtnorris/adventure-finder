@@ -5,6 +5,7 @@ require "fileutils"
 require "json"
 require "minitest/autorun"
 require "open3"
+require "rbconfig"
 require "stringio"
 require "timeout"
 require "tmpdir"
@@ -106,6 +107,53 @@ class LocalIngestExecutionTest < Minitest::Test
     end
   end
 
+  # Stops one fresh coordinator at an exact public command boundary. The
+  # process exits without unwinding so the following invocation must rebuild
+  # its next action from durable component facts.
+  class ExitBeforeCommandRunner < PublicReadRunner
+    def initialize(marker:, executable:, command:, occurrence: 1)
+      @marker = marker
+      @executable = executable
+      @command = command
+      @occurrence = occurrence
+      @observed = 0
+    end
+
+    def capture(environment, *argv, chdir:)
+      if File.basename(argv.first) == @executable && argv[1] == @command
+        @observed += 1
+        if @observed == @occurrence
+          File.write(@marker, JSON.generate("argv" => argv, "chdir" => chdir))
+          exit! 73
+        end
+      end
+      super
+    end
+  end
+
+  class ExitBeforeSpawnRunner < PublicReadRunner
+    def initialize(marker:)
+      @marker = marker
+    end
+
+    def spawn(_environment, *argv, chdir:, **)
+      File.write(@marker, JSON.generate("argv" => argv, "chdir" => chdir))
+      exit! 74
+    end
+  end
+
+  class RecordingSpawnRunner < PublicReadRunner
+    def initialize(marker:)
+      @marker = marker
+    end
+
+    def spawn(environment, *argv, **options)
+      handle = super
+      File.write(@marker, handle.pid.to_s)
+      handle
+    end
+  end
+
   ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
   WORKLOAD = "operation-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
   MODEL_A = "fixture-a:latest"
@@ -132,7 +180,10 @@ class LocalIngestExecutionTest < Minitest::Test
     write_job_fixture
     # The end-to-end case proves four retained attempts and ordering. Other
     # scenarios need one real job per capability to exercise transitions.
-    full_workload = name == "test_real_low_and_wlo_public_seams_complete_two_capabilities_in_one_execution"
+    full_workload = [
+      "test_real_low_and_wlo_public_seams_complete_two_capabilities_in_one_execution",
+      "test_breaker_requires_separate_explicit_acknowledgement"
+    ].include?(name)
     @barrier_mode = full_workload
     write_workload(jobs_per_pool: full_workload ? 2 : 1)
     if @barrier_mode
@@ -237,6 +288,8 @@ class LocalIngestExecutionTest < Minitest::Test
   def test_foreground_interrupt_reaches_wlo_and_retains_interrupted_evidence
     log = File.join(@afw, "job-order.log")
     output = File.join(@front, "output/local-ingest-executions/v0.1", ID, "wlo")
+    sentinel = Process.spawn(RbConfig.ruby, "-e", "sleep 30", pgroup: true,
+                             out: File::NULL, err: File::NULL)
     pid = fork do
       ENV["LOCAL_FIXTURE_JOB_SLEEP"] = "30"
       begin
@@ -265,10 +318,28 @@ class LocalIngestExecutionTest < Minitest::Test
     assert_equal "interrupted", execution.fetch("status")
     assert jobs.any? { |row| row.fetch("status") == "interrupted" }
     assert_equal "INT", execution.dig("interruption", "signal")
+    assert process_alive?(sentinel), "foreground cancellation reached an unrelated sentinel"
+
+    before = retained_output_files
+    code, stdout, stderr = public_wlo(
+      "action-check", @plan_path, "--workdir", @afw, "--output", output,
+      "--action", "resume", "--json"
+    )
+    assert_equal 0, code, stderr
+    assert_equal "interrupted_attempts", JSON.parse(stdout).fetch("reason")
+    error = assert_raises(AdventureFinderWorkspace::LocalExecution::Failure) do
+      coordinator.resume(operation_id: ID, capability_plan: @capability_plan)
+    end
+    assert_equal "WLO_EXECUTION_GATE", error.code
+    assert_equal before, retained_output_files
   ensure
     if pid
       Process.kill("TERM", pid) rescue Errno::ESRCH
       Process.waitpid(pid) rescue Errno::ECHILD
+    end
+    if sentinel
+      Process.kill("TERM", -sentinel) rescue Errno::ESRCH
+      Process.waitpid(sentinel) rescue Errno::ECHILD
     end
   end
 
@@ -449,6 +520,265 @@ class LocalIngestExecutionTest < Minitest::Test
     end
   end
 
+  def test_fresh_process_restart_before_first_capability_request_reconstructs_bootstrap
+    marker = File.join(@root, "before-first-bootstrap.json")
+    runner = ExitBeforeCommandRunner.new(
+      marker:, executable: "low", command: "bootstrap"
+    )
+
+    assert_equal 73, coordinator_process(:start, runner:).exitstatus
+    assert File.file?(marker)
+    refute File.exist?(File.join(@low_state, "runtime.json"))
+    refute File.exist?(File.join(execution_paths.fetch(:output), "execution.json"))
+
+    assert_equal 0, coordinator_process(:resume).exitstatus
+    assert_completed_once
+  end
+
+  def test_fresh_process_restart_after_ready_before_wlo_start_preserves_identity
+    marker = File.join(@root, "before-wlo-spawn.json")
+
+    assert_equal 74, coordinator_process(:start, runner: ExitBeforeSpawnRunner.new(marker:)).exitstatus
+    assert File.file?(marker)
+    assert File.file?(File.join(@low_state, "local-capability-evidence-v1.json"))
+    refute File.exist?(File.join(execution_paths.fetch(:output), "execution.json"))
+    intent_before = File.binread(intent_path)
+
+    assert_equal 0, coordinator_process(:resume).exitstatus
+    assert_equal intent_before, File.binread(intent_path)
+    assert_completed_once
+  end
+
+  def test_interrupted_capability_establishment_restarts_from_public_low_facts
+    fifo = File.join(@root, "establishment.fifo")
+    File.mkfifo(fifo)
+    pid = coordinator_process(
+      :start, wait: false,
+      environment: {"LOW_FIXTURE_ESTABLISHMENT_FIFO" => fifo}
+    )
+    await_file("#{fifo}.started")
+    low_pid = Integer(File.binread("#{fifo}.started"))
+
+    Process.kill("KILL", pid)
+    assert_equal 9, Process.waitpid2(pid).last.termsig
+    Process.kill("TERM", low_pid)
+    await { !process_alive?(low_pid) }
+    refute File.exist?(File.join(@low_state, "local-capability-evidence-v1.json"))
+    refute File.exist?(File.join(execution_paths.fetch(:output), "execution.json"))
+
+    assert_equal 0, coordinator_process(:resume).exitstatus
+    assert_completed_once
+  ensure
+    signal_process("KILL", pid)
+    signal_process("KILL", low_pid)
+  end
+
+  def test_restart_after_completed_work_reconciles_generation_change_without_replay
+    marker = File.join(@root, "before-second-bootstrap.json")
+    runner = ExitBeforeCommandRunner.new(
+      marker:, executable: "low", command: "bootstrap", occurrence: 2
+    )
+
+    first = coordinator_process(
+      :start, runner:, environment: {"LOW_FIXTURE_GENERATION" => "fixture-generation-1"}
+    )
+    assert_equal 73, first.exitstatus
+    assert File.file?(marker)
+    before = retained_job("a-1")
+    assert_equal "complete", before.fetch("status")
+    assert_equal 1, before.fetch("attempt")
+    assert_equal "fixture-generation-1", before.dig("worker_execution_identity", "generation_id")
+
+    second = coordinator_process(
+      :resume, environment: {"LOW_FIXTURE_GENERATION" => "fixture-generation-2"}
+    )
+    assert_equal 0, second.exitstatus
+    after = retained_job("a-1")
+    assert_equal before, after
+    assert_equal "fixture-generation-2", retained_job("b-1").dig("worker_execution_identity", "generation_id")
+    assert_completed_once
+  end
+
+  def test_public_operator_pause_remains_a_gate_until_explicit_continue
+    result_path = File.join(@root, "operator-pause-result.txt")
+    pid = fork do
+      ENV["LOCAL_FIXTURE_JOB_SLEEP"] = "1"
+      begin
+        coordinator.start(operation_id: ID, selected_by: "David", capability_plan: @capability_plan)
+        exit! 0
+      rescue AdventureFinderWorkspace::LocalExecution::Failure => e
+        File.write(result_path, e.code)
+        exit! 75
+      end
+    end
+    await_file(File.join(@afw, "job-order.log"))
+    code, _stdout, stderr = public_wlo("pause", "--output", execution_paths.fetch(:output))
+    assert_equal 0, code, stderr
+    assert_equal 75, Timeout.timeout(10) { Process.waitpid2(pid).last.exitstatus }
+    pid = nil
+    assert_equal "OPERATOR_PAUSE", File.binread(result_path)
+    completed_before = retained_job("a-1")
+
+    error = assert_raises(AdventureFinderWorkspace::LocalExecution::Failure) do
+      coordinator.resume(operation_id: ID, capability_plan: @capability_plan)
+    end
+    assert_equal "OPERATOR_PAUSE", error.code
+    assert_equal completed_before, retained_job("a-1")
+
+    assert_equal 0, coordinator.resume(
+      operation_id: ID, capability_plan: @capability_plan, continue_operator_pause: true
+    )
+    assert_equal completed_before, retained_job("a-1")
+    assert_completed_once
+  ensure
+    signal_process("KILL", pid)
+    reap_process(pid)
+  end
+
+  def test_detached_wlo_owner_loss_exposes_orphaned_attempt_without_cleanup_claim
+    manager_marker = File.join(@root, "wlo-manager.pid")
+    sentinel = Process.spawn(RbConfig.ruby, "-e", "sleep 30", pgroup: true,
+                             out: File::NULL, err: File::NULL)
+    coordinator_pid = coordinator_process(
+      :start, wait: false, runner: RecordingSpawnRunner.new(marker: manager_marker),
+      environment: {"LOCAL_FIXTURE_JOB_SLEEP" => "30"}
+    )
+    await_file(manager_marker)
+    await_file(File.join(@afw, "job-a-1.pid"))
+    manager_pid = Integer(File.binread(manager_marker))
+    job_pid = Integer(File.binread(File.join(@afw, "job-a-1.pid")))
+
+    Process.kill("KILL", manager_pid)
+    assert_equal 70, Timeout.timeout(10) { Process.waitpid2(coordinator_pid).last.exitstatus }
+    coordinator_pid = nil
+    assert process_alive?(job_pid), "manager loss unexpectedly cleaned up an owned job"
+    assert process_alive?(sentinel), "manager loss reached an unrelated sentinel"
+
+    output = execution_paths.fetch(:output)
+    code, stdout, stderr = public_wlo(
+      "action-check", @plan_path, "--workdir", @afw, "--output", output,
+      "--action", "resume", "--json"
+    )
+    assert_equal 0, code, stderr
+    check = JSON.parse(stdout)
+    assert_equal "blocked", check.fetch("disposition")
+    assert_includes %w[inactive_running_state running_attempts], check.fetch("reason")
+    error = assert_raises(AdventureFinderWorkspace::LocalExecution::Failure) do
+      coordinator.resume(operation_id: ID, capability_plan: @capability_plan)
+    end
+    assert_includes %w[WLO_EXECUTION_GATE LOCAL_TRANSITION_GATE], error.code
+    assert_equal 1, retained_job("a-1").fetch("attempt")
+  ensure
+    signal_process("KILL", coordinator_pid)
+    reap_process(coordinator_pid)
+    signal_process("KILL", job_pid, group: true)
+    signal_process("TERM", sentinel, group: true)
+    reap_process(sentinel)
+  end
+
+  def test_failed_work_requires_selected_retry_and_preserves_archived_evidence
+    with_environment("LOCAL_FIXTURE_FAIL_ONCE_JOB" => "a-1") do
+      error = assert_raises(AdventureFinderWorkspace::LocalExecution::Failure) do
+        coordinator.start(operation_id: ID, selected_by: "David", capability_plan: @capability_plan)
+      end
+      assert_equal "WLO_EXECUTION_GATE", error.code
+    end
+    output = execution_paths.fetch(:output)
+    failed_before = evidence_bytes("a-1")
+    b_before = retained_job("b-1")
+    invocation_count = job_invocations.length
+
+    error = assert_raises(AdventureFinderWorkspace::LocalExecution::Failure) do
+      coordinator.resume(operation_id: ID, capability_plan: @capability_plan)
+    end
+    assert_equal "WLO_EXECUTION_GATE", error.code
+    assert_equal invocation_count, job_invocations.length
+    refute Dir.exist?(File.join(output, "attempts"))
+
+    code, _stdout, stderr = public_wlo(
+      "retry-failed", @plan_path, "--workdir", @afw, "--output", output,
+      "--job", "a-1", "--reason", "reviewed fixture failure"
+    )
+    assert_equal 0, code, stderr
+    assert_equal failed_before, evidence_bytes("a-1", archive: 1)
+    assert_equal invocation_count, job_invocations.length, "authorization must not execute work"
+
+    assert_equal 0, coordinator.resume(
+      operation_id: ID, capability_plan: @capability_plan, continue_operator_pause: true
+    )
+    assert_equal 2, retained_job("a-1").fetch("attempt")
+    assert_equal b_before, retained_job("b-1")
+    assert_equal failed_before, evidence_bytes("a-1", archive: 1)
+    assert_equal 1, job_invocations.count("b-1")
+    runtime_events = File.readlines(File.join(@low_state, "runtime-events.jsonl")).map { |row| JSON.parse(row) }
+    assert_equal [MODEL_A], runtime_events.last.fetch("resident")
+  end
+
+  def test_breaker_requires_separate_explicit_acknowledgement
+    with_environment("LOCAL_FIXTURE_FAIL_ALWAYS_POOL" => "a") do
+      error = assert_raises(AdventureFinderWorkspace::LocalExecution::Failure) do
+        coordinator.start(operation_id: ID, selected_by: "David", capability_plan: @capability_plan)
+      end
+      assert_equal "WLO_EXECUTION_GATE", error.code
+    end
+    output = execution_paths.fetch(:output)
+    state_before = File.binread(File.join(output, "execution.json"))
+    evidence_before = %w[a-1 a-2].to_h { |id| [id, evidence_bytes(id)] }
+
+    code, stdout, stderr = public_wlo(
+      "action-check", @plan_path, "--workdir", @afw, "--output", output,
+      "--action", "resume", "--json"
+    )
+    assert_equal 0, code, stderr
+    check = JSON.parse(stdout)
+    assert_equal "blocked", check.fetch("disposition")
+    assert_equal "circuit_breaker", check.fetch("reason")
+
+    code, _stdout, stderr = public_wlo(
+      "retry-failed", @plan_path, "--workdir", @afw, "--output", output,
+      "--job", "a-1", "--reason", "reviewed fixture breaker"
+    )
+    assert_equal 1, code
+    assert_includes stderr, "--acknowledge-circuit-breaker"
+    assert_equal state_before, File.binread(File.join(output, "execution.json"))
+    evidence_before.each { |id, bytes| assert_equal bytes, evidence_bytes(id) }
+    refute Dir.exist?(File.join(output, "attempts"))
+  end
+
+  def test_restart_refuses_changed_operation_plan_sequence_and_execution_locator
+    marker = File.join(@root, "bound-before-spawn.json")
+    assert_equal 74, coordinator_process(:start, runner: ExitBeforeSpawnRunner.new(marker:)).exitstatus
+    refute File.exist?(File.join(execution_paths.fetch(:output), "execution.json"))
+
+    changed_authority = deep_copy(@capability_plan)
+    changed_authority.fetch("operation")["authority_id"] = "changed-authority"
+    changed_operation_intent = deep_copy(@capability_plan)
+    changed_operation_intent.fetch("operation")["intent_id"] = "changed-intent"
+    changed_sequence = deep_copy(@capability_plan)
+    changed_sequence.fetch("sequence").first.fetch("job_ids") << "invented-job"
+    changed_request = deep_copy(@capability_plan)
+    changed_request.fetch("capabilities").first.fetch("capability_request")["model"] = "changed:latest"
+    changed_plan = deep_copy(@capability_plan)
+    changed_plan.fetch("workload")["plan_sha256"] = "f" * 64
+
+    [changed_authority, changed_operation_intent, changed_sequence, changed_request, changed_plan].each do |changed|
+      error = assert_raises(AdventureFinderWorkspace::LocalExecution::Failure) do
+        coordinator.resume(operation_id: ID, capability_plan: changed)
+      end
+      assert_equal "STALE_LOCAL_EXECUTION", error.code
+    end
+
+    moved = @environment.merge("AF_AFW_ROOT" => directory("different-afw"))
+    error = assert_raises(AdventureFinderWorkspace::LocalExecution::Failure) do
+      AdventureFinderWorkspace::LocalExecution.new(
+        front_door_root: @front, project_root: @components, env: moved, out: StringIO.new,
+        poll_interval: 0.02, observation_timeout: 1.0
+      ).resume(operation_id: ID, capability_plan: @capability_plan)
+    end
+    assert_equal "STALE_LOCAL_EXECUTION", error.code
+    refute File.exist?(File.join(execution_paths.fetch(:output), "execution.json"))
+  end
+
   private
 
   def assert_composed_trace(trace, intent, jobs, output)
@@ -460,11 +790,15 @@ class LocalIngestExecutionTest < Minitest::Test
     assert defined?(AdventureFinderOfflineNetworkGuard), "proof requires the hard offline guard"
     AdventureFinderWorkspace::OperatorAcceptance::CREDENTIAL_NAMES.each { |key| assert_nil ENV[key], "credential inherited: #{key}" }
     assert_equal "authority-fixture", @capability_plan.dig("operation", "authority_id")
-    assert_equal 1, trace.transitions.length
+    assert_operator trace.transitions.length, :>=, 1
+    assert trace.transitions.all? { |row| row.dig("report", "status") == "paused" }
+    assert trace.transitions.none? { |row| row.dig("report", "executor_active") }
+    assert trace.transitions.all? do |row|
+      row.fetch("demands").all? do |demand|
+        demand.fetch("bound_count") == 0 && demand.fetch("uncertain_count") == 0 && demand.fetch("quiescent")
+      end
+    end
     transition = trace.transitions.first
-    assert_equal "paused", transition.dig("report", "status")
-    refute transition.dig("report", "executor_active")
-    assert transition.fetch("demands").all? { |row| row.fetch("bound_count") == 0 && row.fetch("quiescent") }
     assert_equal %w[a-1 a-2], transition.fetch("report").fetch("jobs").select { |row| row.fetch("status") == "complete" }.map { |row| row.fetch("job_id") }
     assert_equal %w[b-1 b-2], transition.fetch("report").fetch("jobs").select { |row| row.fetch("status") == "pending" }.map { |row| row.fetch("job_id") }
     identity = intent.dig("execution", "consumer_id")
@@ -479,9 +813,10 @@ class LocalIngestExecutionTest < Minitest::Test
     refute trace.calls.any? { |argv| argv.any? { |arg| arg.match?(/rpof|runpod|retry-failed|acknowledge-circuit-breaker/) } }
 
     events = File.readlines(File.join(@low_state, "runtime-events.jsonl")).map { |row| JSON.parse(row) }
-    assert_equal [[MODEL_A], [MODEL_B]], events.map { |row| row.fetch("resident") }
+    assert_equal [[MODEL_A], [MODEL_B]], events.map { |row| row.fetch("resident") }.chunk_while { |left, right| left == right }.map(&:first)
     assert_nil events.first.fetch("previous")
-    assert_equal MODEL_A, events.last.dig("previous", "model")
+    first_b = events.find { |row| row.fetch("resident") == [MODEL_B] }
+    assert_equal MODEL_A, first_b.dig("previous", "model")
     assert_equal [131_072], events.map { |row| row.fetch("context_length") }.uniq
     publications = File.readlines(File.join(@low_state, "publications.jsonl")).map do |row|
       bytes = JSON.parse(row).fetch("bytes")
@@ -554,6 +889,122 @@ class LocalIngestExecutionTest < Minitest::Test
     )
   end
 
+  def coordinator_process(action, runner: PublicReadRunner.new, environment: {}, wait: true)
+    error_path = File.join(@root, "coordinator-process-error.txt")
+    pid = fork do
+      environment.each { |key, value| ENV[key] = value }
+      begin
+        status = if action == :start
+                   coordinator(runner:).start(
+                     operation_id: ID, selected_by: "David", capability_plan: @capability_plan
+                   )
+                 else
+                   coordinator(runner:).resume(operation_id: ID, capability_plan: @capability_plan)
+                 end
+        exit! status
+      rescue Exception => e # rubocop:disable Lint/RescueException -- child must report before exit!
+        File.write(error_path, "#{e.class}: #{e.message}\n#{e.backtrace&.join("\n")}")
+        exit! 70
+      end
+    end
+    return pid unless wait
+
+    status = Timeout.timeout(15) { Process.waitpid2(pid).last }
+    flunk File.binread(error_path) if status.exitstatus == 70 && File.file?(error_path)
+    status
+  end
+
+  def assert_completed_once
+    output = execution_paths.fetch(:output)
+    assert_equal "completed", JSON.parse(File.binread(File.join(output, "execution.json"))).fetch("status")
+    %w[a-1 b-1].each do |job_id|
+      metadata = retained_job(job_id)
+      assert_equal "complete", metadata.fetch("status")
+      assert_equal 1, metadata.fetch("attempt")
+      assert_equal 1, job_invocations.count(job_id)
+    end
+  end
+
+  def retained_job(job_id)
+    JSON.parse(File.binread(File.join(execution_paths.fetch(:output), "runs", job_id, "metadata.json")))
+  end
+
+  def evidence_bytes(job_id, archive: nil)
+    root = if archive
+             File.join(execution_paths.fetch(:output), "attempts", job_id, "attempt-#{archive}")
+           else
+             File.join(execution_paths.fetch(:output), "runs", job_id)
+           end
+    Dir.children(root).sort.to_h { |name| [name, File.binread(File.join(root, name))] }
+  end
+
+  def retained_output_files
+    output = execution_paths.fetch(:output)
+    Dir.glob(File.join(output, "**", "*"), File::FNM_DOTMATCH)
+       .select { |path| File.file?(path) }
+       .sort
+       .to_h { |path| [path.delete_prefix("#{output}/"), File.binread(path)] }
+  end
+
+  def job_invocations
+    path = File.join(@afw, "job-order.log")
+    return [] unless File.file?(path)
+
+    File.readlines(path, chomp: true).map { |row| row.split(":").last }
+  end
+
+  def public_wlo(*arguments)
+    stdout, stderr, status = Open3.capture3(
+      {"AF_PROJECT_ROOT" => @components, "AF_ADVENTURE_FINDER_ROOT" => @front, "AFW_ROOT" => @afw},
+      File.join(@wlo, "bin/wlo"), *arguments, chdir: @wlo
+    )
+    [status.exitstatus, stdout, stderr]
+  end
+
+  def intent_path
+    File.join(@front, "output/local-ingest-executions/v0.1", ID, "intent.json")
+  end
+
+  def deep_copy(value)
+    JSON.parse(JSON.generate(value))
+  end
+
+  def await_file(path)
+    Timeout.timeout(10) do
+      sleep 0.01 until File.file?(path) && !File.zero?(path)
+    end
+  end
+
+  def await
+    Timeout.timeout(10) do
+      loop do
+        return true if yield
+        sleep 0.01
+      end
+    end
+  end
+
+  def process_alive?(pid)
+    Process.kill(0, pid)
+    true
+  rescue Errno::ESRCH
+    false
+  end
+
+  def signal_process(signal, pid, group: false)
+    return unless pid
+
+    Process.kill(signal, group ? -pid : pid)
+  rescue Errno::ESRCH, TypeError
+    nil
+  end
+
+  def reap_process(pid)
+    Process.waitpid(pid) if pid
+  rescue Errno::ECHILD, TypeError
+    nil
+  end
+
   def write_workload(jobs_per_pool:)
     pools = [
       pool("a", MODEL_A, DIGEST_A), pool("b", MODEL_B, DIGEST_B)
@@ -615,6 +1066,7 @@ class LocalIngestExecutionTest < Minitest::Test
       root = File.expand_path("..", __dir__)
       File.open(File.join(root, "worker-slot.lock"), "w") do |slot|
         abort "two simultaneous worker slots" unless slot.flock(File::LOCK_EX | File::LOCK_NB)
+        File.write(File.join(root, "job-#{ARGV[1]}.pid"), Process.pid.to_s)
         expected = "fixture-#{ARGV[0]}:latest"
         runtime = JSON.parse(File.binread(ENV.fetch("LOCAL_FIXTURE_RUNTIME")))
         abort "model not resident" unless runtime.fetch("model") == expected
@@ -622,6 +1074,14 @@ class LocalIngestExecutionTest < Minitest::Test
         File.open(File.join(root, "job-order.log"), "a") do |file|
           file.flock(File::LOCK_EX)
           file.puts("#{ARGV[0]}:#{ARGV[1]}")
+        end
+        fail_once = ENV["LOCAL_FIXTURE_FAIL_ONCE_JOB"] == ARGV[1]
+        fail_always = ENV["LOCAL_FIXTURE_FAIL_ALWAYS_POOL"] == ARGV[0]
+        failure_marker = File.join(root, ".failed-once-#{ARGV[1]}")
+        if fail_always || (fail_once && !File.exist?(failure_marker))
+          File.write(failure_marker, "failed\n") if fail_once
+          warn "intentional fixture failure for #{ARGV[1]}"
+          exit 17
         end
         if ENV["LOCAL_FIXTURE_BARRIER"] == "1"
           abort "offline guard missing from payload" unless defined?(AdventureFinderOfflineNetworkGuard)
@@ -659,7 +1119,8 @@ class LocalIngestExecutionTest < Minitest::Test
       ].each { |name| require "local_ollama_workers/\#{name}" }
       class FixtureObserver
         def observe
-          {"worker_id" => "fixture-local", "generation_id" => "fixture-generation-1",
+          {"worker_id" => "fixture-local",
+           "generation_id" => ENV.fetch("LOW_FIXTURE_GENERATION", "fixture-generation-1"),
            "endpoint" => "http://127.0.0.1:11434"}
         end
       end
@@ -680,6 +1141,10 @@ class LocalIngestExecutionTest < Minitest::Test
           end
           previous = File.file?(@path) ? JSON.parse(File.binread(@path)) : nil
           File.write(@path, JSON.generate("model" => model, "context_length" => context_length))
+          if (fifo = ENV["LOW_FIXTURE_ESTABLISHMENT_FIFO"])
+            File.write("\#{fifo}.started", Process.pid.to_s)
+            File.open(fifo, "r") { |io| io.gets }
+          end
           File.open(File.join(File.dirname(@path), "runtime-events.jsonl"), "a") do |io|
             io.flock(File::LOCK_EX)
             io.puts JSON.generate("previous" => previous, "resident" => [model], "context_length" => context_length)
