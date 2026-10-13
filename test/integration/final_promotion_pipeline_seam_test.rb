@@ -34,10 +34,15 @@ class FinalPromotionPipelineSeamTest < Minitest::Test
   def test_front_door_delegates_exact_approval_to_real_pipeline_transaction
     Dir.mktmpdir("final-promotion-composed-") do |root|
       fixture = build_fixture(root)
+      unrelated = File.join(fixture.fetch(:catalog), "unrelated-dirty.txt")
+      File.binwrite(unrelated, "operator work in progress\n")
       original_roles = fixture.fetch(:roles)
+      original_git = git_observation(fixture.fetch(:catalog))
+      original_preserved = [fixture.fetch(:base), fixture.fetch(:baseline), unrelated]
+        .to_h { |path| [path, File.binread(path)] }
       runner = DirectPipelineRunner.new(
         package: fixture.fetch(:package), package_path: fixture.fetch(:package_path),
-        pipeline_root: @pipeline_root
+        pipeline_root: @pipeline_root, catalog: fixture.fetch(:catalog)
       )
       output = StringIO.new
       door = AdventureFinderWorkspace::FinalPromotion.new(
@@ -60,23 +65,119 @@ class FinalPromotionPipelineSeamTest < Minitest::Test
       end
       assert_equal original_roles.except("catalog_head"), current_roles.except("catalog_head")
       assert_equal fixture.fetch(:head), git(fixture.fetch(:catalog), "rev-parse", "HEAD").strip
-      assert File.file?(File.join(fixture.fetch(:catalog), fixture.dig(:candidate_binding, "filename")))
+      destination = File.join(fixture.fetch(:catalog), fixture.dig(:candidate_binding, "filename"))
+      assert File.file?(destination)
       assert_includes output.string, "Final promotion: PROMOTED."
       assert_includes output.string, "git add PROJECT_STATE.yml #{fixture.dig(:candidate_binding, 'filename')}"
+      refute_includes output.string, "git add ."
+      refute_includes output.string, "unrelated-dirty.txt"
+      assert_includes output.string, "# push remains an explicit operator choice"
       assert_equal %w[prepare approve adopt], runner.adoption_actions
+
+      assert_equal original_git, git_observation(fixture.fetch(:catalog))
+      original_preserved.each { |path, bytes| assert_equal bytes, File.binread(path), path }
+      manifest_after = File.binread(fixture.fetch(:manifest))
+      destination_after = File.binread(destination)
+      result_path = File.join(fixture.fetch(:operation), "adoption-result.json")
+      durable_result = File.binread(result_path)
+      assert_equal "PROMOTED", JSON.parse(durable_result).fetch("status")
+
+      calls_after_promotion = runner.adoption_actions.length
+      replay_output = StringIO.new
+      replay = AdventureFinderWorkspace::FinalPromotion.new(
+        front_door_root: fixture.fetch(:front_door), project_root: fixture.fetch(:components),
+        pipeline_root: @pipeline_root, component_runner: runner, input: StringIO.new,
+        out: replay_output, clock: -> { Time.utc(2026, 10, 12, 1, 46, 0) }
+      )
+      assert_equal 0, replay.run(
+        inputs_path: fixture.fetch(:inputs), package_path: fixture.fetch(:package_path),
+        approver: "David Norris", operation_dir: fixture.fetch(:operation)
+      )
+      assert_equal %w[adopt], runner.adoption_actions.drop(calls_after_promotion)
+      assert_equal [""], runner.prepare_manifest_statuses
+      assert_includes replay_output.string, "Final promotion: ALREADY_PROMOTED."
+      refute_includes replay_output.string, "git add ."
+      refute_includes replay_output.string, "unrelated-dirty.txt"
+      assert_equal manifest_after, File.binread(fixture.fetch(:manifest))
+      assert_equal destination_after, File.binread(destination)
+      assert_equal durable_result, File.binread(result_path)
+      assert_equal original_git, git_observation(fixture.fetch(:catalog))
+      original_preserved.each { |path, bytes| assert_equal bytes, File.binread(path), path }
+    end
+  end
+
+  def test_front_door_decline_records_exact_authority_without_catalog_or_git_mutation
+    Dir.mktmpdir("final-promotion-decline-") do |root|
+      fixture = build_fixture(root)
+      before = snapshot_catalog(fixture.fetch(:catalog))
+      runner = DirectPipelineRunner.new(
+        package: fixture.fetch(:package), package_path: fixture.fetch(:package_path),
+        pipeline_root: @pipeline_root, catalog: fixture.fetch(:catalog)
+      )
+      output = StringIO.new
+      door = AdventureFinderWorkspace::FinalPromotion.new(
+        front_door_root: fixture.fetch(:front_door), project_root: fixture.fetch(:components),
+        pipeline_root: @pipeline_root, component_runner: runner, input: StringIO.new("DECLINE\n"),
+        out: output, clock: -> { Time.utc(2026, 10, 12, 1, 45, 0) }
+      )
+
+      assert_equal 3, door.run(
+        inputs_path: fixture.fetch(:inputs), package_path: fixture.fetch(:package_path),
+        approver: "David Norris", operation_dir: fixture.fetch(:operation)
+      )
+      assert_equal before, snapshot_catalog(fixture.fetch(:catalog))
+      assert_equal %w[prepare decline adopt], runner.adoption_actions
+      assert_equal [""], runner.prepare_manifest_statuses
+      assert_includes output.string, "Final promotion: DECLINED. Catalog state is unchanged."
+      refute_includes output.string, "git add ."
+      refute File.exist?(File.join(fixture.fetch(:catalog), fixture.dig(:candidate_binding, "filename")))
+      %w[adoption-decision.json coordination-decision.json adoption-result.json].each do |name|
+        assert File.file?(File.join(fixture.fetch(:operation), name)), name
+      end
+    end
+  end
+
+  def test_front_door_refuses_same_filename_different_bytes_without_overwrite
+    Dir.mktmpdir("final-promotion-collision-") do |root|
+      fixture = build_fixture(root)
+      destination = File.join(fixture.fetch(:catalog), fixture.dig(:candidate_binding, "filename"))
+      File.binwrite(destination, "pre-existing different bytes\n")
+      before = snapshot_catalog(fixture.fetch(:catalog))
+      runner = DirectPipelineRunner.new(
+        package: fixture.fetch(:package), package_path: fixture.fetch(:package_path),
+        pipeline_root: @pipeline_root, catalog: fixture.fetch(:catalog)
+      )
+      door = AdventureFinderWorkspace::FinalPromotion.new(
+        front_door_root: fixture.fetch(:front_door), project_root: fixture.fetch(:components),
+        pipeline_root: @pipeline_root, component_runner: runner, input: StringIO.new("APPROVE\n"),
+        out: StringIO.new
+      )
+
+      error = assert_raises(AdventureFinderWorkspace::Error) do
+        door.run(
+          inputs_path: fixture.fetch(:inputs), package_path: fixture.fetch(:package_path),
+          approver: "David Norris", operation_dir: fixture.fetch(:operation)
+        )
+      end
+      assert_includes error.message, "refusing to overwrite existing AMC artifact"
+      assert_equal before, snapshot_catalog(fixture.fetch(:catalog))
+      assert_equal %w[prepare], runner.adoption_actions
+      assert_equal [""], runner.prepare_manifest_statuses
     end
   end
 
   private
 
   class DirectPipelineRunner
-    attr_reader :adoption_actions
+    attr_reader :adoption_actions, :prepare_manifest_statuses
 
-    def initialize(package:, package_path:, pipeline_root:)
+    def initialize(package:, package_path:, pipeline_root:, catalog:)
       @package = package
       @package_path = package_path
       @pipeline_root = pipeline_root
+      @catalog = catalog
       @adoption_actions = []
+      @prepare_manifest_statuses = []
     end
 
     def capture(argv, chdir:)
@@ -93,6 +194,11 @@ class FinalPromotionPipelineSeamTest < Minitest::Test
                0
              when "af-final-release-adoption"
                @adoption_actions << action
+               if action == "prepare"
+                 status = manifest_status
+                 @prepare_manifest_statuses << status
+                 raise "PROJECT_STATE.yml became dirty before adoption preparation: #{status}" unless status.empty?
+               end
                validation = AfDataPipeline::FinalReleasePackage::Result.new(
                  package: @package, path: @package_path, reused: true
                )
@@ -114,6 +220,17 @@ class FinalPromotionPipelineSeamTest < Minitest::Test
              end
       Result.new(stdout: out.string, stderr: err.string, status: Status.new(code))
     end
+
+    private
+
+    def manifest_status
+      stdout, stderr, status = Open3.capture3(
+        "git", "-C", @catalog, "status", "--porcelain=v1", "--", "PROJECT_STATE.yml"
+      )
+      raise "git status failed before adoption preparation: #{stderr}" unless status.success?
+
+      stdout.strip
+    end
   end
 
   def build_fixture(root)
@@ -132,10 +249,7 @@ class FinalPromotionPipelineSeamTest < Minitest::Test
       "matcher_authorized_baseline" => role_for(baseline, "0.5"),
       "production_dependency_floor" => role_for(baseline, "0.5")
     ))
-    git(catalog, "init", "-q")
-    git(catalog, "remote", "add", "origin", "fixture://catalog")
-    git(catalog, "add", ".")
-    git(catalog, "commit", "-qm", "synthetic catalog")
+    initialize_git_fixture(catalog)
     head = git(catalog, "rev-parse", "HEAD").strip
 
     candidate = File.join(root, "finalized-candidate.xlsx")
@@ -153,7 +267,8 @@ class FinalPromotionPipelineSeamTest < Minitest::Test
     package = package_document(candidate, candidate_binding, base, evidence, manifest, roles, catalog, head)
     package_path = File.join(root, "package.json")
     File.binwrite(package_path, AfDataPipeline::StagedScoringAuthority.document_bytes(package))
-    {front_door:, components:, catalog:, manifest:, inputs:, package:, package_path:, candidate_binding:, roles:, head:,
+    assert_fixture_manifest_clean!(catalog, "after fixture creation")
+    {front_door:, components:, catalog:, manifest:, base:, baseline:, inputs:, package:, package_path:, candidate_binding:, roles:, head:,
      operation: File.join(front_door, "operations", "final-promotions", package.fetch("package_id"))}
   end
 
@@ -219,5 +334,49 @@ class FinalPromotionPipelineSeamTest < Minitest::Test
     raise "git #{args.join(' ')} failed: #{stderr}" unless status.success?
 
     stdout
+  end
+
+  def initialize_git_fixture(root)
+    git(root, "init", "-q")
+    git(root, "remote", "add", "origin", "fixture://catalog")
+    entries = Dir.children(root).reject { |name| name == ".git" }.sort.map do |name|
+      sha = git(root, "hash-object", "-w", "--", name).strip
+      "100644 blob #{sha}\t#{name}\n"
+    end.join
+    tree = git_with_input(root, entries, "mktree").strip
+    commit = git_with_input(root, "synthetic catalog\n", "commit-tree", tree).strip
+    git(root, "update-ref", "refs/heads/main", commit)
+    git(root, "symbolic-ref", "HEAD", "refs/heads/main")
+    git(root, "read-tree", "--reset", "-u", commit)
+  end
+
+  def assert_fixture_manifest_clean!(root, phase)
+    status = git(root, "status", "--porcelain=v1", "--", "PROJECT_STATE.yml").strip
+    committed = git(root, "show", "HEAD:PROJECT_STATE.yml")
+    actual = File.binread(File.join(root, "PROJECT_STATE.yml"))
+    raise "PROJECT_STATE.yml bytes changed #{phase}" unless actual == committed
+    raise "PROJECT_STATE.yml is dirty #{phase}: #{status}" unless status.empty?
+  end
+
+  def git_with_input(root, input, *args)
+    stdout, stderr, status = Open3.capture3(GIT_ENV, "git", "-C", root, *args, stdin_data: input)
+    raise "git #{args.join(' ')} failed: #{stderr}" unless status.success?
+
+    stdout
+  end
+
+  def git_observation(root)
+    {
+      "head" => git(root, "rev-parse", "HEAD"),
+      "refs" => git(root, "show-ref"),
+      "index" => git(root, "ls-files", "--stage")
+    }
+  end
+
+  def snapshot_catalog(root)
+    files = Dir.glob(File.join(root, "**", "*"), File::FNM_DOTMATCH)
+      .select { |path| File.file?(path) && !path.start_with?(File.join(root, ".git") + File::SEPARATOR) }
+      .to_h { |path| [path.delete_prefix(root + File::SEPARATOR), File.binread(path)] }
+    {"git" => git_observation(root), "files" => files}
   end
 end

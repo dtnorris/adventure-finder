@@ -47,6 +47,16 @@ module AdventureFinderWorkspace
         bundle_repository: "af-data-pipeline"
       ),
       Scenario.new(
+        name: "final-promotion",
+        description: "exact release review, catalog adoption, stale refusal, replay, and scoped Git handoff",
+        repository: "adventure-finder",
+        test_file: "acceptance/ig18c_final_promotion_matrix.rb",
+        bundle_repository: "af-data-pipeline",
+        required_paths: {
+          "af-data-pipeline" => "bin/af-final-release-adoption"
+        }
+      ),
+      Scenario.new(
         name: "wlo-multi-source-registry",
         description: "local-only, remote-only, mixed, namespace-preserving scheduling and scoped loss",
         repository: "workload-orchestrator",

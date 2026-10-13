@@ -57,7 +57,7 @@ class OperatorAcceptanceTest < Minitest::Test
       test/rpof_campaign_cli_test.rb
       test/runpod_budget_guardian_test.rb
     ])
-    build_component(@pipeline, [])
+    build_component(@pipeline, ["bin/af-final-release-adoption"])
   end
 
   def teardown
@@ -72,7 +72,7 @@ class OperatorAcceptanceTest < Minitest::Test
     assert harness.run
     assert_equal AdventureFinderWorkspace::OperatorAcceptance::SCENARIOS.length, runner.calls.length
     assert_includes out.string, "Network/provider/inference access: blocked"
-    assert_includes out.string, "Acceptance summary: 21/21 scenarios passed"
+    assert_includes out.string, "Acceptance summary: 22/22 scenarios passed"
     assert_includes out.string, "Offline proof: fake providers only; inference calls: 0; paid resources: $0"
     runner.calls.each do |call|
       assert_nil call.dig(:env, "RUNPOD_API_KEY")
@@ -146,6 +146,32 @@ class OperatorAcceptanceTest < Minitest::Test
     end
   end
 
+  def test_final_promotion_preflight_is_selected_and_scoped_to_its_public_seam
+    scenario = AdventureFinderWorkspace::OperatorAcceptance::SCENARIOS.find do |entry|
+      entry.name == "final-promotion"
+    end
+    refute_nil scenario
+    assert_equal "adventure-finder", scenario.repository
+    assert_equal "af-data-pipeline", scenario.bundle_repository
+    assert_equal "acceptance/ig18c_final_promotion_matrix.rb", scenario.test_file
+    assert_equal({"af-data-pipeline" => "bin/af-final-release-adoption"}, scenario.required_paths)
+
+    File.delete(File.join(@low, "lib/local_ollama_workers/cli.rb"))
+    runner = Runner.new
+    harness = build_harness(runner:)
+    assert harness.run(only: ["final-promotion"])
+    assert_equal 1, runner.calls.length
+    call = runner.calls.fetch(0)
+    assert_equal File.join(@pipeline, "Gemfile"), call.dig(:env, "BUNDLE_GEMFILE")
+
+    File.delete(File.join(@pipeline, "bin/af-final-release-adoption"))
+    error = assert_raises(AdventureFinderWorkspace::Error) do
+      harness.run(only: ["final-promotion"])
+    end
+    assert_includes error.message, "acceptance public seam is missing"
+    assert_equal 1, runner.calls.length
+  end
+
   def test_audited_recovery_is_a_named_offline_scenario
     scenario = AdventureFinderWorkspace::OperatorAcceptance::SCENARIOS.find do |entry|
       entry.name == "audited-recovery"
@@ -194,7 +220,7 @@ class OperatorAcceptanceTest < Minitest::Test
     refute harness.run
     assert_equal AdventureFinderWorkspace::OperatorAcceptance::SCENARIOS.length, runner.calls.length
     assert_includes err.string, "FAIL rpof-campaign-lifecycle"
-    assert_includes out.string, "Acceptance summary: 20/21 scenarios passed"
+    assert_includes out.string, "Acceptance summary: 21/22 scenarios passed"
   end
 
   def test_operator_lifecycle_uses_rpof_bundle_while_running_from_workspace_repo
