@@ -492,7 +492,10 @@ module AdventureFinderWorkspace
       path = repo["front_door"] ? @front_door_root : repo_path(repo)
       test_env = {"AF_PROJECT_ROOT" => root.to_s, "AF_ADVENTURE_FINDER_ROOT" => @front_door_root.to_s}
       test_env.merge!("BUNDLE_GEMFILE" => nil, "BUNDLE_LOCKFILE" => nil) if repo["front_door"]
-      test_env["AF_TEST_CONTENDED"] = "1" if contended
+      # Explicitly clear inherited contention flags for serial runs and for
+      # components that do not own WLO's repository-specific runtime gate.
+      test_env["AF_TEST_CONTENDED"] = contended ? "1" : nil
+      test_env["WLO_TEST_CONTENDED"] = contended && name == "workload-orchestrator" ? "1" : nil
 
       valid = repo["front_door"] ? path.directory? && (path / "Rakefile").file? && (path / "lib/adventure_finder_workspace.rb").file? : git_checkout?(path)
       unless valid

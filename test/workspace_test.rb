@@ -17,12 +17,13 @@ class AdventureFinderWorkspaceTest < Minitest::Test
   end
 
   class ParallelTestRunner
-    attr_reader :max_active, :envs
+    attr_reader :max_active, :envs, :calls
 
     def initialize(fail_names: [], delay: 0.05)
       @fail_names = fail_names
       @delay = delay
       @envs = []
+      @calls = []
       @mutex = Mutex.new
       @active = 0
       @max_active = 0
@@ -33,6 +34,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
       @mutex.synchronize do
         @active += 1
         @envs << env.dup
+        @calls << [name, env.dup]
         @max_active = [@max_active, @active].max
       end
 
@@ -363,7 +365,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
       )
 
       assert workspace.test(include_front_door: false, repos: [repo])
-      refute_includes runner.env, "AF_TEST_CONTENDED"
+      assert_nil runner.env["AF_TEST_CONTENDED"]
       assert_match(/^timed-suite\s+PASS\s+\d+\.\d{2}s$/, out.string)
       assert_match(/^1\/1 suites passed\.$/, out.string)
       assert_match(/^Test jobs:\s+1$/, out.string)
@@ -437,6 +439,52 @@ class AdventureFinderWorkspaceTest < Minitest::Test
       assert_equal completion_names, summary_names
       assert_match(/^5\/5 suites passed\.$/, out.string)
       assert_match(/^Test jobs:\s+3$/, out.string)
+    end
+  end
+
+  def test_wlo_contention_signal_is_scoped_to_parallel_repository_testing
+    repos = %w[workload-orchestrator runpod-ollama-fleet af-workloads].map do |name|
+      {"name" => name, "test" => "bundle exec rake"}
+    end
+
+    Dir.mktmpdir do |dir|
+      repos.each { |repo| FileUtils.mkdir_p(File.join(dir, repo.fetch("name"), ".git")) }
+      runner = ParallelTestRunner.new(fail_names: ["runpod-ollama-fleet"], delay: 0.01)
+      out = StringIO.new
+      workspace = AdventureFinderWorkspace::Workspace.new(
+        manifest: manifest, root: dir, front_door_root: File.join(dir, "adventure-finder"),
+        runner: runner, out: out, err: StringIO.new
+      )
+
+      refute workspace.test(include_front_door: false, repos: repos, jobs: 3)
+      assert_equal 3, runner.max_active
+      parallel_envs = runner.calls.to_h
+      assert_equal "1", parallel_envs.fetch("workload-orchestrator")["WLO_TEST_CONTENDED"]
+      parallel_envs.each_value { |env| assert_equal "1", env["AF_TEST_CONTENDED"] }
+      assert_nil parallel_envs.fetch("runpod-ollama-fleet")["WLO_TEST_CONTENDED"]
+      assert_nil parallel_envs.fetch("af-workloads")["WLO_TEST_CONTENDED"]
+      assert_match(/^runpod-ollama-fleet\s+FAIL\s+\d+\.\d{2}s$/, out.string)
+      assert_match(/^2\/3 suites passed\.$/, out.string)
+
+      serial_runner = ParallelTestRunner.new(delay: 0)
+      serial_workspace = AdventureFinderWorkspace::Workspace.new(
+        manifest: manifest, root: dir, front_door_root: File.join(dir, "adventure-finder"),
+        runner: serial_runner, out: StringIO.new, err: StringIO.new
+      )
+      assert serial_workspace.test(include_front_door: false, repos: repos, jobs: 1)
+      serial_runner.calls.each do |_name, env|
+        assert_nil env["AF_TEST_CONTENDED"]
+        assert_nil env["WLO_TEST_CONTENDED"]
+      end
+
+      lone_runner = ParallelTestRunner.new(delay: 0)
+      lone_workspace = AdventureFinderWorkspace::Workspace.new(
+        manifest: manifest, root: dir, front_door_root: File.join(dir, "adventure-finder"),
+        runner: lone_runner, out: StringIO.new, err: StringIO.new
+      )
+      assert lone_workspace.test(include_front_door: false, repos: [repos.first], jobs: 3)
+      assert_nil lone_runner.calls.first.last["AF_TEST_CONTENDED"]
+      assert_nil lone_runner.calls.first.last["WLO_TEST_CONTENDED"]
     end
   end
 
