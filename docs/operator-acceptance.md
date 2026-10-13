@@ -16,6 +16,8 @@ bin/af-operator-acceptance --only batch-front-door
 bin/af-operator-acceptance --only audited-recovery
 bin/af-operator-acceptance --only ig19b-source-exceptions
 bin/af-operator-acceptance --only ig19b-boundary-exceptions
+bin/af-operator-acceptance --only ig19c-execution-exceptions
+bin/af-operator-acceptance --only ig19c-evidence-review-exceptions
 ```
 
 ## Automatic local multi-model proof
@@ -129,6 +131,29 @@ approval invalidation for every bound input, rejects invalid parent/span/freeze
 and version/destination conflicts, preserves identical approval/freeze replay,
 and proves IDs appear only in a verified staged successor. The scenario never
 runs scoring, inference, catalog adoption, Git persistence, or provider code.
+
+## Standing-ingestion exception routing
+
+`ig19c-execution-exceptions` composes the landed AFW qualification, LOW
+generation-bound capability, WLO execution/recovery, and AdventureFinder local
+coordination proofs. Its table records the exact public identities and owner next
+action for the exclusive 100-page boundary, Levels handling, invalid units,
+missing or stale READY evidence, zero compatible workers, operator pause, active
+owners, interruption, selected retry, breaker acknowledgement, and restart drift.
+It does not invoke inference, relax capability requirements, create remote
+capacity, or grant recovery authority.
+
+`ig19c-evidence-review-exceptions` composes AFW's authoritative-attempt and
+complete-denominator evidence tests with pipeline review, standing-release, and
+final-package tests. It proves that missing, ambiguous, superseded, changed, or
+partial evidence remains visible; Levels siblings remain separate candidates;
+human and source decisions retain precedence; advisory-only flags follow the
+active standing policy; and hard invalidity fails closed. The current final
+package contract requires exactly zero IG-16B acceptances because the separate
+application and suspension/follow-up authority has not landed. Historical V1
+mechanical counts remain a distinct category. Both matrices stop before final
+promotion and use the component owners' public executable tests rather than
+copying their state or implementation into AdventureFinder.
 
 FO-08 adds `rpof-safety-gate` to the same hard-offline harness. Its
 `CampaignSafetyGateTest` proves that a finite compute-liability report is emitted
