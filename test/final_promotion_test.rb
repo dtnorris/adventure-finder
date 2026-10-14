@@ -188,6 +188,70 @@ class FinalPromotionTest < Minitest::Test
     end
   end
 
+  # A versionless AFDP base reference must render and replay without granting
+  # approval. Exact fixture inputs and request bytes remain unchanged.
+  def test_versionless_original_base_review_preserves_exact_unapproved_request
+    package = fixture_package
+    before = Marshal.dump(package)
+    with_front_door(package:, input: "") do |door, runner, output, paths|
+      inputs = [paths[:inputs], paths[:package]].to_h { |path| [path, File.binread(path)] }
+      request_path = File.join(paths[:operation], "adoption-request.json")
+      request_bytes = nil
+      2.times do
+        assert_equal 3, door.run(inputs_path: paths[:inputs], package_path: paths[:package],
+                                 approver: "David Norris", operation_dir: paths[:operation])
+        request_bytes ||= File.binread(request_path)
+        assert_equal request_bytes, File.binread(request_path)
+        inputs.each { |path, bytes| assert_equal bytes, File.binread(path) }
+        %w[adoption-decision.json coordination-decision.json adoption-result.json].each do |name|
+          refute File.exist?(File.join(paths[:operation], name)), name
+        end
+      end
+      assert_equal before, Marshal.dump(package)
+      assert_includes output.string, "Original frozen base: 5e_Adventure_Master_Catalog_7.5.1.xlsx sha256=#{'1' * 64} bytes=80"
+      assert_includes output.string, "Current catalog_head: 7.5.1 5e_Adventure_Master_Catalog_7.5.1.xlsx sha256=#{'1' * 64} bytes=80"
+      assert_includes output.string, "Finalized candidate: 8.0 5e_Adventure_Master_Catalog_8.0.xlsx sha256=#{'b' * 64} bytes=99"
+      assert_includes output.string, "Catalog delta: +1 / -0 IDs; 1 existing IDs (1 cells) changed"
+      %w[matcher_authorized_baseline production_dependency_floor].each do |role|
+        assert_includes output.string, "#{role}: unchanged (6.0 5e_Adventure_Master_Catalog_6.0.xlsx sha256=#{'2' * 64} bytes=80)"
+      end
+      assert_equal 2, output.string.scan("No approval recorded.").length
+      assert_equal 1, runner.calls.count { |call| call[0, 2] == ["af-final-release-adoption", "prepare"] }
+      refute runner.calls.any? { |call| %w[approve decline adopt].include?(call[1]) }
+    end
+  end
+
+  # Missing base artifact fields still raise KeyError before any decision;
+  # only the absent version is permitted by the original-base contract.
+  def test_original_base_review_requires_filename_hash_and_byte_count
+    %w[filename sha256 bytes].each do |field|
+      package = fixture_package
+      package.fetch("transition").fetch("original_frozen_base").delete(field)
+      with_front_door(package:, input: "APPROVE\n") do |door, runner, _output, paths|
+        error = assert_raises(KeyError) do
+          door.run(inputs_path: paths[:inputs], package_path: paths[:package],
+                   approver: "David Norris", operation_dir: paths[:operation])
+        end
+        assert_equal field, error.key
+        refute runner.calls.any? { |call| %w[approve decline adopt].include?(call[1]) }
+      end
+    end
+  end
+
+  # Versioned role and candidate identities retain their required version;
+  # the base-only display fix must not add a general missing-version fallback.
+  def test_role_and_candidate_identity_formatting_still_requires_version
+    package = fixture_package
+    transition = package.fetch("transition")
+    identities = transition.fetch("current_roles").values + [transition.fetch("proposed_catalog_head")]
+    with_front_door(package:, input: "") do |door, _runner, _output, _paths|
+      identities.each do |value|
+        error = assert_raises(KeyError) { door.send(:identity, value.except("version")) }
+        assert_equal "version", error.key
+      end
+    end
+  end
+
   def test_decline_is_durable_and_does_not_observe_a_promotion
     with_front_door(input: "DECLINE\n") do |door, runner, output, paths|
       assert_equal 3, door.run(inputs_path: paths[:inputs], package_path: paths[:package],
@@ -409,7 +473,7 @@ class FinalPromotionTest < Minitest::Test
         "preview" => {"requested" => false, "available" => false, "authority_effect" => "none"}
       },
       "transition" => {
-        "original_frozen_base" => role.call("7.5.1", "5e_Adventure_Master_Catalog_7.5.1.xlsx", "1" * 64),
+        "original_frozen_base" => role.call("7.5.1", "5e_Adventure_Master_Catalog_7.5.1.xlsx", "1" * 64).except("version"),
         "current_roles" => {
           "catalog_head" => role.call("7.5.1", "5e_Adventure_Master_Catalog_7.5.1.xlsx", "1" * 64),
           "matcher_authorized_baseline" => role.call("6.0", "5e_Adventure_Master_Catalog_6.0.xlsx", "2" * 64),

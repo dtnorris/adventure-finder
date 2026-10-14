@@ -63,7 +63,7 @@ class Ig19dStalenessMatrixTest < Minitest::Test
      identities: %w[policy_digest selection_id candidate_key authority_id manifest_id],
      gate: "stable standing application; human/source precedence; hard changed-input refusal",
      next_action: "reuse the exact release; resolve owner drift without renewed automatic acceptance"},
-    {id: "scoring-safe-is-not-promotion-safe", owner: "af-data-pipeline", file: "test/final_release_package_test.rb",
+    {id: "scoring-safe-is-not-promotion-safe", owner: "af-data-pipeline", file: "test/integration/final_release_package_test.rb",
      tests: %w[test_current_head_advancement_is_scoring_safe_but_lost_score_blocks_promotion
        test_current_manifest_and_uncommitted_catalog_bytes_cannot_claim_repository_head
        test_missing_mutated_and_malformed_immutable_references_are_refused

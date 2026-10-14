@@ -210,7 +210,7 @@ module AdventureFinderWorkspace
       @out.puts "Request: #{request.fetch('request_id')}" if request
       @out.puts "Pipeline readiness: #{package.dig('readiness', 'ready') ? 'READY' : 'BLOCKED'}"
       @out.puts "Scoring completeness: #{package.dig('readiness', 'full_scoring') ? 'FULL' : 'AUTHORIZED RELEASE WITH GAPS'}"
-      @out.puts "Original frozen base: #{identity(base)}"
+      @out.puts "Original frozen base: #{artifact_identity(base)}"
       @out.puts "Current catalog_head: #{identity(roles.fetch('catalog_head'))}"
       @out.puts "Finalized candidate: #{identity(candidate)}"
       @out.puts "Catalog delta: +#{delta.fetch('added_ids').length} / -#{delta.fetch('removed_ids').length} IDs; " \
@@ -405,8 +405,16 @@ module AdventureFinderWorkspace
       raise Error, "invalid #{label}: #{e.message}"
     end
 
+    # Formats a versioned role or candidate Hash for review; returns a String
+    # and raises KeyError when any required identity field is missing.
     def identity(value)
-      "#{value.fetch('version')} #{value.fetch('filename')} sha256=#{value.fetch('sha256')} bytes=#{value.fetch('bytes')}"
+      "#{value.fetch('version')} #{artifact_identity(value)}"
+    end
+
+    # Formats an artifact reference Hash, including AFDP's versionless frozen
+    # base; returns a String and raises KeyError for missing artifact fields.
+    def artifact_identity(value)
+      "#{value.fetch('filename')} sha256=#{value.fetch('sha256')} bytes=#{value.fetch('bytes')}"
     end
 
     def list(values)
