@@ -386,8 +386,21 @@ It **never** resets, stashes, commits, merges, rebases, force-updates, or pushes
 
 ### `bin/af-test`
 
-Run the ten configured current/default component commands and the detached
-front-door Ruby suite via plain `rake` (including its existing coverage gate):
+Run the ten configured current/default component repositories and the detached
+front-door Ruby suite via plain `rake` (including its existing coverage gate).
+When AFDP is selected (including `--core`), it contributes two required suites:
+
+| Logical suite | Command in the canonical AFDP checkout |
+| --- | --- |
+| `af-data-pipeline / fast` | `bundle exec rake` |
+| `af-data-pipeline / integration` | `bundle exec rake test:integration` |
+
+AFDP's local plain rake is the fast safety contract. Its integration command is
+the slow gate, including designated functional workflows, independence checks
+and fresh full-population coverage. Both are required for an AFDP component PASS;
+a green fast rake alone does not establish final integration. The integration
+gate must exit successfully and emit its public completion marker and reconciled
+functional/full-coverage summaries. Missing entrypoints or evidence fail closed.
 
 ```bash
 bin/af-test
@@ -415,6 +428,20 @@ claiming unverified coverage from front-door rake; this deliberately repeats
 three small front-door unit scenarios. Acceptance counts remain separate from
 suite totals. Serial `--fail-fast` reports remaining suites and acceptance as
 unexecuted when an earlier suite fails.
+
+AFDP fast runs before integration, exactly once each, in one repository scheduling
+slot even with `-j N`. Unrelated repositories may run concurrently within the
+existing job limit. Ordinary runs attempt both AFDP commands even if fast fails;
+serial `--fail-fast` labels every unexecuted suite `NOT RUN`. Missing checkouts
+remain `MISSING`. Omitting AFDP selects neither command. `--comprehensive`
+adds operator acceptance after these normal gates.
+
+Each suite has its own command, status, elapsed time and captured diagnostics.
+Suite counts include both AFDP invocations; physical repository counts and
+scheduling history retain one AFDP entry with cumulative elapsed time. Minitest
+totals add independent executed invocations, including visible independence and
+coverage runs. Worker subtotals are replaced only by reconciled parent summaries;
+unknown counts are warned about and no previous report is read as test evidence.
 
 Cross-repository commands deliberately run in a **non-login shell** so they inherit the
 operator's active PATH (for example mise/asdf/Homebrew Ruby) instead of silently falling
@@ -454,7 +481,7 @@ bin/af-test --all
 
 #### Install a global `af-test` command
 
-To run the four-job workspace test from any AdventureFinder sibling repository while
+To run the three-job workspace test from any AdventureFinder sibling repository while
 leaving the shell in the directory where it started, install the user-level wrapper:
 
 ```bash
@@ -462,7 +489,7 @@ bin/install-af-test-command
 ```
 
 The installer writes `~/bin/af-test` (or `$AF_USER_BIN/af-test` when that override is
-set) as a tiny wrapper pointing at this checkout's `bin/af-test-4`. It is idempotent
+set) as a tiny wrapper pointing at this checkout's `bin/af-test-3`. It is idempotent
 and refuses to overwrite a different existing command. It does **not** edit shell
 startup files. If the install directory is not already on `PATH`, it prints the exact
 `export PATH=...` line to add.

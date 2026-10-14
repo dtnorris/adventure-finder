@@ -5,11 +5,31 @@ require "minitest/autorun"
 require "pathname"
 require "stringio"
 require "tmpdir"
+require "timeout"
 require "yaml"
 
 require "adventure_finder_workspace"
 
 class AdventureFinderWorkspaceTest < Minitest::Test
+  # Returns a captured AFDP worker block with reconciled aggregate accounting.
+  # Inputs select the public suite and counts; no command or fixture is executed.
+  def self.worker_output(suite, runs:, assertions:)
+    "Running #{runs} tests in 1 isolated Ruby workers (seed 1)\n" \
+      "Suite: #{suite}\nWorker 1:\n" \
+      "#{runs} runs, #{assertions} assertions, 0 failures, 0 errors, 0 skips\n" \
+      "Finished in 0.010000s across all workers.\n" \
+      "#{runs} runs, #{assertions} assertions, 0 failures, 0 errors, 0 skips\n"
+  end
+
+  # Models the public integration output, including independent dependency work
+  # and full coverage, so the fake runner cannot pass on exit status alone.
+  def self.integration_output
+    worker_output("integration (functional)", runs: 1, assertions: 3) +
+      "test:integration:functional:deps:\n2 runs, 3 assertions, 0 failures, 0 errors, 0 skips\n" +
+      "test:coverage:full:\n" + worker_output("all (coverage)", runs: 3, assertions: 5) +
+      "Integration validation finished in 0.030s.\n"
+  end
+
   FakeStatus = Struct.new(:successful) do
     def success?
       successful
@@ -58,17 +78,323 @@ class AdventureFinderWorkspaceTest < Minitest::Test
   class RecordingRunner
     attr_reader :calls
 
-    def initialize(fail_command: nil)
+    def initialize(fail_command: nil, integration_output: AdventureFinderWorkspaceTest.integration_output)
       @calls = []
       @fail_command = fail_command
+      @integration_output = integration_output
     end
 
     def shell_capture(command, chdir:, env: {})
       @calls << [command, chdir.to_s, env]
       AdventureFinderWorkspace::CommandRunner::Result.new(
-        stdout: "2 runs, 3 assertions, 0 failures, 0 errors, 0 skips\n",
+        stdout: command == "bundle exec rake test:integration" ? @integration_output : "2 runs, 3 assertions, 0 failures, 0 errors, 0 skips\n",
         stderr: "", status: FakeStatus.new(command != @fail_command)
       )
+    end
+  end
+
+  # Synchronizes two independent checkout commands without sleep-based timings.
+  # Captures actual concurrent calls and rejects a scheduler that cannot start both.
+  class PipelineParallelRunner < RecordingRunner
+    attr_reader :max_active, :overlapping_paths, :events
+
+    def initialize
+      super
+      @mutex = Mutex.new
+      @fast_started = Queue.new
+      @other_started = Queue.new
+      @active = []
+      @max_active = 0
+      @overlapping_paths = []
+      @events = []
+    end
+
+    # Returns normal fake command output after a bounded two-checkout handshake.
+    # Timeout::Error exposes scheduling regressions instead of hanging the suite.
+    def shell_capture(command, chdir:, env: {})
+      path = chdir.to_s
+      @mutex.synchronize do
+        @overlapping_paths << path if @active.include?(path)
+        @active << path
+        @max_active = [@max_active, @active.length].max
+        @events << [:start, path, command]
+      end
+      Timeout.timeout(2) do
+        if File.basename(path) == "af-data-pipeline" && command == "bundle exec rake"
+          @fast_started << true
+          @other_started.pop
+        elsif File.basename(path) == "other"
+          @fast_started.pop
+          @other_started << true
+        end
+      end
+      @mutex.synchronize { super }
+    ensure
+      @mutex.synchronize do
+        @events << [:finish, path, command]
+        @active.delete(path)
+      end
+    end
+  end
+
+  # Yields one disposable canonical pipeline checkout, an unrelated checkout,
+  # and a detached front door with injected commands; it never uses live roots.
+  def with_pipeline_workspace(runner: RecordingRunner.new, missing: false)
+    Dir.mktmpdir do |directory|
+      components = File.join(directory, "components")
+      front = File.join(directory, "front")
+      FileUtils.mkdir_p(File.join(components, "af-data-pipeline", ".git")) unless missing
+      FileUtils.mkdir_p(File.join(components, "other", ".git"))
+      FileUtils.mkdir_p(File.join(front, "lib"))
+      FileUtils.mkdir_p(File.join(front, "bin"))
+      File.write(File.join(front, "Rakefile"), "")
+      File.write(File.join(front, "lib/adventure_finder_workspace.rb"), "")
+      File.write(File.join(front, "bin/af-operator-acceptance"), "")
+      out, err = StringIO.new, StringIO.new
+      workspace = AdventureFinderWorkspace::Workspace.new(manifest: manifest, root: components,
+        front_door_root: front, runner: runner, out: out, err: err)
+      pipeline = manifest.repositories.find { |repo| repo["name"] == "af-data-pipeline" }
+      yield workspace, pipeline, runner, out, err, front
+    end
+  end
+
+  # Confirms both normal selections expand only the canonical physical checkout.
+  def test_pipeline_default_and_core_selection_run_both_gates_once
+    [manifest.selected, manifest.selected(core: true)].each do |selection|
+      with_pipeline_workspace do |workspace, pipeline, runner, out, err, front|
+        # Populate only selected testable fixtures. Archived and production roots
+        # deliberately exist as sentinels but must receive no command or write.
+        selection.select { |repo| repo["test"] }.each do |repo|
+          FileUtils.mkdir_p(workspace.root / repo.fetch("name") / ".git")
+        end
+        sentinels = %w[af-data-pipeline-production af-corpus-ingester-basics af-matcher-cli]
+        sentinels.each do |name|
+          FileUtils.mkdir_p(workspace.root / name / ".git")
+          File.write(workspace.root / name / "sentinel", "unchanged")
+        end
+        assert workspace.test(repos: selection)
+        calls = runner.calls.select { |_command, path, _env| path == (workspace.root / pipeline["name"]).to_s }
+        assert_equal ["bundle exec rake", "bundle exec rake test:integration"], calls.map(&:first)
+        assert_match(/^af-data-pipeline \/ fast\s+PASS\s+\d+\.\d{2}s$/, out.string)
+        assert_match(/^af-data-pipeline \/ integration\s+PASS\s+\d+\.\d{2}s$/, out.string)
+        assert_includes out.string, "Physical repositories: #{selection.count { |repo| repo['test'] } + 1}"
+        sentinels.each do |name|
+          refute runner.calls.any? { |_command, path, _env| path == (workspace.root / name).to_s }
+          assert_equal "unchanged", File.read(workspace.root / name / "sentinel")
+        end
+        history = YAML.safe_load(File.read(Dir.glob("#{front}/output/af-test/run-*.yml").last))
+        assert_equal "pass", history.dig("repositories", "af-data-pipeline", "result")
+        assert_equal selection.count { |repo| repo["test"] } + 1, history.fetch("repositories").length
+        assert_empty err.string
+      end
+    end
+  end
+
+  # Omitting AFDP executes neither command and never invents a pipeline result.
+  def test_omitted_pipeline_has_no_suites
+    with_pipeline_workspace do |workspace, _pipeline, runner, out|
+      assert workspace.test(repos: [], include_front_door: false)
+      assert_empty runner.calls
+      refute_includes out.string, "af-data-pipeline"
+    end
+  end
+
+  # Either public command failure fails the component while ordinary execution
+  # still attempts the other command and prints captured stdout/stderr diagnostics.
+  def test_pipeline_failures_do_not_suppress_the_other_gate_or_comprehensive
+    ["bundle exec rake", "bundle exec rake test:integration"].each do |command|
+      runner = RecordingRunner.new(fail_command: command)
+      with_pipeline_workspace(runner: runner) do |workspace, pipeline, _runner, out|
+        refute workspace.test(repos: [pipeline], comprehensive: true)
+        assert_equal ["bundle exec rake", "bundle exec rake test:integration", "rake"], runner.calls.first(3).map(&:first)
+        assert_equal 4, runner.calls.length
+        phase = command.end_with?("test:integration") ? "integration" : "fast"
+        assert_match(/^af-data-pipeline \/ #{phase}\s+FAIL/, out.string)
+        assert_includes out.string, "Component phase: 0/1 passed"
+        assert_includes out.string, "Operator acceptance phase: PASS"
+        assert_match(/^Total runs:\s+10$/, out.string)
+      end
+    end
+  end
+
+  # Exit zero is insufficient: absent entrypoints, malformed totals, or missing
+  # functional/full coverage/completion evidence all fail the integration gate.
+  def test_pipeline_integration_requires_fresh_complete_public_output
+    valid = self.class.integration_output
+    invalid_outputs = [
+      "",
+      "rake aborted!\nDon't know how to build task 'test:integration'\n",
+      valid.sub("Integration validation finished in 0.030s.\n", ""),
+      valid.sub("Suite: all (coverage)", "Suite: fast (coverage)"),
+      valid.sub("Suite: integration (functional)", "Suite: fast (functional)"),
+      valid.sub("3 runs, 5 assertions", "99 runs, 5 assertions"),
+      valid + valid,
+      valid + "1 runs, 1 assertions, 1 failures, 0 errors, 0 skips\n"
+    ]
+    invalid_outputs.each do |output|
+      with_pipeline_workspace(runner: RecordingRunner.new(integration_output: output)) do |workspace, pipeline, runner, out|
+        refute workspace.test(repos: [pipeline], include_front_door: false)
+        assert_equal 2, runner.calls.length
+        assert_match(/^af-data-pipeline \/ fast\s+PASS/, out.string)
+        assert_match(/^af-data-pipeline \/ integration\s+FAIL/, out.string)
+        assert_includes out.string, "required AFDP integration completion/accounting evidence"
+      end
+    end
+  end
+
+  # Missing checkouts report two MISSING gates with no commands or fake counts.
+  def test_missing_pipeline_checkout_is_missing_for_both_suites
+    with_pipeline_workspace(missing: true) do |workspace, pipeline, runner, out, err|
+      refute workspace.test(repos: [pipeline], include_front_door: false)
+      assert_empty runner.calls
+      assert_match(/^af-data-pipeline \/ fast\s+MISSING\s+-$/, out.string)
+      assert_match(/^af-data-pipeline \/ integration\s+MISSING\s+-$/, out.string)
+      assert_match(/^Total runs:\s+0$/, out.string)
+      assert_includes err.string, "invalid or missing suite root"
+      refute_includes err.string, "test counts unknown"
+    end
+  end
+
+  # Serial fail-fast preserves rows for the second AFDP suite and later repos;
+  # a later front-door or acceptance phase cannot turn that work into PASS.
+  def test_pipeline_fail_fast_reports_every_unexecuted_suite
+    ["bundle exec rake", "bundle exec rake test:integration"].each do |command|
+      runner = RecordingRunner.new(fail_command: command)
+      with_pipeline_workspace(runner: runner) do |workspace, pipeline, _runner, out, err|
+        other = {"name" => "other", "test" => "other-command"}
+        refute workspace.test(repos: [pipeline, other], fail_fast: true, comprehensive: true)
+        assert_equal(command.end_with?("test:integration") ? 2 : 1, runner.calls.length)
+        assert_match(/^other\s+NOT RUN\s+-$/, out.string)
+        assert_match(/^adventure-finder\s+NOT RUN\s+-$/, out.string)
+        assert_includes out.string, "Operator acceptance phase: NOT RUN (fail-fast)"
+        assert_match(/^af-data-pipeline \/ integration\s+NOT RUN\s+-$/, out.string) if command == "bundle exec rake"
+        refute_includes err.string, "test counts unknown"
+      end
+    end
+    with_pipeline_workspace do |workspace, pipeline, runner, out|
+      refute workspace.test(repos: [{"name" => "absent", "test" => "missing"}, pipeline], fail_fast: true)
+      assert_empty runner.calls
+      assert_match(/^af-data-pipeline \/ fast\s+NOT RUN\s+-$/, out.string)
+      assert_match(/^af-data-pipeline \/ integration\s+NOT RUN\s+-$/, out.string)
+    end
+  end
+
+  # A controlled handshake proves two actual checkout jobs can overlap while
+  # AFDP retains one slot and starts integration only after fast has returned.
+  def test_parallel_pipeline_suites_share_one_bounded_repository_slot
+    runner = PipelineParallelRunner.new
+    with_pipeline_workspace(runner: runner) do |workspace, pipeline, _runner, out, err, front|
+      assert workspace.test(repos: [pipeline, {"name" => "other", "test" => "other-command"}],
+        jobs: 2, include_front_door: false)
+      assert_equal 2, runner.max_active
+      assert_empty runner.overlapping_paths
+      path = (workspace.root / "af-data-pipeline").to_s
+      fast_end = runner.events.index([:finish, path, "bundle exec rake"])
+      integration_start = runner.events.index([:start, path, "bundle exec rake test:integration"])
+      assert_operator fast_end, :<, integration_start
+      assert_equal 3, runner.calls.length
+      assert runner.calls.all? { |_command, _path, env| env["AF_TEST_CONTENDED"] == "1" }
+      assert_includes out.string, "3/3 suites passed."
+      assert_includes out.string, "Component phase: 2/2 passed"
+      assert_includes out.string, "Physical repositories: 2"
+      assert_match(/^Total runs:\s+10$/, out.string)
+      assert_match(/^Total assertions:\s+17$/, out.string)
+      history = YAML.safe_load(File.read(Dir.glob("#{front}/output/af-test/run-*.yml").last))
+      assert_equal %w[af-data-pipeline other], history.fetch("repositories").keys.sort
+      assert_operator history.dig("repositories", "af-data-pipeline", "elapsed_seconds"), :>=, 0.0
+      assert_empty err.string
+    end
+  end
+
+  # Verifies cumulative scheduling history uses one physical AFDP entry and the
+  # sum of both suite durations, including failure and NOT RUN outcomes.
+  def test_pipeline_history_and_summary_preserve_cumulative_repository_time
+    with_pipeline_workspace do |workspace, _pipeline, _runner, out, _err, front|
+      results = [
+        AdventureFinderWorkspace::Workspace::TestResult.new(name: "af-data-pipeline",
+          suite: "fast", command: "bundle exec rake", result: :pass, elapsed: 1.25),
+        AdventureFinderWorkspace::Workspace::TestResult.new(name: "af-data-pipeline",
+          suite: "integration", command: "bundle exec rake test:integration", result: :fail, elapsed: 2.5)
+      ]
+      workspace.send(:record_test_timing_history, results, workspace_elapsed: 3.8, jobs: 2)
+      history = YAML.safe_load(File.read(Dir.glob("#{front}/output/af-test/run-*.yml").last))
+      assert_equal ["af-data-pipeline"], history.fetch("repositories").keys
+      assert_equal "fail", history.dig("repositories", "af-data-pipeline", "result")
+      assert_in_delta 3.75, history.dig("repositories", "af-data-pipeline", "elapsed_seconds"), 0.000001
+      workspace.send(:print_test_summary, results, workspace_elapsed: 3.8, jobs: 2)
+      assert_includes out.string, "Repository cumulative time: af-data-pipeline 3.75s"
+      assert_match(/^Workspace wall time:\s+3.80s$/, out.string)
+      results.last.result = :not_run
+      results.last.elapsed = nil
+      workspace.send(:record_test_timing_history, results, workspace_elapsed: 1.3, jobs: 1)
+      history = YAML.safe_load(File.read(Dir.glob("#{front}/output/af-test/run-*.yml").sort.last))
+      assert_equal "not_run", history.dig("repositories", "af-data-pipeline", "result")
+      assert_in_delta 1.25, history.dig("repositories", "af-data-pipeline", "elapsed_seconds"), 0.000001
+    end
+  end
+
+  # Rejects a lying aggregate while keeping observed worker counts and separate
+  # invocations. No captured output can substitute a stale on-disk report.
+  def test_mismatched_worker_aggregate_does_not_replace_observed_subtotals
+    with_pipeline_workspace do |workspace, _pipeline, _runner, _out, err|
+      output = self.class.worker_output("integration (functional)", runs: 1, assertions: 3)
+      output = output.sub("Finished in 0.010000s across all workers.\n1 runs",
+        "Finished in 0.010000s across all workers.\n99 runs")
+      output += "2 runs, 7 assertions, 0 failures, 0 errors, 0 skips\n"
+      result = AdventureFinderWorkspace::Workspace::TestResult.new(name: "af-data-pipeline",
+        suite: "integration", result: :fail, output: output)
+      totals = workspace.send(:aggregate_minitest_totals, [result])
+      assert_equal({runs: 3, assertions: 10, failures: 0, errors: 0, skips: 0}, totals)
+      assert_includes err.string, "accounting differ; reporting observed subtotals"
+    end
+  end
+
+  # A runner may capture stderr separately; both streams must survive each gate
+  # without turning independent dependency test summaries into worker subtotals.
+  def test_pipeline_keeps_stderr_and_ignores_old_report_files
+    runner_class = Class.new(RecordingRunner) do
+      # Adds a diagnostic to the normal fake result without executing a command.
+      def shell_capture(command, chdir:, env: {})
+        result = super
+        result.stderr = "diagnostic from #{command}\n"
+        result
+      end
+    end
+    with_pipeline_workspace(runner: runner_class.new) do |workspace, pipeline, _runner, out|
+      report = workspace.root / "af-data-pipeline" / "coverage" / "full"
+      FileUtils.mkdir_p(report)
+      File.write(report / ".resultset.json", "999 runs, 999 assertions, 0 failures, 0 errors, 0 skips\n")
+      assert workspace.test(repos: [pipeline], include_front_door: false)
+      assert_includes out.string, "diagnostic from bundle exec rake\n"
+      assert_includes out.string, "diagnostic from bundle exec rake test:integration\n"
+      assert_match(/^Total runs:\s+8$/, out.string)
+      assert_match(/^Total assertions:\s+14$/, out.string)
+    end
+  end
+
+  # Exercises the repository aliases and an installed wrapper from a different
+  # directory using a shell-only recorder; no component or Ruby command runs.
+  def test_repository_aliases_and_installed_wrapper_keep_their_job_counts
+    Dir.mktmpdir do |directory|
+      bin = File.join(directory, "checkout", "bin")
+      FileUtils.mkdir_p(bin)
+      %w[af-test af-test-3 af-test-4 install-af-test-command].each do |name|
+        FileUtils.cp(File.expand_path("../bin/#{name}", __dir__), bin)
+      end
+      File.write(File.join(bin, "af-workspace"), "#!/bin/sh\nprintf '%s\\n' \"$PWD\" \"$@\"\n")
+      File.chmod(0o755, File.join(bin, "af-workspace"))
+      %w[af-test af-test-3 af-test-4].zip([[], ["-j", "3"], ["-j", "4"]]).each do |name, jobs|
+        output, status = Open3.capture2e(File.join(bin, name), "--core", chdir: directory)
+        assert status.success?, output
+        assert_equal [File.realpath(directory), "test", *jobs, "--core"], output.lines.map(&:chomp)
+      end
+      installed = File.join(directory, "user-bin")
+      output, status = Open3.capture2e({"AF_USER_BIN" => installed},
+        File.join(bin, "install-af-test-command"), chdir: directory)
+      assert status.success?, output
+      output, status = Open3.capture2e(File.join(installed, "af-test"), "--comprehensive", chdir: directory)
+      assert status.success?, output
+      assert_equal [File.realpath(directory), "test", "-j", "3", "--comprehensive"], output.lines.map(&:chomp)
     end
   end
 
@@ -89,28 +415,31 @@ class AdventureFinderWorkspaceTest < Minitest::Test
       workspace = AdventureFinderWorkspace::Workspace.new(manifest: manifest, root: components,
         front_door_root: front, runner: runner, out: out, err: StringIO.new)
       Dir.chdir(dir) { assert workspace.test(repos: manifest.selected) }
-      assert_equal configured.map { |repo| repo.fetch("test") } + ["rake"], runner.calls.map(&:first)
+      expected_commands = configured.flat_map do |repo|
+        repo["name"] == "af-data-pipeline" ? ["bundle exec rake", "bundle exec rake test:integration"] : [repo.fetch("test")]
+      end
+      assert_equal expected_commands + ["rake"], runner.calls.map(&:first)
       assert_equal front, runner.calls.last[1]
       assert_equal components, runner.calls.last[2]["AF_PROJECT_ROOT"]
       assert_equal front, runner.calls.last[2]["AF_ADVENTURE_FINDER_ROOT"]
       assert_nil runner.calls.last[2]["BUNDLE_GEMFILE"]
       refute File.exist?(File.join(front, "Gemfile"))
       assert_includes out.string, "Unconfigured selected entries: 4"
-      assert_includes out.string, "11/11 suites passed."
-      assert_match(/^Total runs:\s+22$/, out.string)
+      assert_includes out.string, "12/12 suites passed."
+      assert_match(/^Total runs:\s+28$/, out.string)
       assert_includes out.string, "Operator acceptance phase: NOT RUN"
       assert workspace.test(repos: manifest.selected, comprehensive: true)
-      assert_equal 23, runner.calls.length
+      assert_equal 25, runner.calls.length
       assert_equal "#{front}/bin/af-operator-acceptance --root #{components}", runner.calls.last.first
       assert_includes out.string, "Operator acceptance phase: PASS"
-      assert_equal 2, out.string.scan(/^Total runs:\s+22$/).length
+      assert_equal 2, out.string.scan(/^Total runs:\s+28$/).length
       # A runtime-gated component failure must not hide acceptance or become PASS.
       failed_component = RecordingRunner.new(fail_command: configured.first.fetch("test"))
       failed_out = StringIO.new
       failed_workspace = AdventureFinderWorkspace::Workspace.new(manifest: manifest, root: components,
         front_door_root: front, runner: failed_component, out: failed_out, err: StringIO.new)
       refute failed_workspace.test(repos: manifest.selected, comprehensive: true)
-      assert_equal 12, failed_component.calls.length
+      assert_equal 13, failed_component.calls.length
       assert_includes failed_out.string, "Component phase: 8/10 passed"
       assert_includes failed_out.string, "Front-door phase: PASS"
       assert_includes failed_out.string, "Operator acceptance phase: PASS"
@@ -619,7 +948,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
   end
 
   def test_cross_repo_test_summary_rolls_up_minitest_counts
-    result_class = Struct.new(:name, :result, :elapsed, :output, keyword_init: true)
+    result_class = AdventureFinderWorkspace::Workspace::TestResult
     results = [
       result_class.new(
         name: "suite-a",

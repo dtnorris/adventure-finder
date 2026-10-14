@@ -117,7 +117,7 @@ module AdventureFinderWorkspace
   end
 
   class Workspace
-    TestResult = Struct.new(:name, :command, :result, :elapsed, :output, keyword_init: true)
+    TestResult = Struct.new(:name, :suite, :command, :result, :elapsed, :output, keyword_init: true)
 
     attr_reader :manifest, :root, :runner, :out, :err
 
@@ -293,11 +293,11 @@ module AdventureFinderWorkspace
                 else
                   run_tests_parallel(testable, jobs: jobs)
                 end
-      unexecuted = testable.map { |repo| repo.fetch("name") } - results.map(&:name)
-      components = results.reject { |result| result.name == "adventure-finder" }
+      unexecuted = results.select { |result| result.result == :not_run }.map { |result| test_label(result) }
+      components = results.reject { |result| result.name == "adventure-finder" }.group_by(&:name)
       front = results.find { |result| result.name == "adventure-finder" }
-      out.puts "Component phase: #{components.count { |result| result.result == :pass }}/#{testable.count { |repo| !repo['front_door'] }} passed"
-      out.puts "Front-door phase: #{front ? front.result.to_s.upcase : 'NOT RUN'}"
+      out.puts "Component phase: #{components.count { |_name, suites| suites.all? { |result| result.result == :pass } }}/#{components.length} passed"
+      out.puts "Front-door phase: #{front ? test_status(front) : 'NOT RUN'}"
       out.puts "Unconfigured selected entries: #{unconfigured.length}"
       unconfigured.each { |repo| out.puts "#{repo.fetch('name')} UNCONFIGURED" }
       out.puts "Unexecuted suites: #{unexecuted.join(', ')}" unless unexecuted.empty?
@@ -310,6 +310,7 @@ module AdventureFinderWorkspace
           execution = runner.shell_capture(Shellwords.join(argv), chdir: @front_door_root,
                                            env: {"AF_PROJECT_ROOT" => root.to_s, "AF_ADVENTURE_FINDER_ROOT" => @front_door_root.to_s})
           out.print execution.stdout
+          out.print execution.stderr
           acceptance_ok = execution.success?
           out.puts "Operator acceptance phase: #{acceptance_ok ? 'PASS' : 'FAIL'}"
         else
@@ -426,19 +427,53 @@ module AdventureFinderWorkspace
 
     private
 
+    # Runs selected repositories in order and returns every planned suite result.
+    # Fail-fast leaves explicit NOT RUN rows; command errors retain runner semantics.
     def run_tests_serial(testable, fail_fast:)
       results = []
+      stopped = false
 
       testable.each do |repo|
-        result = run_test_repo(repo, capture: true)
-        print_buffered_test_output(result)
-        results << result
-        break if fail_fast && result.result != :pass
+        test_suites(repo).each do |suite|
+          result = stopped ? not_run_test(suite) : run_test_repo(suite, capture: true)
+          print_buffered_test_output(result)
+          results << result
+          stopped = true if fail_fast && result.result != :pass
+        end
       end
 
       results
     end
 
+    # Expands only canonical AFDP into ordered public gates; returns suite descriptors.
+    # Other repository commands, paths and identities are unchanged.
+    def test_suites(repo)
+      return [repo] unless repo.fetch("name") == "af-data-pipeline"
+
+      [
+        repo.merge("suite" => "fast", "test" => "bundle exec rake"),
+        repo.merge("suite" => "integration", "test" => "bundle exec rake test:integration")
+      ]
+    end
+
+    # Creates an unexecuted suite result with no timing or fabricated output.
+    def not_run_test(repo)
+      TestResult.new(name: repo.fetch("name"), suite: repo["suite"],
+        command: repo.fetch("test"), result: :not_run)
+    end
+
+    # Formats a result's logical suite label while retaining its physical name.
+    def test_label(result)
+      result.suite ? "#{result.name} / #{result.suite}" : result.name
+    end
+
+    # Formats a result status for humans; NOT RUN is never treated as a pass.
+    def test_status(result)
+      result.result == :not_run ? "NOT RUN" : result.result.to_s.upcase
+    end
+
+    # Runs one slot per selected repository, yielding ordered suites inside each
+    # slot. Returns completion-ordered results; thread/command errors propagate.
     def run_tests_parallel(testable, jobs:)
       results = []
       queue = Queue.new
@@ -471,11 +506,14 @@ module AdventureFinderWorkspace
               print_test_start(repo, started: start_number, total: total_count)
             end
 
-            result = run_test_repo(repo, capture: true, contended: worker_count > 1)
-
-            progress_mutex.synchronize do
-              print_test_completion(result, started: start_number, total: total_count)
-              results << result
+            # One repository owns one scheduling slot until all of its suites end.
+            # In particular AFDP's coverage writers can never overlap each other.
+            test_suites(repo).each do |suite|
+              result = run_test_repo(suite, capture: true, contended: worker_count > 1)
+              progress_mutex.synchronize do
+                print_test_completion(result, started: start_number, total: total_count)
+                results << result
+              end
             end
           end
         end
@@ -486,6 +524,8 @@ module AdventureFinderWorkspace
       results
     end
 
+    # Executes a suite descriptor at its canonical root and returns status,
+    # elapsed time and diagnostics. Missing roots do not execute a command.
     def run_test_repo(repo, capture:, contended: false)
       name = repo.fetch("name")
       command = repo.fetch("test")
@@ -502,6 +542,7 @@ module AdventureFinderWorkspace
         err.puts "MISSING #{name}: invalid or missing suite root #{path}"
         return TestResult.new(
           name: name,
+          suite: repo["suite"],
           command: command,
           result: :missing,
           elapsed: nil,
@@ -522,15 +563,20 @@ module AdventureFinderWorkspace
                chdir: path,
                env: test_env
              )
-             output = execution.stdout
+             output = execution.stdout.to_s + execution.stderr.to_s
              execution.success?
            else
              runner.shell(command, chdir: path, env: test_env)
            end
       elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at
+      if ok && repo["suite"] == "integration" && !integration_output_valid?(output)
+        output = output.to_s + "\nERROR: required AFDP integration completion/accounting evidence missing or invalid\n"
+        ok = false
+      end
 
       TestResult.new(
         name: name,
+        suite: repo["suite"],
         command: command,
         result: ok ? :pass : :fail,
         elapsed: elapsed,
@@ -538,23 +584,24 @@ module AdventureFinderWorkspace
       )
     end
 
+    # Prints the exact captured diagnostics under the suite's command and label.
     def print_buffered_test_output(result)
-      return if result.result == :missing
-
       out.puts
-      out.puts "=== #{result.name}: #{result.command} ==="
+      out.puts "=== #{test_label(result)}: #{result.command} ==="
       return if result.output.to_s.empty?
 
       out.print(result.output)
       out.puts unless result.output.end_with?("\n")
     end
 
+    # Reports suite outcomes/counts separately from cumulative physical checkout
+    # timing and workspace wall time, using only this invocation's captured output.
     def print_test_summary(results, workspace_elapsed:, jobs:)
       out.puts
       out.puts "=== AdventureFinder cross-repo test summary ==="
       results.each do |result|
         duration = result.elapsed ? format("%.2fs", result.elapsed) : "-"
-        out.puts format("%-30s %-7s %8s", result.name, result.result.to_s.upcase, duration)
+        out.puts format("%-38s %-7s %8s", test_label(result), test_status(result), duration)
       end
 
       failures = results.reject { |result| result.result == :pass }
@@ -563,6 +610,11 @@ module AdventureFinderWorkspace
       minitest_totals = aggregate_minitest_totals(results)
 
       out.puts "#{passed}/#{results.length} suites passed."
+      results.group_by(&:name).each do |name, suites|
+        elapsed = suites.sum { |result| result.elapsed || 0.0 }
+        out.puts format("Repository cumulative time: %s %.2fs", name, elapsed)
+      end
+      out.puts "Physical repositories: #{results.map(&:name).uniq.length}"
       out.puts format("%-30s %8d", "Total runs:", minitest_totals.fetch(:runs))
       out.puts format("%-30s %8d", "Total assertions:", minitest_totals.fetch(:assertions))
       out.puts format("%-30s %8d", "Total failures:", minitest_totals.fetch(:failures))
@@ -573,52 +625,80 @@ module AdventureFinderWorkspace
       out.puts format("%-30s %8s", "Workspace wall time:", format("%.2fs", workspace_elapsed))
     end
 
-    def aggregate_minitest_totals(results)
-      totals = {
-        runs: 0,
-        assertions: 0,
-        failures: 0,
-        errors: 0,
-        skips: 0
-      }
+    # Parses captured output into observed summaries, verified worker suites and
+    # accounting warnings. Only reconciled parent totals replace worker subtotals.
+    # Incomplete/malformed output is retained as observed counts, never invented.
+    def minitest_accounting(output)
+      summaries = []
+      verified = []
+      warnings = []
+      block = nil
+      aggregate_next = false
+      pattern = /\A(\d+) runs, (\d+) assertions, (\d+) failures, (\d+) errors, (\d+) skips\z/
+      output.to_s.each_line do |raw|
+        line = raw.chomp
+        match = line.match(pattern)
+        if aggregate_next && !line.empty? && !match
+          warnings << "worker aggregate summary missing; reporting observed subtotals"
+          block = nil
+          aggregate_next = false
+        end
+        if (heading = line.match(/\ARunning (\d+) tests in (\d+) isolated Ruby workers \(seed \d+\)\z/))
+          warnings << "worker aggregate summary missing; reporting observed subtotals" if block
+          block = {start: summaries.length, tests: heading[1].to_i, workers: heading[2].to_i, seen: []}
+        elsif block && (suite = line.match(/\ASuite: (\w+) \((functional|coverage)\)\z/))
+          block[:suite] = suite.captures.join(" ")
+        elsif block && (worker = line.match(/\AWorker (\d+):\z/))
+          block[:seen] << worker[1].to_i
+        elsif block && line.match?(/\AFinished in [\d.]+s across all workers\.\z/)
+          aggregate_next = true
+        end
+        next unless match
 
-      pattern = /\b(\d+) runs, (\d+) assertions, (\d+) failures, (\d+) errors, (\d+) skips\b/
-
-      results.each do |result|
-        summaries = []
-        worker_start = nil
-        aggregate_next = false
-        result.output.to_s.each_line do |line|
-          if aggregate_next && !line.strip.empty? && !line.match?(pattern)
-            err.puts "WARNING #{result.name}: worker aggregate summary missing; reporting observed subtotals"
-            worker_start = nil
-            aggregate_next = false
+        counts = match.captures.map(&:to_i)
+        if aggregate_next
+          workers = summaries[block.fetch(:start)..-1]
+          worker_totals = Array.new(5) { |column| workers.sum { |values| values[column] } }
+          if workers.length == block[:workers] && block[:seen] == (1..block[:workers]).to_a &&
+              worker_totals == counts && counts[0] == block[:tests]
+            summaries.slice!(block[:start]..-1)
+            summaries << counts
+            verified << block[:suite] if counts[0].positive? && counts[2..3].all?(&:zero?)
+          else
+            warnings << "worker and aggregate test accounting differ; reporting observed subtotals"
           end
-          if line.match?(/^Running \d+ tests in \d+ isolated Ruby workers \(seed \d+\)/)
-            worker_start = summaries.length
-          elsif worker_start && line.match?(/^Finished in [\d.]+s across all workers\.$/)
-            aggregate_next = true
-          end
-          match = line.match(pattern)
-          next unless match
-
-          counts = match.captures.map { |value| Integer(value) }
-          if aggregate_next
-            # This explicit parent summary replaces only its worker subtotals.
-            # Independent invocations before/after this block remain additive.
-            workers = summaries.slice!(worker_start..-1)
-            worker_totals = Array.new(5) { |column| workers.sum { |worker| worker[column] } }
-            err.puts "WARNING #{result.name}: worker and aggregate test accounting differ" unless worker_totals == counts
-            worker_start = nil
-            aggregate_next = false
-          end
+          block = nil
+          aggregate_next = false
+        else
           summaries << counts
         end
-        err.puts "WARNING #{result.name}: worker aggregate summary missing; reporting observed subtotals" if worker_start
-        err.puts "WARNING #{result.name}: no parseable Minitest summary; test counts unknown" if summaries.empty? && result.result != :missing
+      end
+      warnings << "worker aggregate summary missing; reporting observed subtotals" if block
+      [summaries, verified, warnings]
+    end
+
+    # Requires the public integration completion marker and reconciled functional
+    # and full-coverage runs from this capture. Returns false for absent evidence.
+    def integration_output_valid?(output)
+      summaries, verified, warnings = minitest_accounting(output)
+      warnings.empty? && verified.count("integration functional") == 1 &&
+        verified.count("all coverage") == 1 &&
+        summaries.all? { |counts| counts[2..3].all?(&:zero?) } &&
+        output.to_s.scan(/^Integration validation finished in \d+\.\d{3}s\.$/).length == 1
+    end
+
+    # Sums independent executed Minitest invocations from suite results, returning
+    # exact observed totals and emitting warnings for unavailable/invalid counts.
+    def aggregate_minitest_totals(results)
+      totals = {runs: 0, assertions: 0, failures: 0, errors: 0, skips: 0}
+      results.each do |result|
+        summaries, _verified, warnings = minitest_accounting(result.output)
+        warnings.each { |warning| err.puts "WARNING #{test_label(result)}: #{warning}" }
+        if summaries.empty? && ![:missing, :not_run].include?(result.result)
+          err.puts "WARNING #{test_label(result)}: no parseable Minitest summary; test counts unknown"
+        end
         summaries.each { |counts| totals.keys.each_with_index { |key, column| totals[key] += counts[column] } }
       end
-
       totals
     end
 
@@ -643,7 +723,7 @@ module AdventureFinderWorkspace
 
       out.puts format(
         "%s [%d/%d] %-30s %8s",
-        marker, started, total, result.name, duration
+        marker, started, total, test_label(result), duration
       )
       out.flush if out.respond_to?(:flush)
     end
@@ -693,6 +773,8 @@ module AdventureFinderWorkspace
       history
     end
 
+    # Persists one cumulative timing/outcome per physical repository from planned
+    # suite results. Write failures emit a warning instead of hiding test results.
     def record_test_timing_history(results, workspace_elapsed:, jobs:)
       directory = test_timing_history_dir
       FileUtils.mkdir_p(directory)
@@ -701,10 +783,11 @@ module AdventureFinderWorkspace
         "created_at" => Time.now.utc.iso8601(6),
         "jobs" => jobs,
         "workspace_elapsed_seconds" => workspace_elapsed.round(6),
-        "repositories" => results.each_with_object({}) do |result, repositories|
-          repositories[result.name] = {
-            "result" => result.result.to_s,
-            "elapsed_seconds" => result.elapsed&.round(6)
+        "repositories" => results.group_by(&:name).transform_values do |suites|
+          outcome = suites.find { |result| result.result != :pass } || suites.first
+          {
+            "result" => outcome.result.to_s,
+            "elapsed_seconds" => suites.any?(&:elapsed) ? suites.sum { |result| result.elapsed || 0.0 }.round(6) : nil
           }
         end
       }
