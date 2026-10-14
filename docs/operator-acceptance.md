@@ -8,7 +8,7 @@ provider calls.
 
 `bin/af-test --comprehensive` invokes this public entrypoint after component and
 front-door suites. Both standalone and comprehensive operator acceptance execute
-all 25 currently registered scenarios. Three front-door unit files
+all 27 currently registered scenarios. Three front-door unit files
 (`batch-front-door`, `local-capacity-bootstrap`, and `production-context`) are
 also exercised by front-door rake; they are intentionally rerun under the
 operator harness's credential-free, offline guard rather than marked `COVERED`
@@ -33,7 +33,47 @@ bin/af-operator-acceptance --only ig19b-boundary-exceptions
 bin/af-operator-acceptance --only ig19c-execution-exceptions
 bin/af-operator-acceptance --only ig19c-evidence-review-exceptions
 bin/af-operator-acceptance --only final-promotion
+bin/af-operator-acceptance --only ig19d-restart-promotion
+bin/af-operator-acceptance --only ig19d-staleness
 ```
+
+## Durable restart and staleness proof
+
+The independently selectable `ig19d-restart-promotion` scenario compares public
+operation, source, approved-boundary, staged-successor and standing-release
+observations with fresh processes launched from another working directory.
+It checks exact bindings and completed-work counts, then uses the real
+final-package and adoption CLIs through the front door. It does not substitute
+a serialized package or mocked validator for that handoff. An owner refusal
+remains a failed acceptance row and blocks downstream promotion rows.
+
+`ig19d-staleness` supplements those checks with the landed owners' executable
+concurrency, workload-restart, local execution and authority predicates. Scoring
+reuse and promotion readiness remain separate. Synthetic producer setup and
+component predicates do not constitute a continuous automatic ingest journey.
+The existing [operation composition](INGEST_OPERATION_ROUTING_COMPOSITION_V0.1.md),
+[workload preparation](STAGED_WORKLOAD_PREPARATION_V0.1.md) and
+[local execution](LOCAL_INGEST_EXECUTION_V0.1.md) contracts remain authoritative;
+IG-16B is exercised only as an unavailable-authority refusal, not enabled.
+
+For IG-19D's narrowly authorized synthetic Git setup, use the validation wrapper:
+
+```bash
+AF_DATA_PIPELINE_ROOT=/path/to/exact/pipeline/revision ruby acceptance/ig19d_validation.rb focused-support
+AF_DATA_PIPELINE_ROOT=/path/to/exact/pipeline/revision ruby acceptance/ig19d_validation.rb focused
+AF_DATA_PIPELINE_ROOT=/path/to/exact/pipeline/revision ruby acceptance/ig19d_validation.rb staleness
+# After ACT checkpoint preservation, pass one repository name for its unchanged default suite:
+AF_DATA_PIPELINE_ROOT=/path/to/exact/pipeline/revision ruby acceptance/ig19d_validation.rb af-data-pipeline
+```
+
+The wrapper clones component sources into a temporary workspace, removes
+provider credentials, propagates the existing offline guard, and confines Git
+mutations to its marked disposable fixture root. Real checkouts, symlink escapes,
+Git-directory overrides, global configuration and pushes are refused. The
+exception permits fixture history creation only; workflow promotion still must
+preserve HEAD, refs and index. Default runtime, coverage, benchmark, lint and
+dependency tasks remain unchanged. Logs and failed proof fixtures are retained
+under the printed temporary paths for diagnosis.
 
 ## IG-19A public entry proof
 

@@ -16,6 +16,21 @@ module AdventureFinderWorkspace
 
     SCENARIOS = [
       Scenario.new(
+        name: "ig19d-restart-promotion",
+        description: "fresh-process durable source, boundary, standing-release and exact promotion proof",
+        repository: "adventure-finder",
+        test_file: "acceptance/ig19d_restart_promotion_test.rb",
+        bundle_repository: "af-data-pipeline",
+        required_paths: {"af-data-pipeline" => "bin/af-final-release-adoption"}
+      ),
+      Scenario.new(
+        name: "ig19d-staleness",
+        description: "staged/shared-head concurrency, frozen workload, execution and release predicates",
+        repository: "adventure-finder",
+        test_file: "acceptance/ig19d_staleness_matrix.rb",
+        required_paths: {"af-data-pipeline" => "test/staged_scoring_authority_stale_base_acceptance_test.rb"}
+      ),
+      Scenario.new(
         name: "ig19a-entry-contract",
         description: "IG-19A public start, conversion receipt, durable binding and restart/replay",
         repository: "adventure-finder",
