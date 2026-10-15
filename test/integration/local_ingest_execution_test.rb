@@ -93,6 +93,8 @@ class LocalIngestExecutionTest < Minitest::Test
       JSON.parse(result.stdout)
     end
 
+    # Release observed bound FIFO payloads; hold the first observation until the
+    # next first-pool payload starts. Timeout raises instead of faking readiness.
     def release_jobs
       Dir.glob(File.join(@afw, "barriers/*.started")).each do |path|
         next if @released.include?(path)
@@ -100,10 +102,58 @@ class LocalIngestExecutionTest < Minitest::Test
         begin
           File.open(path.delete_suffix(".started"), File::WRONLY | File::NONBLOCK) { |io| io.write("finish\n") }
           @released << path
+          if File.basename(path) == "a-1.started"
+            # Keep the first bound observation open until the second first-pool
+            # payload owns the worker. This makes the intended four-job trace
+            # deterministic without adding unsupported plan dependencies.
+            Timeout.timeout(10) do
+              sleep 0.005 until File.file?(File.join(@afw, "barriers/a-2.started"))
+            end
+          end
         rescue Errno::ENXIO
           next
         end
       end
+    end
+  end
+
+  # Insert a real external public pause at the coordinator's exact request or
+  # launch boundary. Command order, rather than sleeps, establishes the overlap.
+  class OverlappingPauseRunner < PublicReadRunner
+    attr_reader :events
+
+    # Select before/after request or before scoped resume; inputs are public
+    # command locators. The command adapter propagates component failures.
+    def initialize(ordering:, wlo:, output:)
+      @ordering, @wlo, @output = ordering, wlo, output
+      @injected = false
+      @events = []
+    end
+
+    # Interleave one external request around the actual owned-pause command.
+    def capture(environment, *argv, chdir:)
+      owned = File.basename(argv.first) == "wlo" && argv[1] == "pause" && argv.include?("--owner-token")
+      external_pause if owned && @ordering == :before_request && !@injected
+      result = super
+      @events << {"event" => "owned_request", "time" => Time.now.utc.iso8601(6)} if owned
+      external_pause if owned && @ordering == :after_request && !@injected
+      result
+    end
+
+    # Inject after AF's public ownership check but before WLO's scoped release.
+    def spawn(environment, *argv, **options)
+      external_pause if argv.include?("--release-pause") && @ordering == :before_resume && !@injected
+      super
+    end
+
+    private
+
+    # Make a genuine external pause through WLO, never its private storage paths.
+    def external_pause
+      result = PublicReadRunner.new.capture({}, File.join(@wlo, "bin/wlo"), "pause", "--output", @output, chdir: @wlo)
+      raise result.stderr unless result.status.success?
+      @injected = true
+      @events << {"event" => "external_request", "time" => Time.now.utc.iso8601(6)}
     end
   end
 
@@ -343,6 +393,7 @@ class LocalIngestExecutionTest < Minitest::Test
     end
   end
 
+  # A fresh service can continue a real retained WLO-owned hold, preserving jobs.
   def test_fresh_resume_reconstructs_a_persisted_coordinator_drain
     paths = execution_paths
     store = WorkloadOrchestrator::ExecutionStore.new(
@@ -350,6 +401,10 @@ class LocalIngestExecutionTest < Minitest::Test
     )
     store.prepare!
     store.pause!
+    store.clear_pause!
+    token = "e" * 64
+    code, _stdout, stderr = public_wlo("pause", "--output", paths.fetch(:output), "--owner-token", token)
+    assert_equal 0, code, stderr
     intent = AdventureFinderWorkspace::LocalExecutionIntentStore.new(
       root: File.join(@front, "output/local-ingest-executions/v0.1")
     ).capture!(
@@ -362,7 +417,7 @@ class LocalIngestExecutionTest < Minitest::Test
       JSON.pretty_generate(
         "contract_version" => "adventurefinder-local-execution-state/v0.1",
         "intent_id" => intent.fetch("intent_id"), "phase" => "draining", "step" => 1,
-        "updated_at" => Time.now.utc.iso8601
+        "pause_token" => token, "updated_at" => Time.now.utc.iso8601
       ) + "\n"
     )
 
@@ -488,7 +543,7 @@ class LocalIngestExecutionTest < Minitest::Test
     service.define_singleton_method(:execution_report) { |*, **| report }
     service.define_singleton_method(:load_state) { |*| state }
     service.define_singleton_method(:action_check) do |*|
-      {"reason" => "executor_active", "execution_status" => nil}
+      {"disposition" => "blocked", "reason" => "executor_active", "execution_status" => nil}
     end
     service.define_singleton_method(:persist_state) { |*, **| state }
     service.define_singleton_method(:spawn_wlo) { |*| raise "duplicate WLO launch" }
@@ -779,8 +834,111 @@ class LocalIngestExecutionTest < Minitest::Test
     refute File.exist?(File.join(execution_paths.fetch(:output), "execution.json"))
   end
 
+  # A final WLO failure outranks a concurrently visible owned drain marker;
+  # the existing recovery gate must not be misreported as an incomplete drain.
+  def test_terminal_failure_during_owned_drain_keeps_execution_gate
+    service = coordinator
+    token = "d" * 64
+    report = {"status" => "workload_failed", "paused" => true, "executor_active" => false,
+      "pause_control" => {"operator_pause" => false, "request_ids" => [Digest::SHA256.hexdigest(token)]}}
+    service.define_singleton_method(:execution_report) { |*, **| report }
+    service.define_singleton_method(:demands) do |*, **|
+      {"b" => {"state" => "workload_failed", "bound_count" => 0, "uncertain_count" => 0, "quiescent" => true}}
+    end
+    handle = Object.new
+    handle.define_singleton_method(:finished?) { true }
+    handle.define_singleton_method(:wait) { PublicReadRunner::Status.new(2) }
+    error = assert_raises(AdventureFinderWorkspace::LocalExecution::Failure) do
+      service.send(:monitor, {}, @capability_plan, {}, {"phase" => "draining", "pause_token" => token}, handle)
+    end
+    assert_equal "WLO_EXECUTION_GATE", error.code
+  end
+
+  # Public external requests remain effective on either side of an owned pause.
+  def test_external_pause_before_owned_request_is_not_cleared
+    assert_overlap_is_gated(:before_request)
+  end
+
+  # A later operator hold cannot be overwritten by a coordinator's retained phase.
+  def test_external_pause_after_owned_request_is_not_cleared
+    assert_overlap_is_gated(:after_request)
+  end
+
+  # The WLO release operation itself protects a request arriving after AF's check.
+  def test_external_pause_at_scoped_resume_is_not_cleared
+    assert_overlap_is_gated(:before_resume)
+  end
+
+  # A legacy marker plus an asserted drain phase is not proof of ownership.
+  def test_legacy_drain_state_does_not_gain_automatic_operator_authority
+    paths = execution_paths
+    store = WorkloadOrchestrator::ExecutionStore.new(
+      plan: WorkloadOrchestrator::Plan.load(@plan_path), workdir: @afw, output_dir: paths.fetch(:output))
+    store.prepare!
+    store.pause!
+    intent = AdventureFinderWorkspace::LocalExecutionIntentStore.new(
+      root: File.join(@front, "output/local-ingest-executions/v0.1")).capture!(
+        operation_id: ID, selected_by: "David", capability_plan: @capability_plan,
+        components: {"afw" => @afw, "low" => @low, "wlo" => @wlo}, workdir: @afw, output: paths.fetch(:output))
+    state_path = File.join(File.dirname(paths.fetch(:output)), "state.json")
+    document = {"contract_version" => AdventureFinderWorkspace::LocalExecution::STATE_VERSION,
+      "intent_id" => intent.fetch("intent_id"), "phase" => "draining", "step" => 1}
+    [nil, "a" * 64, "corrupt"].each do |token|
+      File.write(state_path, JSON.generate(document.merge("pause_token" => token)))
+      before = retained_output_files
+      error = assert_raises(AdventureFinderWorkspace::LocalExecution::Failure) do
+        coordinator.resume(operation_id: ID, capability_plan: @capability_plan)
+      end
+      assert_equal token == "corrupt" ? "CORRUPT_LOCAL_EXECUTION_STATE" : "OPERATOR_PAUSE", error.code
+      assert_equal before, retained_output_files
+      assert_empty job_invocations
+    end
+    # A missing hold cannot be interpreted as permission after a cold restart.
+    store.clear_pause!
+    File.write(state_path, JSON.generate(document.merge("pause_token" => "a" * 64)))
+    before = retained_output_files
+    error = assert_raises(AdventureFinderWorkspace::LocalExecution::Failure) do
+      coordinator.resume(operation_id: ID, capability_plan: @capability_plan)
+    end
+    assert_equal "OPERATOR_PAUSE", error.code
+    assert_equal before, retained_output_files
+    assert_empty job_invocations
+  end
+
   private
 
+  # Assert the same safety invariant for a deterministic public interleaving;
+  # a fresh process must also refuse, and explicit manual continuation completes
+  # both jobs once. Component/test errors propagate without retrying the journey.
+  def assert_overlap_is_gated(ordering)
+    runner = OverlappingPauseRunner.new(ordering: ordering, wlo: @wlo, output: execution_paths.fetch(:output))
+    error = assert_raises(AdventureFinderWorkspace::LocalExecution::Failure) do
+      coordinator(runner:).start(operation_id: ID, selected_by: "David", capability_plan: @capability_plan)
+    end
+    assert_equal "OPERATOR_PAUSE", error.code
+    puts "PAUSE_INTERLEAVING=#{JSON.generate(ordering: ordering, events: runner.events)}"
+    before = retained_job("a-1")
+    assert_equal "complete", before.fetch("status")
+    pid = fork do
+      begin
+        coordinator.resume(operation_id: ID, capability_plan: @capability_plan)
+        exit! 1
+      rescue AdventureFinderWorkspace::LocalExecution::Failure => refusal
+        exit! refusal.code == "OPERATOR_PAUSE" ? 0 : 2
+      end
+    end
+    assert_equal 0, Timeout.timeout(10) { Process.waitpid2(pid).last.exitstatus }
+    pid = nil
+    assert_equal before, retained_job("a-1")
+    assert_equal 0, coordinator.resume(operation_id: ID, capability_plan: @capability_plan, continue_operator_pause: true)
+    assert_completed_once
+  ensure
+    signal_process("KILL", pid)
+    reap_process(pid)
+  end
+
+  # Verify original execution locators, scoped continuation, and all four attempts
+  # against captured public evidence; assertion failures expose contract drift.
   def assert_composed_trace(trace, intent, jobs, output)
     require File.join(ENV.fetch("AF_AFW_SOURCE_ROOT"), "test/support/afw_wlo_v0_3_contract")
     validator = Object.new.extend(AfwWloV03Contract)
@@ -809,7 +967,14 @@ class LocalIngestExecutionTest < Minitest::Test
     launches = trace.calls.select { |argv| File.basename(argv.first) == "wlo" && %w[run resume].include?(argv[1]) }
     assert_equal "run", launches.first[1]
     assert launches.drop(1).all? { |argv| argv[1] == "resume" }
-    assert_equal 1, launches.map { |argv| argv.drop(2) }.uniq.length
+    assert launches.drop(1).all? { |argv| argv.include?("--release-pause") || argv.include?("--preserve-pauses") }
+    locators = launches.map do |argv|
+      arguments = argv.drop(2).dup
+      arguments.slice!(arguments.index("--release-pause"), 2) if arguments.include?("--release-pause")
+      arguments.delete("--preserve-pauses")
+      arguments
+    end
+    assert_equal 1, locators.uniq.length
     refute trace.calls.any? { |argv| argv.any? { |arg| arg.match?(/rpof|runpod|retry-failed|acknowledge-circuit-breaker/) } }
 
     events = File.readlines(File.join(@low_state, "runtime-events.jsonl")).map { |row| JSON.parse(row) }
