@@ -183,6 +183,7 @@ class Ig19dRestartPromotionTest < Minitest::Test
     File.write(File.join(catalog, "unrelated.txt"), "preserved unrelated operator file\n")
     preserved = snapshot(catalog).reject { |name, _| name.start_with?(".git/") }
     identity = git_identity(catalog)
+    literal_index = File.binread(File.join(catalog, ".git/index"))
     inputs = File.join(@temporary, "package-inputs.json")
     package_path = File.join(@temporary, "package.json")
     File.write(inputs, JSON.pretty_generate(
@@ -234,6 +235,7 @@ class Ig19dRestartPromotionTest < Minitest::Test
       assert status.success?, "#{stderr}\n#{stdout}"
       assert_includes stdout, "Final promotion: PROMOTED."
       assert_equal identity, git_identity(catalog)
+      assert_equal literal_index, File.binread(File.join(catalog, ".git/index"))
       current_roles = YAML.safe_load_file(File.join(catalog, "PROJECT_STATE.yml"))
       assert_equal roles.except("catalog_head"), current_roles.except("catalog_head")
       assert_equal package.dig("candidate", "selected", "sha256"), current_roles.dig("catalog_head", "sha256")
@@ -246,6 +248,9 @@ class Ig19dRestartPromotionTest < Minitest::Test
         "ALREADY_PROMOTED", "read-only replay; no renewed approval", "separate explicit Git persistence") do
       before = snapshot(catalog)
       durable_result = File.binread(File.join(operation_dir, "adoption-result.json"))
+      operation_before = snapshot(operation_dir)
+      package_before = file_binding(package_path)
+      staged_before = file_binding(fixture.staged_path)
       stdout, stderr, status = capture(front_env, *command)
       @rows.last[:actual] = {exitstatus: status.exitstatus, stdout:, stderr:}
       assert status.success?, "#{stderr}\n#{stdout}"
@@ -253,17 +258,24 @@ class Ig19dRestartPromotionTest < Minitest::Test
       assert_equal before, snapshot(catalog)
       assert_equal durable_result, File.binread(File.join(operation_dir, "adoption-result.json"))
       assert_equal release_before, snapshot(fixture.output_dir)
+      assert_equal operation_before, snapshot(operation_dir)
+      assert_equal package_before, file_binding(package_path)
+      assert_equal staged_before, file_binding(fixture.staged_path)
+      assert_equal identity, git_identity(catalog)
+      assert_equal literal_index, File.binread(File.join(catalog, ".git/index"))
+      refute_includes stdout, "Type APPROVE"
+      verify_cold_replay_refusals(command, front_env, operation_dir, package_path, package, fixture, catalog)
     end
-  rescue Minitest::Assertion
+  rescue Minitest::Assertion => error
     %w[same-label-candidate-drift exact-local-promotion promoted-front-door-fresh-replay].each do |id|
       next if @rows.any? { |entry| entry[:id] == id }
 
-      @rows << {id:, status: "BLOCKED", classification: "D", owner: "af-data-pipeline",
-        input: "unchanged READY release", precondition: "validated adoption request",
-        expected: "exact review or replay", actual: "request preparation refused the READY candidate",
+      @rows << {id:, status: "BLOCKED", classification: "not reached", owner: "see preceding failure",
+        input: "final-promotion lifecycle", precondition: "preceding gates must pass",
+        expected: "exact review or replay", actual: error.message,
         allowed_mutation: "none", forbidden_mutation: "catalog or Git mutation; invented authority",
         preserved: "candidate, package, release, catalog roles, HEAD/refs/index",
-        next_action: "repair pipeline-owned scored-new-ID handoff before continuation"}
+        next_action: "resolve the recorded preceding failure before continuation"}
     end
     raise
   end
@@ -308,6 +320,63 @@ class Ig19dRestartPromotionTest < Minitest::Test
   end
 
   private
+
+
+  # Exercise retained approvals through fresh public CLI processes. Each mutation
+  # is applied only to this disposable fixture and restored in ensure; refusals
+  # must preserve the entire altered fixture, including literal Git index bytes.
+  def verify_cold_replay_refusals(command, environment, operation_dir, package_path, package, fixture, catalog)
+    manifest = File.join(catalog, "PROJECT_STATE.yml")
+    request_path = File.join(operation_dir, "adoption-request.json")
+    decision_path = File.join(operation_dir, "adoption-decision.json")
+    result_path = File.join(operation_dir, "adoption-result.json")
+    canonical = File.join(catalog, package.dig("transition", "proposed_catalog_head", "filename"))
+    scenarios = {
+      "approval-bytes" => [decision_path, ->(bytes) { bytes + " " }],
+      "approval-missing" => [decision_path, ->(_bytes) { nil }],
+      "approval-other-request" => [decision_path, lambda do |bytes|
+        decision = JSON.parse(bytes)
+        decision.fetch("request")["request_id"] = "f" * 64
+        decision["decision_id"] = AfDataPipeline::StandingBulkScorePolicy.digest(decision.except("decision_id"))
+        AfDataPipeline::StagedScoringAuthority.document_bytes(decision)
+      end],
+      "request-replaced" => [request_path, ->(bytes) { bytes + " " }],
+      "package-replaced" => [package_path, ->(bytes) { bytes + " " }],
+      "candidate-changed" => [package.dig("candidate", "selected", "path"), ->(bytes) { bytes + "changed" }],
+      "release-manifest-changed" => [File.join(fixture.output_dir, "release-accounting.json"), ->(bytes) { bytes + " " }],
+      "staged-evidence-changed" => [fixture.staged_path, ->(bytes) { bytes + "changed" }],
+      "repository-remote-changed" => [File.join(catalog, ".git/config"), ->(bytes) { bytes.sub("fixture://ig19d-catalog", "fixture://different-catalog") }],
+      "repository-head-changed" => [File.join(catalog, ".git/HEAD"), ->(_bytes) { "#{'f' * 40}\n" }],
+      "independent-role-changed" => [manifest, lambda do |bytes|
+        state = YAML.safe_load(bytes)
+        state["matcher_authorized_baseline"] = state.fetch("catalog_head")
+        YAML.dump(state)
+      end],
+      "canonical-replaced" => [canonical, ->(bytes) { bytes + "changed" }],
+      "live-manifest-changed" => [manifest, ->(bytes) { bytes + "\n" }],
+      "result-without-publication" => [manifest, ->(_bytes) { git(catalog, "show", "HEAD:PROJECT_STATE.yml") }],
+      "result-missing" => [result_path, ->(_bytes) { nil }]
+    }
+    scenarios.each do |name, (path, mutation)|
+      original = File.binread(path)
+      changed = mutation.call(original)
+      changed.nil? ? File.unlink(path) : File.binwrite(path, changed)
+      before = snapshot(@temporary)
+      index = File.binread(File.join(catalog, ".git/index"))
+      row("cold-replay-#{name}", name, "retained exact approval and successful result",
+          "fail-closed refusal", "no mutation", "restore authoritative evidence or explicit recovery") do
+        stdout, stderr, status = capture(environment, *command)
+        @rows.last[:actual] = {exitstatus: status.exitstatus, stdout:, stderr:}
+        assert_equal 2, status.exitstatus, "#{stderr}\n#{stdout}"
+        refute_includes stdout, "Final promotion: ALREADY_PROMOTED."
+        refute_includes stdout, "Type APPROVE"
+        assert_equal before, snapshot(@temporary)
+        assert_equal index, File.binread(File.join(catalog, ".git/index"))
+      end
+    ensure
+      File.binwrite(path, original) if original
+    end
+  end
 
   def row(id, input, precondition, gate, allowed, next_action)
     evidence = {id:, input:, precondition:, expected: gate, allowed_mutation: allowed,

@@ -17,6 +17,7 @@ class FinalPromotionTest < Minitest::Test
 
   class OwnerRunner
     attr_reader :calls
+    attr_accessor :reject_live_validation, :fail_replay
 
     def initialize(package:, fail_adopt: false, decision_exit: nil, decision_transform: nil, decision_stdout: nil)
       @package = package
@@ -32,8 +33,13 @@ class FinalPromotionTest < Minitest::Test
       executable = File.basename(argv.fetch(script_index))
       action = argv.fetch(script_index + 1)
       @calls << [executable, action, argv, chdir]
+      @inputs_path = option(argv, "--inputs") if argv.include?("--inputs")
+      @package_path = option(argv, "--package") if argv.include?("--package")
       case [executable, action]
       when ["af-final-release-package", "validate"]
+        if @reject_live_validation
+          return Result.new(stdout: "", stderr: "package reference changed: current_project_state", status: Status.new(2))
+        end
         result(@package, @package.dig("readiness", "ready") ? 0 : 2)
       when ["af-final-release-adoption", "prepare"]
         request = adoption_request
@@ -55,22 +61,28 @@ class FinalPromotionTest < Minitest::Test
           status: Status.new(code)
         )
       when ["af-final-release-adoption", "adopt"]
-        return Result.new(stdout: JSON.generate("status" => "FAILED"), stderr: "stale package", status: Status.new(2)) if @fail_adopt
+        return Result.new(stdout: JSON.generate("status" => "FAILED"), stderr: "stale package", status: Status.new(2)) if @fail_adopt || @fail_replay
 
         decision = JSON.parse(File.binread(option(argv, "--approval")))
         request = adoption_request
-        status = decision.fetch("decision") == "DECLINE" ? "DECLINED" : "PROMOTED"
+        replayed = File.file?(option(argv, "--result"))
+        status = decision.fetch("decision") == "DECLINE" ? "DECLINED" : (replayed ? "ALREADY_PROMOTED" : "PROMOTED")
+        File.binwrite(request.dig("catalog", "project_state", "path"), "promoted manifest\n") if status == "PROMOTED"
         document = {
           "schema_version" => AdventureFinderWorkspace::FinalPromotion::RESULT_SCHEMA,
           "status" => status,
+          "request_id" => request.fetch("request_id"),
+          "decision_id" => decision.fetch("decision_id"),
+          "package_id" => @package.fetch("package_id"),
           "candidate" => request.fetch("candidate").slice("version", "filename", "sha256", "bytes"),
-          "catalog" => status == "PROMOTED" ? {
+          "catalog" => %w[PROMOTED ALREADY_PROMOTED].include?(status) ? {
+            "project_state" => @package.dig("provenance", "nodes", "current_project_state").merge(binding(request.dig("catalog", "project_state", "path"))),
             "repository_root" => request.dig("catalog", "repository_root"),
             "catalog_head" => request.fetch("candidate").slice("version", "filename", "sha256", "bytes"),
             "independent_roles" => request.dig("catalog", "roles").except("catalog_head")
           } : nil
         }
-        write(option(argv, "--result"), document)
+        write(option(argv, "--result"), document) unless replayed
         result(document, status == "DECLINED" ? 3 : 0)
       when ["af-project-state", "validate"]
         candidate = adoption_request.fetch("candidate")
@@ -92,14 +104,20 @@ class FinalPromotionTest < Minitest::Test
       {
         "schema_version" => AdventureFinderWorkspace::FinalPromotion::REQUEST_SCHEMA,
         "request_id" => "c" * 64,
-        "package" => {"package_id" => @package.fetch("package_id")},
+        "package" => {"package_id" => @package.fetch("package_id"), "path" => @package_path, **binding(@package_path),
+                      "inputs" => {"path" => @inputs_path, **binding(@inputs_path)}},
         "candidate" => candidate,
         "catalog" => {
           "repository_root" => "/catalog",
-          "project_state" => {"path" => "/catalog/PROJECT_STATE.yml"},
+          "project_state" => @package.dig("provenance", "nodes", "current_project_state"),
           "roles" => @package.dig("transition", "current_roles")
         }
       }
+    end
+
+    # Bind a fixture file for the simulated owner response; filesystem errors propagate.
+    def binding(path)
+      {"sha256" => Digest::SHA256.file(path).hexdigest, "bytes" => File.size(path)}
     end
 
     def option(argv, name) = argv.fetch(argv.index(name) + 1)
@@ -127,6 +145,7 @@ class FinalPromotionTest < Minitest::Test
       assert_includes output.string, "human HOLD 0; human REJECT 0; source holds 0"
       assert_includes output.string, "Role change: catalog_head only"
       assert_includes output.string, "git add PROJECT_STATE.yml 5e_Adventure_Master_Catalog_8.0.xlsx"
+      refute_includes output.string, "Record\\ declined"
       refute_includes output.string, "git add ."
       refute_includes output.string, "unrelated.txt"
       coordination = JSON.parse(File.binread(File.join(paths[:operation], "coordination-decision.json")))
@@ -192,8 +211,8 @@ class FinalPromotionTest < Minitest::Test
   # approval. Exact fixture inputs and request bytes remain unchanged.
   def test_versionless_original_base_review_preserves_exact_unapproved_request
     package = fixture_package
-    before = Marshal.dump(package)
     with_front_door(package:, input: "") do |door, runner, output, paths|
+      before = Marshal.dump(package)
       inputs = [paths[:inputs], paths[:package]].to_h { |path| [path, File.binread(path)] }
       request_path = File.join(paths[:operation], "adoption-request.json")
       request_bytes = nil
@@ -403,6 +422,87 @@ class FinalPromotionTest < Minitest::Test
     end
   end
 
+
+  # Reproduce the live-manifest rejection after promotion. A new front door must
+  # call only the owner replay and observation, preserving all durable bytes.
+  def test_cold_replay_reaches_owner_before_live_preapproval_validation
+    with_front_door(input: "APPROVE\n") do |door, runner, output, paths|
+      assert_equal 0, door.run(inputs_path: paths[:inputs], package_path: paths[:package], approver: "David Norris")
+      before = Dir[File.join(paths[:operation], "*")].to_h { |path| [path, File.binread(path)] }
+      runner.reject_live_validation = true
+      calls = runner.calls.length
+      replay_output = StringIO.new
+      replay = build_door(paths, runner, input: StringIO.new, output: replay_output)
+      assert_equal 0, replay.run(inputs_path: paths[:inputs], package_path: paths[:package], approver: "David Norris")
+      assert_equal [["af-final-release-adoption", "adopt"], ["af-project-state", "validate"]], runner.calls.drop(calls).map { |call| call[0, 2] }
+      assert_includes replay_output.string, "Final promotion: ALREADY_PROMOTED."
+      refute_includes replay_output.string, "Type APPROVE"
+      refute_includes replay_output.string, "Current catalog_head:"
+      before.each { |path, bytes| assert_equal bytes, File.binread(path), path }
+    end
+  end
+
+  # Owner refusal must override the retained success; no success may be cached.
+  def test_cold_replay_refuses_owner_failure_despite_retained_promoted_result
+    with_front_door(input: "APPROVE\n") do |door, runner, _output, paths|
+      door.run(inputs_path: paths[:inputs], package_path: paths[:package], approver: "David Norris", operation_dir: paths[:operation])
+      runner.reject_live_validation = true
+      runner.fail_replay = true
+      output = StringIO.new
+      replay = build_door(paths, runner, input: StringIO.new, output:)
+      error = assert_raises(AdventureFinderWorkspace::Error) do
+        replay.run(inputs_path: paths[:inputs], package_path: paths[:package], approver: "David Norris", operation_dir: paths[:operation])
+      end
+      assert_includes error.message, "pipeline final-release adoption failed"
+      refute_includes output.string, "Final promotion: ALREADY_PROMOTED."
+    end
+  end
+
+  # A retained decision without completed publication evidence requires explicit
+  # recovery. Neither a missing result nor a cached PROMOTED flag can publish.
+  def test_cold_replay_rejects_interrupted_or_inconsistent_state_before_adopt
+    %w[missing_result missing_request missing_coordination altered_decision replaced_request replaced_package changed_inputs changed_manifest reviewed_manifest wrong_approver].each do |scenario|
+      with_front_door(input: "APPROVE\n") do |door, runner, _output, paths|
+        original_manifest = File.binread(File.join(File.dirname(paths[:inputs]), "PROJECT_STATE.yml"))
+        door.run(inputs_path: paths[:inputs], package_path: paths[:package], approver: "David Norris", operation_dir: paths[:operation])
+        case scenario
+        when "missing_result" then File.unlink(File.join(paths[:operation], "adoption-result.json"))
+        when "missing_request" then File.unlink(File.join(paths[:operation], "adoption-request.json"))
+        when "missing_coordination" then File.unlink(File.join(paths[:operation], "coordination-decision.json"))
+        when "altered_decision" then File.open(File.join(paths[:operation], "adoption-decision.json"), "ab") { |file| file.write(" ") }
+        when "replaced_request"
+          path = File.join(paths[:operation], "adoption-request.json")
+          value = JSON.parse(File.binread(path)); value["request_id"] = "e" * 64
+          File.binwrite(path, JSON.generate(value))
+        when "replaced_package" then File.open(paths[:package], "ab") { |file| file.write(" ") }
+        when "changed_inputs" then File.open(paths[:inputs], "ab") { |file| file.write(" ") }
+        when "changed_manifest" then File.open(File.join(File.dirname(paths[:inputs]), "PROJECT_STATE.yml"), "ab") { |file| file.write(" ") }
+        when "reviewed_manifest" then File.binwrite(File.join(File.dirname(paths[:inputs]), "PROJECT_STATE.yml"), original_manifest)
+        end
+        before = runner.calls.length
+        replay = build_door(paths, runner, input: StringIO.new("APPROVE\n"), output: StringIO.new)
+        assert_raises(AdventureFinderWorkspace::Error, scenario) do
+          replay.run(inputs_path: paths[:inputs], package_path: paths[:package], approver: scenario == "wrong_approver" ? "Another operator" : "David Norris", operation_dir: paths[:operation])
+        end
+        refute runner.calls.drop(before).any? { |call| %w[prepare approve decline adopt].include?(call[1]) }, scenario
+      end
+    end
+  end
+
+  # Missing approval cannot bypass current validation even with serialized success.
+  def test_serialized_result_without_approval_keeps_preapproval_validation
+    with_front_door(input: "") do |door, runner, _output, paths|
+      door.run(inputs_path: paths[:inputs], package_path: paths[:package], approver: "David Norris", operation_dir: paths[:operation])
+      File.binwrite(File.join(paths[:operation], "adoption-result.json"), JSON.generate("status" => "PROMOTED"))
+      runner.reject_live_validation = true
+      before = runner.calls.length
+      assert_raises(AdventureFinderWorkspace::Error) do
+        door.run(inputs_path: paths[:inputs], package_path: paths[:package], approver: "David Norris", operation_dir: paths[:operation])
+      end
+      assert_equal [["af-final-release-package", "validate"]], runner.calls.drop(before).map { |call| call[0, 2] }
+    end
+  end
+
   private
 
   def with_front_door(root: nil, package: fixture_package, input:, fail_adopt: false,
@@ -439,6 +539,11 @@ class FinalPromotionTest < Minitest::Test
       FileUtils.chmod(0o755, path)
     end
     FileUtils.mkdir_p(front_door)
+    manifest = File.join(root, "PROJECT_STATE.yml")
+    File.binwrite(manifest, "reviewed manifest\n")
+    package["provenance"]["nodes"]["current_project_state"] = {
+      "path" => manifest, "sha256" => Digest::SHA256.file(manifest).hexdigest, "bytes" => File.size(manifest)
+    }
     inputs = File.join(root, "inputs.json")
     package_path = File.join(root, "package.json")
     File.binwrite(inputs, "{}\n")

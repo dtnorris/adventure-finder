@@ -52,6 +52,19 @@ module AdventureFinderWorkspace
 
       inputs_path = File.expand_path(inputs_path)
       package_path = File.expand_path(package_path)
+      # Locate retained authority before live validation: successful promotion
+      # legitimately changes the manifest bound by the original package.
+      retained_package = read_json(package_path, "final-release package")
+      unless retained_package["package_id"].to_s.match?(SHA256)
+        raise Error, "final-release package has no exact package identity"
+      end
+      operation_dir ||= @front_door_root.join("operations", "final-promotions", retained_package.fetch("package_id")).to_s
+      operation_dir = Pathname(operation_dir).expand_path.cleanpath
+      paths = operation_paths(operation_dir)
+      if File.file?(paths.fetch(:decision)) && read_json(paths.fetch(:decision), "pipeline adoption decision")["decision"] == "APPROVE"
+        return replay_promotion(inputs_path, package_path, retained_package, paths, approver)
+      end
+
       package, package_status = validate_package(inputs_path, package_path)
       validate_package_shape!(package)
 
@@ -64,10 +77,7 @@ module AdventureFinderWorkspace
         raise Error, "pipeline validator returned #{package_status} for a promotion-ready package"
       end
 
-      operation_dir ||= @front_door_root.join("operations", "final-promotions", package.fetch("package_id")).to_s
-      operation_dir = Pathname(operation_dir).expand_path.cleanpath
       FileUtils.mkdir_p(operation_dir)
-      paths = operation_paths(operation_dir)
       request = if File.file?(paths.fetch(:request))
                   read_json(paths.fetch(:request), "pipeline adoption request")
                 else
@@ -94,7 +104,7 @@ module AdventureFinderWorkspace
       case result.fetch("status")
       when "DECLINED"
         @out.puts "Final promotion: DECLINED. Catalog state is unchanged."
-        print_operation_persistence(paths)
+        print_operation_persistence(paths, message: "Record declined final catalog promotion")
         3
       when "PROMOTED", "ALREADY_PROMOTED"
         verify_public_result!(result, request)
@@ -110,6 +120,47 @@ module AdventureFinderWorkspace
     end
 
     private
+
+    # Resume a retained APPROVE only with completed-publication evidence. Paths
+    # and byte bindings are routing guards, never replay authority: AFDP's adopt
+    # must independently return ALREADY_PROMOTED. Missing/interrupted evidence
+    # raises Error rather than letting adopt perform a first promotion or mint
+    # a missing result. Absolute paths and a parsed retained package are inputs;
+    # returns exit 0 on confirmed replay, raising Error on invalid evidence.
+    def replay_promotion(inputs_path, package_path, package, paths, approver)
+      validate_package_shape!(package)
+      request = read_json(paths.fetch(:request), "pipeline adoption request")
+      validate_request_shape!(request, package)
+      validate_coordination!(paths, package, request, approver)
+      unless request.dig("package", "path") == package_path &&
+             request.fetch("package").slice("sha256", "bytes") == file_binding(package_path) &&
+             request.dig("package", "inputs", "path") == inputs_path &&
+             request.dig("package", "inputs").slice("sha256", "bytes") == file_binding(inputs_path)
+        raise Error, "retained adoption request does not bind these exact package and inputs paths and bytes"
+      end
+      durable = read_json(paths.fetch(:result), "completed pipeline adoption result")
+      reviewed = package.dig("provenance", "nodes", "current_project_state")
+      promoted = durable.dig("catalog", "project_state")
+      decision = read_json(paths.fetch(:decision), "pipeline adoption decision")
+      unless durable["schema_version"] == RESULT_SCHEMA && durable["status"] == "PROMOTED" &&
+             durable["package_id"] == package["package_id"] && durable["request_id"] == request["request_id"] &&
+             durable["decision_id"] == decision["decision_id"] &&
+             reviewed.is_a?(Hash) && promoted.is_a?(Hash) && promoted["path"] == reviewed["path"] &&
+             request.dig("catalog", "project_state") == reviewed &&
+             promoted.slice("sha256", "bytes") != reviewed.slice("sha256", "bytes") &&
+             file_binding(reviewed.fetch("path")) == promoted.slice("sha256", "bytes")
+        raise Error, "retained approval has no exact completed promotion; explicit recovery is required"
+      end
+
+      result = adopt(inputs_path, package_path, paths)
+      unless result["status"] == "ALREADY_PROMOTED"
+        raise Error, "pipeline did not independently confirm completed-promotion replay"
+      end
+      verify_public_result!(result, request)
+      @out.puts "Final promotion: ALREADY_PROMOTED."
+      print_persistence(result, paths)
+      0
+    end
 
     def pipeline_command(name)
       path = @pipeline_root.join("bin", name)
@@ -318,7 +369,11 @@ module AdventureFinderWorkspace
       coordination = read_json(paths.fetch(:coordination), "AdventureFinder coordination decision")
       unless decision["schema_version"] == DECISION_SCHEMA && coordination["schema_version"] == COORDINATION_SCHEMA &&
              coordination["package_id"] == package["package_id"] && coordination["request_id"] == request["request_id"] &&
-             coordination["decided_by"] == approver && coordination.dig("pipeline_decision", "decision_id") == decision["decision_id"] &&
+             coordination["decided_by"] == approver && decision["decided_by"] == approver &&
+             coordination["decision"] == decision["decision"] &&
+             coordination["candidate"] == request.fetch("candidate").slice("version", "filename", "sha256", "bytes") &&
+             coordination.dig("pipeline_decision", "path") == File.expand_path(paths.fetch(:decision)) &&
+             coordination.dig("pipeline_decision", "decision_id") == decision["decision_id"] &&
              coordination.dig("pipeline_decision").slice("sha256", "bytes") == file_binding(paths.fetch(:decision)) &&
              coordination["coordination_id"] == digest(coordination.except("coordination_id"))
         raise Error, "durable final-promotion decision does not bind this exact package, request and approver"
@@ -342,11 +397,13 @@ module AdventureFinderWorkspace
       end
     end
 
-    def print_operation_persistence(paths)
+    # Print an explicit operator persistence suggestion for existing coordination
+    # files, using the supplied disposition-specific message; returns nil.
+    def print_operation_persistence(paths, message: "Record final catalog promotion review")
       @out.puts "AdventureFinder coordination persistence (explicit operator choice):"
       @out.puts "  cd #{Shellwords.escape(@front_door_root.to_s)}"
       @out.puts "  git add #{operation_relative_paths(paths).map { |path| Shellwords.escape(path) }.join(' ')}"
-      @out.puts "  git commit -m #{Shellwords.escape('Record declined final catalog promotion')}"
+      @out.puts "  git commit -m #{Shellwords.escape(message)}"
       @out.puts "  # push remains an explicit operator choice"
     end
 
@@ -358,7 +415,7 @@ module AdventureFinderWorkspace
       @out.puts "  git add #{Shellwords.escape('PROJECT_STATE.yml')} #{Shellwords.escape(candidate.fetch('filename'))}"
       @out.puts "  git commit -m #{Shellwords.escape("Update catalog_head to AMC #{candidate.fetch('version')}")}"
       @out.puts "  # push remains an explicit operator choice"
-      print_operation_persistence(paths)
+      print_operation_persistence(paths, message: "Record final catalog promotion")
     end
 
     def operation_relative_paths(paths)

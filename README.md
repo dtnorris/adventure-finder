@@ -323,7 +323,12 @@ still proceed under their validated terminal-gap authority.
 
 The front door stores only durable coordination evidence under
 `operations/final-promotions/PACKAGE_ID/`: the pipeline request, pipeline decision,
-software-timestamped AdventureFinder decision reference, and pipeline result. The one
+software-timestamped AdventureFinder decision reference, and pipeline result. Repeating
+an approved, completed promotion delegates to AFDP's historical replay and reports
+`ALREADY_PROMOTED` only after independent owner verification. The original `PROMOTED`
+result remains unchanged. A retained approval without an exact completed result, or
+with a manifest still at its reviewed state, requires explicit recovery; restarting
+does not automatically attempt publication again. The one
 typed APPROVE or DECLINE decision is bound by the pipeline to the exact package,
 candidate, evidence graph, repository HEAD, manifest, and role snapshots. The pipeline
 revalidates those inputs at the transaction boundary and remains the only workbook and
