@@ -434,19 +434,42 @@ three small front-door unit scenarios. Acceptance counts remain separate from
 suite totals. Serial `--fail-fast` reports remaining suites and acceptance as
 unexecuted when an earlier suite fails.
 
-AFDP fast runs before integration, exactly once each, in one repository scheduling
-slot even with `-j N`. Unrelated repositories may run concurrently within the
-existing job limit. Ordinary runs attempt both AFDP commands even if fast fails;
+With one job, AFDP fast runs before integration, exactly once each. With `-j N`,
+each AFDP command occupies its own global scheduling slot and may overlap its
+peer. Both are queued together at AFDP's historical repository priority so a
+long integration gate need not wait for fast to finish. Unrelated repositories
+retain their priority and share the same global job limit. Ordinary runs attempt
+both AFDP commands even if fast fails;
 serial `--fail-fast` labels every unexecuted suite `NOT RUN`. Missing checkouts
 remain `MISSING`. Omitting AFDP selects neither command. `--comprehensive`
 adds operator acceptance after these normal gates.
 
+Without recent timing history, AFDP's priority hint uses the reported October
+14, 2026 combined duration of 104.11 seconds. This single-run observation is a
+scheduling estimate, not a validated benchmark or a promised runtime. Recent
+successful history still takes precedence. A successful command exit without
+valid, nonempty fast-suite accounting cannot make AFDP pass; integration retains
+its independent completion and coverage evidence requirements.
+
 Each suite has its own command, status, elapsed time and captured diagnostics.
 Suite counts include both AFDP invocations; physical repository counts and
-scheduling history retain one AFDP entry with cumulative elapsed time. Minitest
+scheduling history retain one AFDP entry with cumulative elapsed time, which is
+the sum of suite durations rather than their overlapping wall time. Suite start
+rows omit cumulative repository timing estimates; final workspace wall time is
+measured separately. Minitest
 totals add independent executed invocations, including visible independence and
 coverage runs. Worker subtotals are replaced only by reconciled parent summaries;
 unknown counts are warned about and no previous report is read as test evidence.
+
+AFDP's coverage workers use fresh per-invocation temporary slice and collation
+directories with unique run names. Fast and full reports publish separately to
+`coverage/fast` and `coverage/full`; previous report files are not inputs to
+verification. Its test fixtures use temporary roots and process-local caches.
+These existing mechanisms permit this overlap without an AFDP source change.
+Concurrent AFDP processes still spawn their internal Ruby workers: the global
+job count limits suite commands, not every descendant. CPU, memory and I/O
+contention can erase the wall-time benefit or trigger existing runtime gates;
+parallel execution carries no guaranteed speedup or gate exemption.
 
 Cross-repository commands deliberately run in a **non-login shell** so they inherit the
 operator's active PATH (for example mise/asdf/Homebrew Ruby) instead of silently falling

@@ -98,7 +98,7 @@ module AdventureFinderWorkspace
 
     def initialize(front_door_root:, project_root:, env: ENV, out: $stdout,
                    runner: CommandRunner.new, clock: -> { Time.now.utc }, sleeper: ->(seconds) { sleep(seconds) },
-                   poll_interval: 1.0, observation_timeout: 30.0)
+                   poll_interval: 1.0, observation_timeout: 30.0, evidence_continuation: false)
       @front_door_root = Pathname(front_door_root).expand_path
       @project_root = Pathname(project_root).expand_path
       @env = env
@@ -108,6 +108,7 @@ module AdventureFinderWorkspace
       @sleeper = sleeper
       @poll_interval = Float(poll_interval)
       @observation_timeout = Float(observation_timeout)
+      @evidence_continuation = evidence_continuation
       fail_with("INVALID_LOCAL_EXECUTION_CONFIGURATION", "poll intervals must be positive") unless
         @poll_interval.positive? && @observation_timeout.positive?
     rescue ArgumentError, TypeError
@@ -607,6 +608,10 @@ module AdventureFinderWorkspace
     def render_next_actions(intent, paths, report)
       workload = intent.dig("workload", "workload_id")
       if report&.fetch("status") == "completed"
+        if @evidence_continuation
+          out.puts "Continuing through AFW evidence and pipeline standing release"
+          return
+        end
         bind = [paths.fetch(:afw).join("bin/afw-bind-scoring-evidence"), workload, paths.fetch(:output)]
         publish = [paths.fetch(:afw).join("bin/afw-workload-evidence"), "publish", workload, paths.fetch(:output)]
         out.puts "Next: #{Shellwords.join(bind.map(&:to_s))}"

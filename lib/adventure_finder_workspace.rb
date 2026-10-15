@@ -472,22 +472,22 @@ module AdventureFinderWorkspace
       result.result == :not_run ? "NOT RUN" : result.result.to_s.upcase
     end
 
-    # Runs one slot per selected repository, yielding ordered suites inside each
-    # slot. Returns completion-ordered results; thread/command errors propagate.
+    # Runs selected repository descriptors with at most jobs active commands.
+    # Repository priority keeps AFDP's two gates adjacent in the queue; results
+    # remain completion-ordered and thread/command errors propagate.
     def run_tests_parallel(testable, jobs:)
       results = []
       queue = Queue.new
       progress_mutex = Mutex.new
       started_count = 0
-      total_count = testable.length
+      suites = prioritized_testables(testable).flat_map { |repo, _index| test_suites(repo) }
+      total_count = suites.length
       # Recent timing history (with manifest fallback) only sets scheduling priority. Result collection
       # happens under the same mutex as completion reporting so buffered output
       # and the final summary follow the visible completion order.
-      prioritized_testables(testable).each do |repo, index|
-        queue << [index, repo]
-      end
+      suites.each { |suite| queue << suite }
 
-      worker_count = [jobs, testable.length].min
+      worker_count = [jobs, suites.length].min
       worker_count.times { queue << nil }
       out.puts "Running #{total_count} repository test suites with #{worker_count} jobs..."
       out.flush if out.respond_to?(:flush)
@@ -498,7 +498,7 @@ module AdventureFinderWorkspace
             item = queue.pop
             break if item.nil?
 
-            _index, repo = item
+            repo = item
             start_number = nil
             progress_mutex.synchronize do
               started_count += 1
@@ -506,14 +506,10 @@ module AdventureFinderWorkspace
               print_test_start(repo, started: start_number, total: total_count)
             end
 
-            # One repository owns one scheduling slot until all of its suites end.
-            # In particular AFDP's coverage writers can never overlap each other.
-            test_suites(repo).each do |suite|
-              result = run_test_repo(suite, capture: true, contended: worker_count > 1)
-              progress_mutex.synchronize do
-                print_test_completion(result, started: start_number, total: total_count)
-                results << result
-              end
+            result = run_test_repo(repo, capture: true, contended: worker_count > 1)
+            progress_mutex.synchronize do
+              print_test_completion(result, started: start_number, total: total_count)
+              results << result
             end
           end
         end
@@ -569,6 +565,14 @@ module AdventureFinderWorkspace
              runner.shell(command, chdir: path, env: test_env)
            end
       elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at
+      if ok && repo["suite"] == "fast"
+        summaries, _verified, warnings = minitest_accounting(output)
+        unless warnings.empty? && summaries.any? { |counts| counts[0].positive? } &&
+            summaries.all? { |counts| counts[2..3].all?(&:zero?) }
+          output = output.to_s + "\nERROR: required AFDP fast accounting evidence missing or invalid\n"
+          ok = false
+        end
+      end
       if ok && repo["suite"] == "integration" && !integration_output_valid?(output)
         output = output.to_s + "\nERROR: required AFDP integration completion/accounting evidence missing or invalid\n"
         ok = false
@@ -702,13 +706,17 @@ module AdventureFinderWorkspace
       totals
     end
 
+    # Prints a named suite start with its ordinal; only single-suite repositories
+    # receive a historical estimate. Returns the output flush result.
     def print_test_start(repo, started:, total:)
-      hint = test_duration_hint_seconds(repo)
+      # Repository history is cumulative across AFDP's gates, not a per-suite ETA.
+      hint = repo["suite"] ? 0.0 : test_duration_hint_seconds(repo)
       hint_text = hint.positive? ? format("  ~%ds", [hint.round, 1].max) : ""
+      label = repo["suite"] ? "#{repo.fetch('name')} / #{repo['suite']}" : repo.fetch("name")
 
       out.puts format(
         "⠋ [%d/%d] %-30s%s",
-        started, total, repo.fetch("name"), hint_text
+        started, total, label, hint_text
       )
       out.flush if out.respond_to?(:flush)
     end

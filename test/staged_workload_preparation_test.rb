@@ -216,6 +216,29 @@ class StagedWorkloadPreparationTest < Minitest::Test
     assert_includes first.fetch("next_action"), "--staged-selection"
   end
 
+  def test_successful_scoring_output_does_not_change_frozen_preparation_on_resume
+    ids = ["ADV-0003"]
+    runner = Runner.new(authority: authority_projection(ids), afw_root: @afw, ids:)
+    owner = Owner.new(runner:)
+    owner.define_singleton_method(:prepare) do |**options|
+      result = super(**options)
+      observed = result.fetch("inspection").fetch("observed")
+      observed["output"] = @calls.length == 1 ? {"state" => "absent"} : {"state" => "directory"}
+      observed["results"] = @calls.length == 1 ? {"state" => "absent"} : {"state" => "directory", "files" => 3}
+      result
+    end
+    coordinator = service(runner, owner:)
+    first = prepare(coordinator)
+    retained = File.binread(File.join(@front, "output", "staged-workload-preparations", "v0.1", ID, "result.json"))
+    second = prepare(coordinator)
+
+    assert_equal first.except("inspection"), second.except("inspection")
+    assert_equal retained, File.binread(File.join(@front, "output", "staged-workload-preparations", "v0.1", ID, "result.json"))
+    assert_equal 2, owner.calls.length
+    assert_equal "absent", first.dig("inspection", "observed", "results", "state")
+    assert_equal "directory", second.dig("inspection", "observed", "results", "state")
+  end
+
   def test_no_new_records_returns_explicit_no_work_without_afw
     zero = {
       "schema_version" => "af-staged-scoring-authority-projection/v0.1",

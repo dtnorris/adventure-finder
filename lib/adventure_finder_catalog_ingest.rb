@@ -11,6 +11,9 @@ require "time"
 require_relative "adventure_finder_ingest_operation_store"
 require_relative "adventure_finder_ingest_routing"
 require_relative "adventure_finder_ingest_source_driver"
+require_relative "adventure_finder_ingest_boundary_continuation"
+require_relative "adventure_finder_ingest_release_continuation"
+require_relative "adventure_finder_final_promotion"
 require_relative "adventure_finder_local_capability_plan"
 require_relative "adventure_finder_local_execution"
 require_relative "adventure_finder_staged_scoring_intent"
@@ -55,7 +58,7 @@ module AdventureFinderWorkspace
 
     def start(pdf:, base_catalog:, source_declaration:, policy_definition: nil, policy_id: nil,
               policy_version: nil, policy_values: nil, selected_by:, operation_id: SecureRandom.uuid,
-              canonical_destination: nil, scoring_choice: nil)
+              canonical_destination: nil, scoring_choice: nil, successor_version: nil)
       input = required_file(pdf, "input PDF")
       fail_with("UNSUPPORTED_INPUT", "input must be a .pdf file") unless input.extname.casecmp?(".pdf")
       catalog = required_file(base_catalog, "base catalog")
@@ -63,6 +66,10 @@ module AdventureFinderWorkspace
       context = build_context(operation_id, input:, catalog:, canonical_destination:)
       policy = start_policy(context, policy_definition:, policy_id:, policy_version:,
                             policy_values:, scoring_choice:, selected_by:, selected_at:)
+      if successor_version && (!canonical_destination ||
+                               !SuccessorVersionAuthorizationStore::SUCCESSOR_VERSION.match?(successor_version))
+        fail_with("INVALID_SUCCESSOR_VERSION", "select a dotted numeric successor version for continuous ingest")
+      end
       store = store_for(context)
       choices = source_declaration.to_h do |key, value|
         [key, choice(value, selected_by:, selected_at:)]
@@ -79,6 +86,9 @@ module AdventureFinderWorkspace
         policy:
       )
       write_context!(context)
+      authority_store_for(context, store).bind!(
+        operation_id:, successor_version:, selected_by:
+      ) if successor_version
       capture_scoring_choice!(context, store, operation_id, scoring_choice,
                               selected_by:, interaction: "ingest_start") if scoring_choice
 
@@ -106,11 +116,11 @@ module AdventureFinderWorkspace
       result["status"] == "REJECTED" ? 2 : 0
     rescue IngestOperationStore::Failure => e
       fail_with(e.code, e.message.sub(/\A[^:]+: /, ""))
-    rescue StagedScoringIntentStore::Failure => e
+    rescue StagedScoringIntentStore::Failure, SuccessorVersionAuthorizationStore::Failure => e
       fail_with(e.code, e.message.sub(/\A[^:]+: /, ""))
     end
 
-    def resume(operation_id, scoring_choice: nil, selected_by: nil)
+    def resume(operation_id, scoring_choice: nil, selected_by: nil, approved_by: nil, final_approver: nil)
       context = load_context(operation_id)
       store = store_for(context)
       routing = routing_for(store, context)
@@ -128,12 +138,61 @@ module AdventureFinderWorkspace
       end
       capture_scoring_choice!(context, store, operation_id, scoring_choice,
                               selected_by:, interaction: "post_boundary_resume") if scoring_choice
+      retained_release = release_paths(context, operation_id)
+      if final_approver && File.file?(retained_release.fetch(:package_path))
+        return final_promotion(context, retained_release, final_approver)
+      end
       result = continue_or_route(store, context, operation_id)
+      if approved_by || boundary_approval_path(context, operation_id).file?
+        fail_with("BOUNDARY_NOT_READY", "explicit boundary approval requires the editorial review gate") unless
+          result["status"] == "WAITING" && result.dig("gate", "state") == "BOUNDARY_EDITORIAL_REVIEW"
+        scoring_intent_store_for(context, store).intent!(operation_id)
+        paths = if approved_by
+                  IngestBoundaryContinuation.new(
+                    store:, routing:, authorization_store: authority_store_for(context, store),
+                    front_door_root: context.fetch("front_door_root"),
+                    project_root: context.fetch("project_root"),
+                    pipeline_root: context.fetch("pipeline_root"),
+                    source_root: context.fetch("source_root"),
+                    catalog_root: context.fetch("catalog_root"), out:
+                  ).drive(operation_id:, review_workspace: result.fetch("review_workspace"), approved_by:)
+                else
+                  continued_boundary_paths(context, operation_id, result.fetch("review_workspace"))
+                end
+        prepared = prepare_workload_result(operation_id, context, store, **paths.slice(
+          :freeze_path, :approval_path, :bundle_dir,
+          :historical_project_state_path, :current_project_state_path
+        ))
+        render_workload_result(prepared)
+        return 0 unless prepared["status"] == "PREPARED"
+
+        release_paths = release_paths(context, operation_id)
+        unless File.file?(release_paths.fetch(:package_path))
+          local_intent = LocalExecutionIntentStore.new(
+            root: LocalExecutionIntentStore.default_root(front_door_root: context.fetch("front_door_root"))
+          ).intent_path(operation_id)
+          if local_intent.file?
+            local_resume(operation_id, automatic: true)
+          else
+            identity = JSON.parse(File.binread(paths.fetch(:approval_path))).dig("approval", "approved_by")
+            local_start(operation_id, selected_by: identity, automatic: true)
+          end
+        end
+        ready = release_continuation(context).prepare(operation_id:)
+        return final_promotion(context, ready, final_approver) if final_approver
+
+        out.puts "Final catalog review awaits explicit human approval: bin/af-catalog resume #{operation_id} --approve-final-by NAME"
+        return 0
+      end
+      fail_with("FINAL_APPROVAL_NOT_READY", "boundary approval and verified release are required") if final_approver
       routing_for(store, context).render(result, out:)
       result["status"] == "REJECTED" ? 2 : 0
     rescue IngestOperationStore::Failure => e
       fail_with(e.code, e.message.sub(/\A[^:]+: /, ""))
     rescue StagedScoringIntentStore::Failure => e
+      fail_with(e.code, e.message.sub(/\A[^:]+: /, ""))
+    rescue IngestBoundaryContinuation::Failure, IngestReleaseContinuation::Failure, StagedWorkloadPreparation::Failure,
+           SuccessorVersionAuthorizationStore::Failure => e
       fail_with(e.code, e.message.sub(/\A[^:]+: /, ""))
     end
 
@@ -141,9 +200,22 @@ module AdventureFinderWorkspace
                          historical_project_state_path:, current_project_state_path: nil)
       context = load_context(operation_id)
       store = store_for(context)
+      result = prepare_workload_result(
+        operation_id, context, store, freeze_path:, approval_path:, bundle_dir:,
+        historical_project_state_path:, current_project_state_path:
+      )
+      render_workload_result(result)
+      0
+    rescue IngestOperationStore::Failure, StagedScoringIntentStore::Failure,
+           StagedWorkloadPreparation::Failure, SuccessorVersionAuthorizationStore::Failure => e
+      fail_with(e.code, e.message.sub(/\A[^:]+: /, ""))
+    end
+
+    def prepare_workload_result(operation_id, context, store, freeze_path:, approval_path:, bundle_dir:,
+                                historical_project_state_path:, current_project_state_path: nil)
       routing = routing_for(store, context)
       intent_store = scoring_intent_store_for(context, store)
-      result = StagedWorkloadPreparation.new(
+      StagedWorkloadPreparation.new(
         front_door_root: context.fetch("front_door_root"),
         project_root: context.fetch("project_root"),
         pipeline_root: context.fetch("pipeline_root"),
@@ -159,11 +231,6 @@ module AdventureFinderWorkspace
         operation_id:, freeze_path:, approval_path:, bundle_dir:,
         historical_project_state_path:, current_project_state_path:
       )
-      render_workload_result(result)
-      0
-    rescue IngestOperationStore::Failure, StagedScoringIntentStore::Failure,
-           StagedWorkloadPreparation::Failure, SuccessorVersionAuthorizationStore::Failure => e
-      fail_with(e.code, e.message.sub(/\A[^:]+: /, ""))
     end
 
     def plan_local_capabilities(operation_id)
@@ -179,20 +246,77 @@ module AdventureFinderWorkspace
       fail_with(e.code, e.message.sub(/\A[^:]+: /, ""))
     end
 
-    def local_start(operation_id, selected_by:)
+    def local_start(operation_id, selected_by:, automatic: false)
       context = load_context(operation_id)
       plan = local_capability_plan(context, operation_id)
-      local_execution(context).start(operation_id:, selected_by:, capability_plan: plan)
+      local_execution(context, automatic:).start(operation_id:, selected_by:, capability_plan: plan)
     rescue LocalCapabilityPlan::Failure, LocalExecution::Failure => e
       fail_with(e.code, e.message.sub(/\A[^:]+: /, ""))
     end
 
-    def local_resume(operation_id, continue_operator_pause: false)
+    def local_resume(operation_id, continue_operator_pause: false, automatic: false)
       context = load_context(operation_id)
       plan = local_capability_plan(context, operation_id)
-      local_execution(context).resume(operation_id:, capability_plan: plan, continue_operator_pause:)
+      local_execution(context, automatic:).resume(operation_id:, capability_plan: plan, continue_operator_pause:)
     rescue LocalCapabilityPlan::Failure, LocalExecution::Failure => e
       fail_with(e.code, e.message.sub(/\A[^:]+: /, ""))
+    end
+
+    def continued_boundary_paths(context, operation_id, workspace)
+      destination = Pathname(context.fetch("front_door_root")).join(
+        "output", "ingest-boundary-continuations", "v0.1", operation_id
+      )
+      fail_with("BOUNDARY_NOT_READY", "retained boundary continuation is missing") unless
+        destination.directory? && !destination.symlink?
+      %w[approval.json boundary-freeze.yml].each do |name|
+        path = destination.join(name)
+        fail_with("BOUNDARY_NOT_READY", "retained boundary #{name} is missing or unsafe") unless
+          path.file? && !path.symlink?
+      end
+      state = Pathname(context.fetch("catalog_root")).join("PROJECT_STATE.yml")
+      historical_state = IngestBoundaryContinuation.historical_project_state_path(
+        catalog_root: context.fetch("catalog_root"), operation_id:
+      )
+      fail_with("BOUNDARY_NOT_READY", "retained historical project state is missing or unsafe; explicit recovery is required") unless
+        historical_state.file? && !historical_state.symlink?
+      {freeze_path: destination.join("boundary-freeze.yml"),
+       approval_path: destination.join("approval.json"), bundle_dir: Pathname(workspace),
+       historical_project_state_path: historical_state, current_project_state_path: state}
+    end
+
+    def boundary_approval_path(context, operation_id)
+      Pathname(context.fetch("front_door_root")).join(
+        "output", "ingest-boundary-continuations", "v0.1", operation_id, "approval.json"
+      )
+    end
+
+    def release_paths(context, operation_id)
+      root = Pathname(context.fetch("front_door_root")).join("output", "ingest-releases", "v0.1", operation_id)
+      {inputs_path: root.join("package-inputs.json").to_s, package_path: root.join("package.json").to_s}
+    end
+
+    def release_continuation(context)
+      IngestReleaseContinuation.new(
+        front_door_root: context.fetch("front_door_root"), project_root: context.fetch("project_root"),
+        pipeline_root: context.fetch("pipeline_root"), catalog_root: context.fetch("catalog_root"),
+        out:, env:
+      )
+    end
+
+    # Route this operation's package and approver to owner review or replay.
+    # Returns the owner's exit code; malformed, foreign or refused inputs raise
+    # Failure without rebuilding work or substituting a different package.
+    def final_promotion(context, ready, final_approver)
+      package = JSON.parse(File.binread(ready.fetch(:package_path)))
+      fail_with("FINAL_PROMOTION_REFUSED", "retained final package belongs to a different operation") unless
+        package.is_a?(Hash) && package["operation"].is_a?(Hash) &&
+        package.dig("operation", "operation_id") == context.fetch("operation_id")
+      FinalPromotion.new(
+        front_door_root: context.fetch("front_door_root"), project_root: context.fetch("project_root"),
+        pipeline_root: context.fetch("pipeline_root"), out:
+      ).run(**ready, approver: final_approver)
+    rescue AdventureFinderWorkspace::Error, JSON::ParserError, SystemCallError => e
+      fail_with("FINAL_PROMOTION_REFUSED", e.message)
     end
 
     def local_status(operation_id)
@@ -237,10 +361,10 @@ module AdventureFinderWorkspace
       ).call(operation_id:)
     end
 
-    def local_execution(context)
+    def local_execution(context, automatic: false)
       LocalExecution.new(
         front_door_root: context.fetch("front_door_root"),
-        project_root: context.fetch("project_root"), out:, env:
+        project_root: context.fetch("project_root"), out:, env:, evidence_continuation: automatic
       )
     end
 
@@ -665,6 +789,7 @@ module AdventureFinderWorkspace
           opts.on("--selected-by VALUE") { |value| options[:selected_by] = value }
           opts.on("--operation-id UUID") { |value| options[:operation_id] = value }
           opts.on("--canonical-destination FILE") { |value| options[:canonical_destination] = value }
+          opts.on("--successor-version VERSION") { |value| options[:successor_version] = value }
           opts.on("--prepare-staged-scoring") { select_scoring_choice!(options, "prepare") }
           opts.on("--decline-staged-scoring") { select_scoring_choice!(options, "decline") }
         end
@@ -680,7 +805,7 @@ module AdventureFinderWorkspace
         source = IngestOperation::SOURCE_CHOICES.to_h { |key| [key, options.fetch(key.to_sym)] }
         service.start(pdf:, source_declaration: source, **options.slice(
           :base_catalog, :policy_definition, :policy_id, :policy_version, :policy_values,
-          :selected_by, :operation_id, :canonical_destination, :scoring_choice
+          :selected_by, :operation_id, :canonical_destination, :scoring_choice, :successor_version
         ))
       when "resume"
         options = {}
@@ -688,6 +813,8 @@ module AdventureFinderWorkspace
           opts.on("--prepare-staged-scoring") { select_scoring_choice!(options, "prepare") }
           opts.on("--decline-staged-scoring") { select_scoring_choice!(options, "decline") }
           opts.on("--selected-by VALUE") { |value| options[:selected_by] = value }
+          opts.on("--approve-boundary-by NAME") { |value| options[:approved_by] = value }
+          opts.on("--approve-final-by NAME") { |value| options[:final_approver] = value }
         end
         parser.parse!(argv)
         operation_id = argv.shift
@@ -697,7 +824,8 @@ module AdventureFinderWorkspace
           raise CatalogIngest::Failure.new(
             "INVALID_OPERATION_HANDLE",
             "usage: bin/af-catalog resume OPERATION_ID " \
-            "[--prepare-staged-scoring|--decline-staged-scoring --selected-by VALUE]"
+            "[--prepare-staged-scoring|--decline-staged-scoring --selected-by VALUE] " \
+            "[--approve-boundary-by NAME] [--approve-final-by NAME]"
           )
         end
         service.resume(operation_id, **options)

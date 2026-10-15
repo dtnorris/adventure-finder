@@ -55,10 +55,14 @@ human-review guidance and inspection-only commands.
 
 ## Terminal handoff
 
-After binding the linked editorial context and decisions ledger, the driver stops at
-BOUNDARY_EDITORIAL_REVIEW and prints their shared directory as the authoritative
-review workspace. Later resumes validate those bound bytes and return the same gate
-without invoking pipeline progression.
+After binding the linked empty editorial context and decisions ledger, the driver
+stops at BOUNDARY_EDITORIAL_REVIEW. It publishes a separate editable copy of the
+context, ledger, and review instructions beneath the front-door output root and
+prints that directory as the review workspace. The operation retains its exact
+immutable pipeline handoff bytes; editing the copy cannot invalidate earlier
+operation revisions. Repeated resumes validate the bound originals and reuse the
+same editable workspace without overwriting human decisions. A changed context or
+instructions in the copy is a conflict, not an automatic rebind or approval.
 
 This driver never creates candidates or editorial decisions, assigns Adventure IDs,
 approves a freeze, applies/imports a freeze, prepares or executes scoring, performs

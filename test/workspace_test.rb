@@ -93,8 +93,8 @@ class AdventureFinderWorkspaceTest < Minitest::Test
     end
   end
 
-  # Synchronizes two independent checkout commands without sleep-based timings.
-  # Captures actual concurrent calls and rejects a scheduler that cannot start both.
+  # Synchronizes the two AFDP calls without sleep-based timings and records
+  # concurrency by command, including calls sharing one physical checkout.
   class PipelineParallelRunner < RecordingRunner
     attr_reader :max_active, :overlapping_paths, :events
 
@@ -102,37 +102,37 @@ class AdventureFinderWorkspaceTest < Minitest::Test
       super
       @mutex = Mutex.new
       @fast_started = Queue.new
-      @other_started = Queue.new
+      @integration_started = Queue.new
       @active = []
       @max_active = 0
       @overlapping_paths = []
       @events = []
     end
 
-    # Returns normal fake command output after a bounded two-checkout handshake.
+    # Returns normal fake output after a bounded fast/integration handshake.
     # Timeout::Error exposes scheduling regressions instead of hanging the suite.
     def shell_capture(command, chdir:, env: {})
       path = chdir.to_s
       @mutex.synchronize do
-        @overlapping_paths << path if @active.include?(path)
-        @active << path
+        @overlapping_paths << path if @active.any? { |active_path, _command| active_path == path }
+        @active << [path, command]
         @max_active = [@max_active, @active.length].max
         @events << [:start, path, command]
       end
       Timeout.timeout(2) do
         if File.basename(path) == "af-data-pipeline" && command == "bundle exec rake"
           @fast_started << true
-          @other_started.pop
-        elsif File.basename(path) == "other"
+          @integration_started.pop
+        elsif File.basename(path) == "af-data-pipeline" && command == "bundle exec rake test:integration"
           @fast_started.pop
-          @other_started << true
+          @integration_started << true
         end
       end
       @mutex.synchronize { super }
     ensure
       @mutex.synchronize do
         @events << [:finish, path, command]
-        @active.delete(path)
+        @active.delete([path, command])
       end
     end
   end
@@ -193,7 +193,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
   # Omitting AFDP executes neither command and never invents a pipeline result.
   def test_omitted_pipeline_has_no_suites
     with_pipeline_workspace do |workspace, _pipeline, runner, out|
-      assert workspace.test(repos: [], include_front_door: false)
+      assert workspace.test(repos: [], jobs: 2, include_front_door: false)
       assert_empty runner.calls
       refute_includes out.string, "af-data-pipeline"
     end
@@ -233,11 +233,38 @@ class AdventureFinderWorkspaceTest < Minitest::Test
     ]
     invalid_outputs.each do |output|
       with_pipeline_workspace(runner: RecordingRunner.new(integration_output: output)) do |workspace, pipeline, runner, out|
-        refute workspace.test(repos: [pipeline], include_front_door: false)
+        refute workspace.test(repos: [pipeline], jobs: 2, include_front_door: false)
         assert_equal 2, runner.calls.length
         assert_match(/^af-data-pipeline \/ fast\s+PASS/, out.string)
         assert_match(/^af-data-pipeline \/ integration\s+FAIL/, out.string)
         assert_includes out.string, "required AFDP integration completion/accounting evidence"
+      end
+    end
+  end
+
+  # Independent parallel failures cannot suppress or borrow the peer's result.
+  def test_parallel_pipeline_failures_and_missing_fast_evidence_fail_closed
+    ["bundle exec rake", "bundle exec rake test:integration"].each do |command|
+      with_pipeline_workspace(runner: RecordingRunner.new(fail_command: command)) do |workspace, pipeline, runner, out|
+        refute workspace.test(repos: [pipeline], jobs: 2, include_front_door: false)
+        assert_equal ["bundle exec rake", "bundle exec rake test:integration"], runner.calls.map(&:first).sort
+        assert_includes out.string, "Component phase: 0/1 passed"
+      end
+    end
+    invalid = ["", "0 runs, 0 assertions, 0 failures, 0 errors, 0 skips\n",
+      "2 runs, malformed assertions\n", "2 runs, 3 assertions, 1 failures, 0 errors, 0 skips\n",
+      self.class.worker_output("fast (functional)", runs: 2, assertions: 3).sub("2 runs", "99 runs")]
+    invalid.each do |output|
+      runner = RecordingRunner.new
+      runner.define_singleton_method(:shell_capture) do |command, chdir:, env: {}|
+        result = super(command, chdir: chdir, env: env)
+        result.stdout = output if command == "bundle exec rake"
+        result
+      end
+      with_pipeline_workspace(runner: runner) do |workspace, pipeline, _runner, out|
+        refute workspace.test(repos: [pipeline], jobs: 2, include_front_door: false)
+        assert_includes out.string, "required AFDP fast accounting evidence missing or invalid"
+        assert_match(/^af-data-pipeline \/ integration\s+PASS/, out.string)
       end
     end
   end
@@ -279,19 +306,19 @@ class AdventureFinderWorkspaceTest < Minitest::Test
     end
   end
 
-  # A controlled handshake proves two actual checkout jobs can overlap while
-  # AFDP retains one slot and starts integration only after fast has returned.
-  def test_parallel_pipeline_suites_share_one_bounded_repository_slot
+  # Both AFDP gates occupy bounded slots before lower-priority unrelated work.
+  def test_parallel_pipeline_suites_overlap_within_the_global_limit
     runner = PipelineParallelRunner.new
     with_pipeline_workspace(runner: runner) do |workspace, pipeline, _runner, out, err, front|
       assert workspace.test(repos: [pipeline, {"name" => "other", "test" => "other-command"}],
         jobs: 2, include_front_door: false)
       assert_equal 2, runner.max_active
-      assert_empty runner.overlapping_paths
       path = (workspace.root / "af-data-pipeline").to_s
+      assert_equal [path, path], runner.events.select { |event| event.first == :start }.first(2).map { |event| event[1] }
+      assert_includes runner.overlapping_paths, path
       fast_end = runner.events.index([:finish, path, "bundle exec rake"])
       integration_start = runner.events.index([:start, path, "bundle exec rake test:integration"])
-      assert_operator fast_end, :<, integration_start
+      assert_operator integration_start, :<, fast_end
       assert_equal 3, runner.calls.length
       assert runner.calls.all? { |_command, _path, env| env["AF_TEST_CONTENDED"] == "1" }
       assert_includes out.string, "3/3 suites passed."
@@ -302,6 +329,67 @@ class AdventureFinderWorkspaceTest < Minitest::Test
       history = YAML.safe_load(File.read(Dir.glob("#{front}/output/af-test/run-*.yml").last))
       assert_equal %w[af-data-pipeline other], history.fetch("repositories").keys.sort
       assert_operator history.dig("repositories", "af-data-pipeline", "elapsed_seconds"), :>=, 0.0
+      assert_empty err.string
+    end
+  end
+
+  # A single selected physical checkout can use both available logical slots.
+  # With one job its same commands still execute in their original serial order.
+  def test_pipeline_alone_uses_two_slots_but_one_job_remains_serial
+    with_pipeline_workspace(runner: PipelineParallelRunner.new) do |workspace, pipeline, runner, out|
+      assert workspace.test(repos: [pipeline], jobs: 2, include_front_door: false)
+      assert_equal 2, runner.max_active
+      assert_equal ["bundle exec rake", "bundle exec rake test:integration"], runner.calls.map(&:first).sort
+      assert_includes out.string, "Running 2 repository test suites with 2 jobs"
+      starts = out.string.lines.grep(/^⠋ /)
+      assert starts.any? { |line| line.include?("af-data-pipeline / fast") }
+      assert starts.any? { |line| line.include?("af-data-pipeline / integration") }
+      refute starts.any? { |line| line.include?("~") }
+      assert_includes out.string, "Physical repositories: 1"
+    end
+    with_pipeline_workspace do |workspace, pipeline, runner|
+      assert workspace.test(repos: [pipeline], jobs: 1, include_front_door: false)
+      assert_equal ["bundle exec rake", "bundle exec rake test:integration"], runner.calls.map(&:first)
+      assert runner.calls.all? { |_command, _path, env| env["AF_TEST_CONTENDED"].nil? }
+    end
+  end
+
+  # Uses actual child processes with a bounded file handshake. The first child
+  # cannot pass until its peer has started; no network/socket support is needed.
+  def test_parallel_pipeline_overlaps_real_subprocesses_and_keeps_their_output
+    with_pipeline_workspace do |workspace, pipeline, _runner, out, err, front|
+      tools = File.join(front, "tools")
+      FileUtils.mkdir_p(tools)
+      File.write(File.join(tools, "bundle"), <<~RUBY)
+        #!#{RbConfig.ruby}
+        integration = ARGV == ["exec", "rake", "test:integration"]
+        abort "unexpected command" unless integration || ARGV == ["exec", "rake"]
+        phase = integration ? "integration" : "fast"
+        peer = integration ? "fast" : "integration"
+        root = ENV.fetch("SUITE_BARRIER")
+        File.write(File.join(root, phase), Process.pid.to_s)
+        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 3
+        until File.file?(File.join(root, peer))
+          abort "incomplete overlap" if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+          sleep 0.005
+        end
+        puts(integration ? #{self.class.integration_output.dump} : "2 runs, 3 assertions, 0 failures, 0 errors, 0 skips")
+        warn(integration ? "integration diagnostic" : "fast diagnostic")
+      RUBY
+      FileUtils.chmod(0o755, File.join(tools, "bundle"))
+      runner = AdventureFinderWorkspace::CommandRunner.new
+      runner.define_singleton_method(:shell_capture) do |command, chdir:, env: {}|
+        super(command, chdir: chdir, env: env.merge("PATH" => "#{tools}:#{ENV.fetch('PATH')}", "SUITE_BARRIER" => front))
+      end
+      actual = AdventureFinderWorkspace::Workspace.new(manifest: manifest, root: workspace.root,
+        front_door_root: front, runner: runner, out: out, err: err)
+      assert actual.test(repos: [pipeline], jobs: 2, include_front_door: false)
+      identities = %w[fast integration].map { |phase| File.read(File.join(front, phase)) }
+      assert_equal 2, identities.uniq.length
+      assert_includes out.string, "fast diagnostic"
+      assert_includes out.string, "integration diagnostic"
+      assert_match(/^Total runs:\s+8$/, out.string)
+      assert_match(/^Total assertions:\s+14$/, out.string)
       assert_empty err.string
     end
   end

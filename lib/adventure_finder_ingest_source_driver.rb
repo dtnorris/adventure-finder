@@ -1,9 +1,11 @@
 # frozen_string_literal: true
 
 require "digest"
+require "fileutils"
 require "json"
 require "open3"
 require "pathname"
+require "securerandom"
 require "tempfile"
 require_relative "adventure_finder_ingest_operation_store"
 require_relative "adventure_finder_ingest_routing"
@@ -335,6 +337,9 @@ module AdventureFinderWorkspace
                         "editorial review artifacts are not in one authoritative workspace") unless
         context_path.dirname == decisions_path.dirname
 
+      review_workspace = editable_review_workspace(operation, context_path.dirname)
+      return review_workspace if review_workspace.is_a?(Hash)
+
       {
         "contract_version" => VERSION,
         "status" => "WAITING",
@@ -354,8 +359,44 @@ module AdventureFinderWorkspace
           "warnings" => []
         },
         "diagnostic" => nil,
-        "review_workspace" => context_path.dirname.to_s
+        "review_workspace" => review_workspace.to_s
       }
+    end
+
+    # The pipeline's editorial ledger is edited in place. The operation's
+    # append-only reference must continue to bind the empty handoff ledger,
+    # so publish a separate editable workspace for the human review.
+    def editable_review_workspace(operation, bound_dir)
+      names = %w[editorial_context.json editorial_decisions.yml editorial_review.md]
+      destination = front_door_root.join("output", "ingest-editorial-workspaces", "v0.1",
+                                        operation.fetch("operation_id"))
+      names.each do |name|
+        source = bound_dir.join(name)
+        return diagnostic(operation, "INCOMPLETE_EDITORIAL_BUNDLE",
+                          "editorial review workspace lacks #{name}") unless source.file?
+      end
+      if destination.exist? || destination.symlink?
+        unless !destination.symlink? && destination.directory? &&
+               names.all? { |name| destination.join(name).file? && !destination.join(name).symlink? } &&
+               %w[editorial_context.json editorial_review.md].all? do |name|
+                 File.binread(destination.join(name)) == File.binread(bound_dir.join(name))
+               end
+          return diagnostic(operation, "EDITORIAL_WORKSPACE_CONFLICT",
+                            "existing editable review workspace conflicts with the bound handoff")
+        end
+        return destination
+      end
+
+      FileUtils.mkdir_p(destination.dirname)
+      temporary = destination.dirname.join(".#{destination.basename}.tmp-#{Process.pid}-#{SecureRandom.hex(6)}")
+      begin
+        FileUtils.mkdir(temporary)
+        names.each { |name| File.binwrite(temporary.join(name), File.binread(bound_dir.join(name))) }
+        File.rename(temporary, destination)
+      ensure
+        FileUtils.remove_entry(temporary) if temporary.exist?
+      end
+      destination
     end
 
     def gate_result(operation, kind, payload)
