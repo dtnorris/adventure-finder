@@ -421,6 +421,135 @@ class AdventureFinderWorkspaceTest < Minitest::Test
     end
   end
 
+  # Controlled result durations exercise persistence and the next parallel run's
+  # start hints without using wall-clock delays or changing completion accounting.
+  def test_pipeline_history_records_independent_durations_and_start_estimates
+    with_pipeline_workspace(runner: PipelineParallelRunner.new) do |workspace, pipeline, runner, out, err, front|
+      workspace.define_singleton_method(:run_test_repo) do |repo, **options|
+        super(repo, **options).tap { |result| result.elapsed = repo["suite"] == "fast" ? 12.5 : 87.5 }
+      end
+      assert workspace.test(repos: [pipeline], jobs: 2, include_front_door: false)
+      refute out.string.lines.grep(/^⠋ /).any? { |line| line.include?("~") }
+      history = YAML.safe_load(File.read(Dir.glob("#{front}/output/af-test/run-*.yml").last))
+      row = history.fetch("repositories").fetch("af-data-pipeline")
+      assert_equal "pass", row.fetch("result")
+      assert_equal 100.0, row.fetch("elapsed_seconds")
+      assert_equal({"fast" => {"result" => "pass", "elapsed_seconds" => 12.5},
+                    "integration" => {"result" => "pass", "elapsed_seconds" => 87.5}}, row.fetch("suites"))
+      out.truncate(0)
+      out.rewind
+      assert workspace.test(repos: [pipeline], jobs: 2, include_front_door: false)
+      assert_match(/^⠋ \[\d\/2\] af-data-pipeline \/ fast\s+~13s$/, out.string)
+      assert_match(/^⠋ \[\d\/2\] af-data-pipeline \/ integration\s+~88s$/, out.string)
+      assert_equal 2, runner.max_active
+      assert_equal 4, runner.calls.length
+      assert_includes out.string, "2/2 suites passed."
+      assert_includes out.string, "Repository cumulative time: af-data-pipeline 100.00s"
+      assert_match(/^Total runs:\s+8$/, out.string)
+      assert_match(/^Total assertions:\s+14$/, out.string)
+      assert_empty err.string
+    end
+  end
+
+  # The existing window selects the latest three files, then takes the median
+  # of eligible samples, independently for aggregate scheduling and each suite.
+  def test_pipeline_estimates_use_median_of_latest_three_files
+    with_pipeline_workspace do |workspace, pipeline, _runner, out, _err, front|
+      [[1000, 2000], [10, 90], [30, 110], [20, 100]].each_with_index do |(fast, integration), index|
+        write_pipeline_timing_fixture(front, index, {
+          "result" => "pass", "elapsed_seconds" => fast + integration,
+          "suites" => {"fast" => {"result" => "pass", "elapsed_seconds" => fast},
+                       "integration" => {"result" => "pass", "elapsed_seconds" => integration}}
+        })
+      end
+      workspace.instance_variable_set(:@test_duration_history, workspace.send(:load_test_duration_history))
+      assert_equal 120.0, workspace.send(:test_duration_hint_seconds, pipeline)
+      workspace.send(:test_suites, pipeline).each_with_index do |suite, index|
+        assert_equal [20.0, 100.0][index], workspace.send(:test_duration_hint_seconds, suite)
+        workspace.send(:print_test_start, suite, started: index + 1, total: 2)
+      end
+      assert_match(/^⠋ \[1\/2\] af-data-pipeline \/ fast\s+~20s$/, out.string)
+      assert_match(/^⠋ \[2\/2\] af-data-pipeline \/ integration\s+~100s$/, out.string)
+      other = {"name" => "other", "test_duration_hint_seconds" => 110.0}
+      assert_equal [pipeline, other], workspace.send(:prioritized_testables, [other, pipeline]).map(&:first)
+    end
+  end
+
+  # Legacy aggregates, malformed suite maps/rows, and unusable values must not
+  # borrow repository estimates. A valid peer remains readable in every case.
+  def test_pipeline_legacy_and_invalid_suite_history_has_no_fallback_estimate
+    invalid_rows = [nil, [], "bad", {"result" => "fail", "elapsed_seconds" => 42}]
+    [nil, "bad", [], {}, -1, Float::NAN, Float::INFINITY, -Float::INFINITY].each do |elapsed|
+      invalid_rows << {"result" => "pass", "elapsed_seconds" => elapsed}
+    end
+    suite_maps = [nil, [], "bad", {}] + invalid_rows.map do |sample|
+      {"fast" => sample, "integration" => {"result" => "pass", "elapsed_seconds" => "0.44"}}
+    end
+    suite_maps.each do |suites|
+      with_pipeline_workspace do |workspace, pipeline, _runner, out, _err, front|
+        row = {"result" => "pass", "elapsed_seconds" => 999.0}
+        row["suites"] = suites unless suites.nil?
+        write_pipeline_timing_fixture(front, 1, row)
+        workspace.instance_variable_set(:@test_duration_history, workspace.send(:load_test_duration_history))
+        assert_equal 999.0, workspace.send(:test_duration_hint_seconds, pipeline)
+        descriptors = workspace.send(:test_suites, pipeline)
+        assert_equal 0.0, workspace.send(:test_duration_hint_seconds, descriptors.first)
+        descriptors.each_with_index { |suite, index| workspace.send(:print_test_start, suite, started: index + 1, total: 2) }
+        refute out.string.lines.first.include?("~")
+        if suites.is_a?(Hash) && suites.key?("integration")
+          assert_match(/^⠋ \[2\/2\] af-data-pipeline \/ integration\s+~1s$/, out.string)
+        else
+          refute_includes out.string, "~"
+        end
+      end
+    end
+  end
+
+  # Failed, missing and NOT RUN samples retain their actual accounting while
+  # only successful samples contribute; either suite may be the failing peer.
+  def test_pipeline_history_excludes_failed_and_unexecuted_suites_independently
+    %w[fast integration].each do |unsuccessful|
+      [:fail, :not_run, :missing].each do |status|
+        with_pipeline_workspace do |workspace, pipeline, _runner, _out, _err, front|
+          write_pipeline_timing_fixture(front, 0, {
+            "result" => "pass", "elapsed_seconds" => 60.0,
+            "suites" => {"fast" => {"result" => "pass", "elapsed_seconds" => 10.0},
+                         "integration" => {"result" => "pass", "elapsed_seconds" => 50.0}}
+          })
+          results = %w[fast integration].map do |suite|
+            failed = suite == unsuccessful
+            elapsed = failed ? (status == :fail ? 200.0 : nil) : (suite == "fast" ? 30.0 : 70.0)
+            AdventureFinderWorkspace::Workspace::TestResult.new(name: "af-data-pipeline",
+              suite: suite, result: failed ? status : :pass, elapsed: elapsed)
+          end
+          workspace.send(:record_test_timing_history, results, workspace_elapsed: 1.0, jobs: 2)
+          history = YAML.safe_load(File.read(Dir.glob("#{front}/output/af-test/run-*.yml").sort.last))
+          row = history.fetch("repositories").fetch("af-data-pipeline")
+          assert_equal status.to_s, row.fetch("result")
+          assert_equal results.sum { |result| result.elapsed || 0.0 }, row.fetch("elapsed_seconds")
+          results.each do |result|
+            assert_equal({"result" => result.result.to_s, "elapsed_seconds" => result.elapsed}, row.fetch("suites").fetch(result.suite))
+          end
+          workspace.instance_variable_set(:@test_duration_history, workspace.send(:load_test_duration_history))
+          assert_equal 60.0, workspace.send(:test_duration_hint_seconds, pipeline)
+          hints = workspace.send(:test_suites, pipeline).map { |suite| workspace.send(:test_duration_hint_seconds, suite) }
+          assert_equal unsuccessful == "fast" ? [10.0, 60.0] : [20.0, 50.0], hints
+        end
+      end
+    end
+  end
+
+  # Writes one controlled history row under a sortable filename in a disposable
+  # front door. Returns bytes written; filesystem errors propagate to the test.
+  def write_pipeline_timing_fixture(front, index, row)
+    directory = File.join(front, "output", "af-test")
+    FileUtils.mkdir_p(directory)
+    File.write(File.join(directory, "run-#{index}.yml"), {
+      "schema_version" => AdventureFinderWorkspace::TEST_TIMING_HISTORY_SCHEMA_VERSION,
+      "repositories" => {"af-data-pipeline" => row}
+    }.to_yaml)
+  end
+
   # Rejects a lying aggregate while keeping observed worker counts and separate
   # invocations. No captured output can substitute a stale on-disk report.
   def test_mismatched_worker_aggregate_does_not_replace_observed_subtotals

@@ -706,11 +706,10 @@ module AdventureFinderWorkspace
       totals
     end
 
-    # Prints a named suite start with its ordinal; only single-suite repositories
-    # receive a historical estimate. Returns the output flush result.
+    # Prints a descriptor's ordinal and historical estimate, when available.
+    # Suite estimates require their own samples. Returns the output flush result.
     def print_test_start(repo, started:, total:)
-      # Repository history is cumulative across AFDP's gates, not a per-suite ETA.
-      hint = repo["suite"] ? 0.0 : test_duration_hint_seconds(repo)
+      hint = test_duration_hint_seconds(repo)
       hint_text = hint.positive? ? format("  ~%ds", [hint.round, 1].max) : ""
       label = repo["suite"] ? "#{repo.fetch('name')} / #{repo['suite']}" : repo.fetch("name")
 
@@ -742,13 +741,19 @@ module AdventureFinderWorkspace
       end
     end
 
+    # Returns a descriptor's median successful duration or repository manifest
+    # fallback. Suites without samples return zero; invalid manifest values raise.
     def test_duration_hint_seconds(repo)
-      historical = @test_duration_history&.fetch(repo.fetch("name"), nil)
+      key = repo["suite"] ? [repo.fetch("name"), repo["suite"]] : repo.fetch("name")
+      historical = @test_duration_history&.fetch(key, nil)
       return median(historical) if historical && !historical.empty?
+      return 0.0 if repo["suite"]
 
       Float(repo.fetch("test_duration_hint_seconds", 0.0))
     end
 
+    # Returns successful repository and [repository, suite] samples from the
+    # latest three files. Unreadable files and unusable samples are ignored.
     def load_test_duration_history
       history = Hash.new { |values, name| values[name] = [] }
       paths = Dir.glob((test_timing_history_dir / "run-*.yml").to_s).sort.last(TEST_TIMING_HISTORY_LIMIT)
@@ -765,24 +770,32 @@ module AdventureFinderWorkspace
         next unless repositories.is_a?(Hash)
 
         repositories.each do |name, row|
-          next unless row.is_a?(Hash) && row["result"] == "pass"
+          next unless row.is_a?(Hash)
 
-          begin
-            elapsed = Float(row["elapsed_seconds"])
-          rescue ArgumentError, TypeError
-            next
+          records = {name => row}
+          if row["suites"].is_a?(Hash)
+            row["suites"].each { |suite, sample| records[[name, suite]] = sample }
           end
-          next unless elapsed.finite? && elapsed >= 0.0
+          records.each do |key, sample|
+            next unless sample.is_a?(Hash) && sample["result"] == "pass"
 
-          history[name] << elapsed
+            begin
+              elapsed = Float(sample["elapsed_seconds"])
+            rescue ArgumentError, TypeError
+              next
+            end
+            next unless elapsed.finite? && elapsed >= 0.0
+
+            history[key] << elapsed
+          end
         end
       end
 
       history
     end
 
-    # Persists one cumulative timing/outcome per physical repository from planned
-    # suite results. Write failures emit a warning instead of hiding test results.
+    # Persists cumulative repository timing/outcomes and independent named suite
+    # samples from planned results. Write failures warn instead of hiding results.
     def record_test_timing_history(results, workspace_elapsed:, jobs:)
       directory = test_timing_history_dir
       FileUtils.mkdir_p(directory)
@@ -796,7 +809,14 @@ module AdventureFinderWorkspace
           {
             "result" => outcome.result.to_s,
             "elapsed_seconds" => suites.any?(&:elapsed) ? suites.sum { |result| result.elapsed || 0.0 }.round(6) : nil
-          }
+          }.tap do |row|
+            named = suites.select(&:suite)
+            unless named.empty?
+              row["suites"] = named.to_h do |result|
+                [result.suite, {"result" => result.result.to_s, "elapsed_seconds" => result.elapsed&.round(6)}]
+              end
+            end
+          end
         end
       }
       timestamp = Time.now.utc.strftime("%Y%m%dT%H%M%S.%6NZ")
