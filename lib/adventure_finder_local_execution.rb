@@ -98,7 +98,7 @@ module AdventureFinderWorkspace
 
     def initialize(front_door_root:, project_root:, env: ENV, out: $stdout,
                    runner: CommandRunner.new, clock: -> { Time.now.utc }, sleeper: ->(seconds) { sleep(seconds) },
-                   poll_interval: 1.0, observation_timeout: 30.0)
+                   poll_interval: 1.0, observation_timeout: 30.0, evidence_continuation: false)
       @front_door_root = Pathname(front_door_root).expand_path
       @project_root = Pathname(project_root).expand_path
       @env = env
@@ -108,6 +108,7 @@ module AdventureFinderWorkspace
       @sleeper = sleeper
       @poll_interval = Float(poll_interval)
       @observation_timeout = Float(observation_timeout)
+      @evidence_continuation = evidence_continuation
       fail_with("INVALID_LOCAL_EXECUTION_CONFIGURATION", "poll intervals must be positive") unless
         @poll_interval.positive? && @observation_timeout.positive?
     rescue ArgumentError, TypeError
@@ -149,6 +150,8 @@ module AdventureFinderWorkspace
 
     private
 
+    # Drive one bound ordinary execution using public readiness, control and
+    # action evidence. Returns completion; stale or unauthorized state raises Failure.
     def drive(operation_id:, capability_plan:, intent:, continue_operator_pause:)
       paths = validate_binding!(operation_id, capability_plan, intent)
       with_coordination_lock(paths) do
@@ -159,15 +162,23 @@ module AdventureFinderWorkspace
           return finish_complete(intent, capability_plan, paths, report) if report&.fetch("status") == "completed"
 
           state = load_state(paths, intent)
-          if report&.fetch("paused") && !report.fetch("executor_active") && state.fetch("phase") == "draining"
+          action = report ? action_check(paths, "resume") : probe
+          if action.fetch("disposition") == "blocked" && action.fetch("reason") != "executor_active"
+            fail_with("WLO_EXECUTION_GATE", action_message(action))
+          end
+          if report && !report.fetch("executor_active") && %w[draining drained resuming].include?(state.fetch("phase")) &&
+             !report.fetch("paused") && !continue_operator_pause
+            fail_with("OPERATOR_PAUSE", "retained transition has no verifiable outstanding pause authority")
+          end
+          if report&.fetch("paused") && !report.fetch("executor_active") &&
+             state.fetch("phase") == "draining" && owned_pause?(report, state)
             observed = demands(paths, capability_plan)
             unless drained?(observed)
               fail_with("LOCAL_TRANSITION_GATE", "persisted coordinator drain is not publicly drained")
             end
             state = persist_state(paths, intent, state.merge("phase" => "drained"))
           end
-          action = report ? action_check(paths, "resume") : probe
-          operator_pause = report&.fetch("paused") && !%w[draining drained resuming].include?(state.fetch("phase"))
+          operator_pause = report&.fetch("paused") && !owned_pause?(report, state)
           operator_demand = nil
           if operator_pause
             unless continue_operator_pause
@@ -198,8 +209,9 @@ module AdventureFinderWorkspace
           command = report ? "resume" : "run"
           phase = command == "resume" ? "resuming" : "running"
           state = persist_state(paths, intent, state.merge("phase" => phase, "step" => step&.fetch("step")))
-          handle = spawn_wlo(paths, command)
-          outcome = monitor(paths, capability_plan, intent, state, handle)
+          token = report&.fetch("paused") && owned_pause?(report, state) ? state["pause_token"] : nil
+          handle = spawn_wlo(paths, command, pause_token: token, manual_resume: continue_operator_pause)
+          outcome = monitor(paths, capability_plan, intent, state, handle, manual_resume: continue_operator_pause)
           next if outcome == :drained
           return outcome
         end
@@ -208,7 +220,10 @@ module AdventureFinderWorkspace
       fail_with(e.code, e.message.sub(/\A[^:]+: /, ""))
     end
 
-    def monitor(paths, capability_plan, intent, state, handle)
+    # Observe public control and execution facts; only this invocation's explicit
+    # manual authorization can wait for a manual resume to clear an operator hold.
+    # Returns completion/drain, or raises a bounded execution/ownership gate.
+    def monitor(paths, capability_plan, intent, state, handle, manual_resume: false)
       unknown_since = nil
       install_forwarding_handlers(handle) do
         loop do
@@ -218,8 +233,11 @@ module AdventureFinderWorkspace
             if report.fetch("status") == "completed" && process_status.success?
               return finish_complete(intent, capability_plan, paths, report)
             end
+            if TERMINAL_STATUSES.include?(report.fetch("status"))
+              fail_with("WLO_EXECUTION_GATE", "WLO exited #{status_detail(process_status)} with #{report.fetch('status')}")
+            end
             if report.fetch("paused") && !report.fetch("executor_active")
-              if state.fetch("phase") == "draining"
+              if state.fetch("phase") == "draining" && owned_pause?(report, state)
                 demands = demands(paths, capability_plan)
                 unless drained?(demands)
                   fail_with("LOCAL_TRANSITION_GATE", "WLO pause returned before public demand proved a drained execution")
@@ -246,8 +264,23 @@ module AdventureFinderWorkspace
             @sleeper.call(@poll_interval)
             next
           end
-          if !handle && TERMINAL_STATUSES.include?(report.fetch("status"))
+          if TERMINAL_STATUSES.include?(report.fetch("status")) && (!handle || !report.fetch("executor_active"))
             fail_with("WLO_EXECUTION_GATE", "observed WLO execution ended with #{report.fetch('status')}; review WLO summary")
+          end
+          if report.fetch("paused") && state.fetch("phase") == "resuming" && manual_resume
+            unknown_since ||= monotonic_now
+            if monotonic_now - unknown_since >= @observation_timeout
+              fail_with("LOCAL_TRANSITION_GATE", "explicit WLO resume did not clear the authorized pause")
+            end
+            @sleeper.call(@poll_interval)
+            next
+          end
+          if report.fetch("paused") && !owned_pause?(report, state)
+            if report.fetch("executor_active")
+              @sleeper.call(@poll_interval)
+              next
+            end
+            fail_with("OPERATOR_PAUSE", "WLO was paused outside this coordinator's transition")
           end
           if report.fetch("paused") && !report.fetch("executor_active") && state.fetch("phase") == "draining"
             if handle && !handle.finished?
@@ -269,14 +302,6 @@ module AdventureFinderWorkspace
             @sleeper.call(@poll_interval)
             next
           end
-          if report.fetch("paused") && !%w[draining resuming].include?(state.fetch("phase"))
-            if report.fetch("executor_active")
-              @sleeper.call(@poll_interval)
-              next
-            end
-            fail_with("OPERATOR_PAUSE", "WLO was paused outside this coordinator's transition")
-          end
-
           if state.fetch("phase") == "resuming"
             state = persist_state(paths, intent, state.merge("phase" => "running"))
             unknown_since = nil
@@ -286,8 +311,10 @@ module AdventureFinderWorkspace
           candidate = demanded_missing_step(capability_plan, observed, report)
           if candidate
             if safe_to_pause?(observed)
-              state = persist_state(paths, intent, state.merge("phase" => "draining", "step" => candidate.fetch("step")))
-              pause_wlo(paths)
+              state = persist_state(paths, intent, state.merge(
+                "phase" => "draining", "step" => candidate.fetch("step"), "pause_token" => SecureRandom.hex(32)
+              ))
+              pause_wlo(paths, state.fetch("pause_token"))
               unknown_since = nil
             elsif observation_unknown?(observed)
               unknown_since ||= monotonic_now
@@ -428,6 +455,8 @@ module AdventureFinderWorkspace
       document
     end
 
+    # Read a plan/consumer-bound public status and pause-control contract. Returns
+    # nil only for an optional unavailable report; invalid identity raises Failure.
     def execution_report(paths, required: true)
       response = capture(
         paths.fetch(:wlo), child_environment(paths), paths.fetch(:wlo_bin), "status",
@@ -441,20 +470,53 @@ module AdventureFinderWorkspace
       valid = document.is_a?(Hash) && document["plan_id"] == paths.fetch(:plan_id) &&
               document["plan_sha256"] == paths.fetch(:plan_sha256)
       fail_with("STALE_LOCAL_EXECUTION", "WLO status plan identity changed") unless valid
+      control = document["pause_control"]
+      valid_control = control.is_a?(Hash) && control["contract_version"] == "wlo-pause-control/v0.1" &&
+        control["consumer_id"] == paths.fetch(:consumer_id) &&
+        [true, false].include?(control["operator_pause"]) && control["request_ids"].is_a?(Array) &&
+        control["request_ids"].all? { |identifier| identifier.is_a?(String) && identifier.match?(/\A[0-9a-f]{64}\z/) } &&
+        control["request_ids"].uniq == control["request_ids"] &&
+        document["paused"] == (control["operator_pause"] || !control["request_ids"].empty?)
+      fail_with("INVALID_COMPONENT_OUTPUT", "WLO pause ownership evidence is missing or incompatible") unless valid_control
       document
     end
 
-    def pause_wlo(paths)
-      response = capture(paths.fetch(:wlo), child_environment(paths), paths.fetch(:wlo_bin),
-                         "pause", "--output", paths.fetch(:output).to_s)
-      fail_with("WLO_PAUSE_FAILED", command_failure(response)) unless response.status.success?
+    # True only when public execution-bound evidence proves the sole outstanding
+    # hold is this retained transition's token. Phase alone never grants authority.
+    def owned_pause?(report, state)
+      token = state["pause_token"]
+      return false unless token.is_a?(String) && token.match?(/\A[0-9a-f]{64}\z/) &&
+        %w[draining drained resuming].include?(state.fetch("phase"))
+      control = report["pause_control"]
+      control && control["operator_pause"] == false &&
+        control["request_ids"] == [Digest::SHA256.hexdigest(token)]
     end
 
-    def spawn_wlo(paths, command)
+    # Request one independent WLO hold using the persisted private token. The
+    # public receipt must match; component rejection raises WLO_PAUSE_FAILED.
+    def pause_wlo(paths, token)
+      response = capture(paths.fetch(:wlo), child_environment(paths), paths.fetch(:wlo_bin),
+                         "pause", "--output", paths.fetch(:output).to_s, "--owner-token", token)
+      fail_with("WLO_PAUSE_FAILED", command_failure(response)) unless response.status.success?
+      fail_with("INVALID_COMPONENT_OUTPUT", "WLO did not acknowledge this pause request") unless
+        response.stdout.lines.map(&:strip).include?("Pause request ID: #{Digest::SHA256.hexdigest(token)}")
+    end
+
+    # Launch ordinary execution without implicit manual pause authority. Scoped
+    # resume releases its exact token; only explicit operator continuation uses
+    # WLO's manual resume. Returns a handle; launch errors become WLO_LAUNCH_FAILED.
+    def spawn_wlo(paths, command, pause_token: nil, manual_resume: false)
+      scope = if command != "resume" || manual_resume
+                []
+              elsif pause_token
+                ["--release-pause", pause_token]
+              else
+                ["--preserve-pauses"]
+              end
       @runner.spawn(
         child_environment(paths), paths.fetch(:wlo_bin).to_s, command, paths.fetch(:plan).to_s,
         "--workdir", paths.fetch(:afw).to_s, "--output", paths.fetch(:output).to_s,
-        "--worker-sources-config", paths.fetch(:worker_sources).to_s,
+        "--worker-sources-config", paths.fetch(:worker_sources).to_s, *scope,
         chdir: paths.fetch(:wlo).to_s, out:
       )
     rescue SystemCallError => e
@@ -549,11 +611,15 @@ module AdventureFinderWorkspace
       fail_with("MISSING_LOCAL_EXECUTION_INPUT", e.message)
     end
 
+    # Read this intent's retained phase/token. Legacy missing tokens remain
+    # unowned; malformed state raises CORRUPT_LOCAL_EXECUTION_STATE.
     def load_state(paths, intent)
       return initial_state(intent) unless paths.fetch(:state).file?
       document = parse_json(File.binread(paths.fetch(:state)), "local execution state")
       valid = document["contract_version"] == STATE_VERSION && document["intent_id"] == intent.fetch("intent_id") &&
               %w[authorized running draining drained resuming completed].include?(document["phase"])
+      token = document["pause_token"]
+      valid &&= token.nil? || (token.is_a?(String) && token.match?(/\A[0-9a-f]{64}\z/))
       fail_with("CORRUPT_LOCAL_EXECUTION_STATE", "stored coordinator state is incompatible") unless valid
       document
     end
@@ -563,8 +629,10 @@ module AdventureFinderWorkspace
        "phase" => "authorized", "step" => nil, "updated_at" => timestamp}
     end
 
+    # Atomically retain the supplied transition phase, step and private token;
+    # returns the bound document and propagates filesystem persistence errors.
     def persist_state(paths, intent, state)
-      document = initial_state(intent).merge(state.slice("phase", "step"), "updated_at" => timestamp)
+      document = initial_state(intent).merge(state.slice("phase", "step", "pause_token"), "updated_at" => timestamp)
       write_atomic(paths.fetch(:state), JSON.pretty_generate(document) + "\n")
       document
     end
@@ -607,6 +675,10 @@ module AdventureFinderWorkspace
     def render_next_actions(intent, paths, report)
       workload = intent.dig("workload", "workload_id")
       if report&.fetch("status") == "completed"
+        if @evidence_continuation
+          out.puts "Continuing through AFW evidence and pipeline standing release"
+          return
+        end
         bind = [paths.fetch(:afw).join("bin/afw-bind-scoring-evidence"), workload, paths.fetch(:output)]
         publish = [paths.fetch(:afw).join("bin/afw-workload-evidence"), "publish", workload, paths.fetch(:output)]
         out.puts "Next: #{Shellwords.join(bind.map(&:to_s))}"

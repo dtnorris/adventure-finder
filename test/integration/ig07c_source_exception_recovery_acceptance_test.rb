@@ -32,7 +32,7 @@ class Ig07cSourceExceptionRecoveryAcceptanceTest < Minitest::Test
 
     assert status.success?, stderr
     assert_includes stdout, "Gate: BOUNDARY_EDITORIAL_REVIEW"
-    assert_includes stdout, "Review workspace: #{@fixture.editorial_dir}"
+    assert_includes stdout, "Review workspace: #{editable_review_dir}"
     assert_equal 4, @fixture.latest_revision
     document = @fixture.revision_document
     assert_equal Ig07cSourceAcceptance::Fixture::OPERATION_ID, document.fetch("operation_id")
@@ -42,7 +42,7 @@ class Ig07cSourceExceptionRecoveryAcceptanceTest < Minitest::Test
                  document.dig("base_catalog", "content", "sha256")
     assert_equal %w[conversion-receipt.json source_intake.json boundary_dossier.json],
                  @fixture.progress_calls.map { |call| call.fetch("artifact") }
-    decisions = YAML.safe_load_file(File.join(@fixture.editorial_dir, "editorial_decisions.yml"))
+    decisions = YAML.safe_load_file(File.join(editable_review_dir, "editorial_decisions.yml"))
     assert_empty decisions.fetch("candidates")
     assert_empty @fixture.forbidden_calls
     before = @fixture.operation_snapshot
@@ -55,6 +55,29 @@ class Ig07cSourceExceptionRecoveryAcceptanceTest < Minitest::Test
     assert_equal before, @fixture.operation_snapshot
     assert_equal calls_before, @fixture.progress_calls
     assert_no_fabricated_authority
+  end
+
+  def test_public_pipeline_validates_editable_review_copy_without_staling_operation
+    _, stderr, status = @fixture.start
+    assert status.success?, stderr
+    bound = File.join(@fixture.editorial_dir, "editorial_decisions.yml")
+    original = Digest::SHA256.file(bound).hexdigest
+    reviewed = File.join(editable_review_dir, "editorial_decisions.yml")
+    File.open(reviewed, "ab") { |file| file.write("# reviewed synthetic boundary ledger\n") }
+
+    validation, validation_error, validated = Open3.capture3(
+      File.join(@fixture.pipeline, "bin", "af-boundary-editorial"),
+      "validate", editable_review_dir, "--complete"
+    )
+    assert validated.success?, validation_error
+    assert_includes validation, "Complete: true"
+
+    resumed, resume_error, resumed_status = @fixture.resume
+    assert resumed_status.success?, resume_error
+    assert_includes resumed, "Gate: BOUNDARY_EDITORIAL_REVIEW"
+    assert_equal original, Digest::SHA256.file(bound).hexdigest
+    refute_equal original, Digest::SHA256.file(reviewed).hexdigest
+    assert_equal 4, @fixture.latest_revision
   end
 
   def test_page_review_receipt_stops_before_source_progression_with_pipeline_guidance
@@ -254,6 +277,11 @@ class Ig07cSourceExceptionRecoveryAcceptanceTest < Minitest::Test
   end
 
   private
+
+  def editable_review_dir
+    File.join(@fixture.front, "output", "ingest-editorial-workspaces", "v0.1",
+              Ig07cSourceAcceptance::Fixture::OPERATION_ID)
+  end
 
   def assert_refusal(stdout, status, code)
     assert_equal 2, status.exitstatus, stdout

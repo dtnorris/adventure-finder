@@ -74,13 +74,19 @@ module Ig19cMatrixSupport
     end.transform_values(&:uniq)
   end
 
+  # Load every named owner file before Minitest filters this group; mixed unit/
+  # integration rows retain their original exact expected run count.
   def run_group(repository, file, tests)
     root = repository_root(repository)
-    test_path = File.join(root, file)
-    raise "IG-19C public owner test is missing: #{test_path}" unless File.file?(test_path)
+    Array(file).each do |owner_file|
+      test_path = File.join(root, owner_file)
+      raise "IG-19C public owner test is missing: #{test_path}" unless File.file?(test_path)
+    end
 
     pattern = "/\\A(?:#{tests.join('|')})\\z/"
-    command = [RbConfig.ruby, "-Ilib", "-Itest", file, "--name", pattern]
+    command = [RbConfig.ruby, "-Ilib", "-Itest",
+      "-e", "ARGV.shift(#{Array(file).length}).each { |path| require File.expand_path(path) }",
+      *Array(file), "--name", pattern]
     environment = {}
     unless repository == "adventure-finder"
       environment["BUNDLE_GEMFILE"] = File.join(root, "Gemfile")

@@ -533,12 +533,24 @@ module AdventureFinderWorkspace
     def persist_result!(operation_id, result)
       path = preparation_dir(operation_id).join("result.json")
       if path.file?
-        fail_with("PREPARATION_CONFLICT", "stored preparation result changed") unless read_json(path) == result
+        existing = read_json(path)
+        # AFW's public inspector includes an observation of scoring results.
+        # Successful execution changes that observation without changing the
+        # frozen selection, workload or preparation identity. AFW still checks
+        # the current results for conflicts before returning a reuse action.
+        fail_with("PREPARATION_CONFLICT", "stored preparation result changed") unless
+          stable_preparation_result(existing) == stable_preparation_result(result)
         return
       end
       write_json(path, result)
     rescue SystemCallError => e
       fail_with("PREPARATION_PERSISTENCE_FAILED", e.message)
+    end
+
+    def stable_preparation_result(result)
+      copy = Marshal.load(Marshal.dump(result))
+      %w[output results].each { |key| copy.dig("inspection", "observed")&.delete(key) }
+      copy
     end
 
     def require_editorial_lineage!(operation)

@@ -40,7 +40,8 @@ repositories:
     default: true
     setup: bundle install
     test: bundle exec rake
-    test_duration_hint_seconds: 3.71
+    # One reported 2026-10-14 fast + integration run; priority hint, not a target.
+    test_duration_hint_seconds: 104.11
     requires: [ruby, bundle, git]
 
   - name: af-cli-scoring-utility

@@ -6,6 +6,7 @@ require "json"
 require "minitest/autorun"
 require "open3"
 require "tmpdir"
+require_relative "../lib/adventure_finder_ingest_source_driver"
 
 class CatalogIngestSourceDriverTest < Minitest::Test
   parallelize_me!
@@ -46,12 +47,48 @@ class CatalogIngestSourceDriverTest < Minitest::Test
     FileUtils.remove_entry(@temporary) if @temporary && File.exist?(@temporary)
   end
 
+  def test_editable_review_publication_replays_decisions_and_refuses_conflicts
+    bound_dir = directory("bound-editorial")
+    %w[editorial_context.json editorial_decisions.yml editorial_review.md].each do |name|
+      write(File.join(bound_dir, name), "original #{name}\n")
+    end
+    driver = AdventureFinderWorkspace::IngestSourceDriver.new(
+      store: nil, routing: nil, project_root: @components,
+      front_door_root: @front, pipeline_root: @pipeline,
+      source_root: @source, catalog_root: @catalog
+    )
+    operation = {"operation_id" => ID, "revision" => 4}
+    destination = driver.send(:editable_review_workspace, operation, Pathname(bound_dir))
+    assert_equal editable_review_dir, destination.to_s
+
+    decisions = destination.join("editorial_decisions.yml")
+    File.binwrite(decisions, "reviewed decision\n")
+    assert_equal destination, driver.send(:editable_review_workspace, operation, Pathname(bound_dir))
+    assert_equal "reviewed decision\n", File.binread(decisions)
+
+    File.binwrite(destination.join("editorial_context.json"), "changed context\n")
+    refusal = driver.send(:editable_review_workspace, operation, Pathname(bound_dir))
+    assert_equal "EDITORIAL_WORKSPACE_CONFLICT", refusal.dig("diagnostic", "code")
+    assert_equal "reviewed decision\n", File.binread(decisions)
+
+    FileUtils.remove_entry(destination)
+    File.symlink(bound_dir, destination)
+    refusal = driver.send(:editable_review_workspace, operation, Pathname(bound_dir))
+    assert_equal "EDITORIAL_WORKSPACE_CONFLICT", refusal.dig("diagnostic", "code")
+    File.unlink(destination)
+
+    File.unlink(File.join(bound_dir, "editorial_review.md"))
+    refusal = driver.send(:editable_review_workspace, operation, Pathname(bound_dir))
+    assert_equal "INCOMPLETE_EDITORIAL_BUNDLE", refusal.dig("diagnostic", "code")
+    refute File.exist?(destination)
+  end
+
   def test_clean_start_reaches_boundary_review_and_repeat_resume_is_no_write
     stdout, stderr, status = run_catalog(*start_arguments)
 
     assert status.success?, stderr
     assert_includes stdout, "Gate: BOUNDARY_EDITORIAL_REVIEW"
-    assert_includes stdout, "Review workspace: #{editorial_dir}"
+    assert_includes stdout, "Review workspace: #{editable_review_dir}"
     document = revision_document(4)
     assert_equal ID, document.fetch("operation_id")
     assert_equal Digest::SHA256.file(@pdf).hexdigest, document.dig("input", "content", "sha256")
@@ -95,6 +132,51 @@ class CatalogIngestSourceDriverTest < Minitest::Test
     assert_includes resumed_out, "Gate: BOUNDARY_EDITORIAL_REVIEW"
     assert_equal before, operation_snapshot
     assert_equal calls_before, progress_calls.length
+  end
+
+  def test_editorial_decisions_can_be_reviewed_without_changing_bound_operation_bytes
+    stdout, stderr, status = run_catalog(*start_arguments)
+    assert status.success?, stderr
+    assert_includes stdout, "Review workspace: #{editable_review_dir}"
+    bound = File.join(editorial_dir, "editorial_decisions.yml")
+    original_digest = Digest::SHA256.file(bound).hexdigest
+    reviewed = File.join(editable_review_dir, "editorial_decisions.yml")
+    File.open(reviewed, "ab") { |file| file.write("# reviewed candidate evidence\n") }
+
+    resumed_out, resumed_err, resumed_status = run_catalog("resume", ID)
+    assert resumed_status.success?, resumed_err
+    assert_includes resumed_out, "Gate: BOUNDARY_EDITORIAL_REVIEW"
+    assert_includes resumed_out, "Review workspace: #{editable_review_dir}"
+    assert_equal original_digest, Digest::SHA256.file(bound).hexdigest
+    refute_equal original_digest, Digest::SHA256.file(reviewed).hexdigest
+    assert_equal 4, latest_revision
+  end
+
+  def test_changed_review_context_refuses_replay_without_rewriting_human_ledger
+    _, stderr, status = run_catalog(*start_arguments)
+    assert status.success?, stderr
+    context = File.join(editable_review_dir, "editorial_context.json")
+    ledger = File.join(editable_review_dir, "editorial_decisions.yml")
+    File.open(context, "ab") { |file| file.write("# changed context\n") }
+    File.open(ledger, "ab") { |file| file.write("# reviewed candidate evidence\n") }
+    before = Digest::SHA256.file(ledger).hexdigest
+
+    stdout, _, resumed = run_catalog("resume", ID)
+    assert_equal 2, resumed.exitstatus
+    assert_includes stdout, "Diagnostic: EDITORIAL_WORKSPACE_CONFLICT"
+    assert_equal before, Digest::SHA256.file(ledger).hexdigest
+    assert_equal 4, latest_revision
+  end
+
+  def test_symlinked_review_workspace_is_refused_without_following_it
+    FileUtils.mkdir_p(File.dirname(editable_review_dir))
+    File.symlink(editorial_dir, editable_review_dir)
+
+    stdout, _, status = run_catalog(*start_arguments)
+
+    assert_equal 2, status.exitstatus
+    assert_includes stdout, "Diagnostic: EDITORIAL_WORKSPACE_CONFLICT"
+    assert File.symlink?(editable_review_dir)
   end
 
   def test_fresh_resume_after_intake_reuses_byte_identical_upstream_artifacts
@@ -488,6 +570,10 @@ class CatalogIngestSourceDriverTest < Minitest::Test
 
   def editorial_dir
     File.join(@pipeline, "audits/pre-scoring/fixture-source-boundary-editorial")
+  end
+
+  def editable_review_dir
+    File.join(@front, "output", "ingest-editorial-workspaces", "v0.1", ID)
   end
 
   def progress_calls

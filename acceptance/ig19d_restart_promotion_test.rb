@@ -6,6 +6,7 @@ require "json"
 require "minitest/autorun"
 require "open3"
 require "rbconfig"
+require "securerandom"
 require "tmpdir"
 require "yaml"
 require_relative "../lib/adventure_finder_ingest_operation_store"
@@ -45,13 +46,27 @@ class Ig19dRestartPromotionTest < Minitest::Test
   def test_disposable_git_guard_refuses_real_and_symlinked_targets
     row("fixture-git-boundary", "synthetic Git mutation", "verified disposable root required",
         "refusal outside marked fixtures", "no Git mutation", "choose a verified temporary repository") do
-      assert_raises(RuntimeError) { Ig19dDisposableGit.check!(["git", "-C", ROOT, "commit", "-m", "forbidden"]) }
-      link = File.join(@temporary, "real-checkout")
-      File.symlink(ROOT, link)
-      assert_raises(RuntimeError) { Ig19dDisposableGit.check!(["/usr/bin/git", "-C", link, "add", "."]) }
-      assert_raises(RuntimeError) { Ig19dDisposableGit.check!(["git", "push", "origin", "main"]) }
-      assert_raises(RuntimeError) { Ig19dDisposableGit.check!(["git", "--git-dir", File.join(ROOT, ".git"), "commit"]) }
-      assert_raises(RuntimeError) { Ig19dDisposableGit.check!(["git", "clone", "https://github.com/example/repo", File.join(@temporary, "clone")]) }
+      token = SecureRandom.hex(32)
+      File.binwrite(File.join(@temporary, ".ig19d-disposable"), token)
+      previous = ENV.to_h.slice("IG19D_FIXTURE_ROOT", "IG19D_FIXTURE_TOKEN")
+      begin
+        ENV["IG19D_FIXTURE_ROOT"] = @temporary
+        ENV["IG19D_FIXTURE_TOKEN"] = token
+        error = assert_raises(RuntimeError) { Ig19dDisposableGit.check!(["git", "-C", ROOT, "commit", "-m", "forbidden"]) }
+        assert_includes error.message, "outside disposable fixtures"
+        link = File.join(@temporary, "real-checkout")
+        File.symlink(ROOT, link)
+        error = assert_raises(RuntimeError) { Ig19dDisposableGit.check!(["/usr/bin/git", "-C", link, "add", "."]) }
+        assert_includes error.message, "outside disposable fixtures"
+        error = assert_raises(RuntimeError) { Ig19dDisposableGit.check!(["git", "push", "origin", "main"]) }
+        assert_includes error.message, "unsupported Git command"
+        error = assert_raises(RuntimeError) { Ig19dDisposableGit.check!(["git", "--git-dir", File.join(ROOT, ".git"), "commit"]) }
+        assert_includes error.message, "unsupported Git command"
+        error = assert_raises(RuntimeError) { Ig19dDisposableGit.check!(["git", "clone", "https://github.com/example/repo", File.join(@temporary, "clone")]) }
+        assert_includes error.message, "explicit local source and destination"
+      ensure
+        %w[IG19D_FIXTURE_ROOT IG19D_FIXTURE_TOKEN].each { |name| ENV[name] = previous[name] }
+      end
     end
   end
 

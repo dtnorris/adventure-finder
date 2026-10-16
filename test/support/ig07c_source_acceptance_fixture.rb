@@ -309,8 +309,13 @@ module Ig07cSourceAcceptance
         output_dir = ARGV.fetch(ARGV.index("--output-dir") + 1)
         FileUtils.mkdir_p(output_dir)
         markdown = File.join(output_dir, "fixture.md")
-        body = if ENV["IG07C_MARKDOWN_MODE"] == "unknown_page"
+        body = case ENV["IG07C_MARKDOWN_MODE"]
+               when "unknown_page"
                  "<!-- PDF Page 1 -->\\n# Structural Fixture\\n"
+               when "synthetic_procedure"
+                 "<!-- PDF Page 1 -->\\n<!-- Printed Page 1 -->\\n" \
+                   "# Synthetic Procedure\\nEntry: select the marked input.\\n" \
+                   "Middle: apply the stated transformation.\\nExit: record the output.\\n"
                else
                  "<!-- PDF Page 1 -->\\n<!-- Printed Page 1 -->\\n# Structural Fixture\\n"
                end

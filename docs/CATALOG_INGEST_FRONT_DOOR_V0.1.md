@@ -12,9 +12,12 @@ bin/af-catalog start INPUT.pdf \
   --base-catalog /path/to/exact-base.xlsx \
   --prepare-staged-scoring \
   --selected-by "OPERATOR" \
+  --successor-version 7.5.2 \
   --canonical-destination /explicit/source/root/Book_LLM_Edition.md
 
 bin/af-catalog resume OPERATION-UUID
+bin/af-catalog resume OPERATION-UUID --approve-boundary-by "HUMAN REVIEWER"
+bin/af-catalog resume OPERATION-UUID --approve-final-by "HUMAN REVIEWER"
 
 bin/af-catalog bind-successor-version OPERATION-UUID \
   --successor-version 7.5.2 \
@@ -49,6 +52,12 @@ its portable source-root-relative locator in the operation's resume context. It
 never derives the destination from a source ID, filename, receipt, registry, or
 prior shell state.
 
+For continuous ingest, `--successor-version` binds the explicitly selected,
+dotted numeric version at the initial interaction. It requires the canonical
+destination. The existing `bind-successor-version` command remains available for
+older operations and explicit recovery; the version is never inferred from the
+base workbook or scoring policy.
+
 The command generates and prints a lowercase UUIDv4 handle unless `--operation-id` is
 supplied. The latter is useful for deliberate external identity assignment and exact
 conflict tests; reusing a handle for different immutable input fails closed.
@@ -80,7 +89,8 @@ The driver permits only:
 - source intake to source registration plus boundary dossier; and
 - boundary dossier to an empty boundary-editorial review workspace.
 
-It stops at BOUNDARY_EDITORIAL_REVIEW and prints the authoritative workspace path.
+It stops at BOUNDARY_EDITORIAL_REVIEW and prints a separate editable review copy
+whose context and instructions must remain byte-identical to the bound originals.
 It never enters candidate decisions, freeze/import, scoring preparation or execution,
 inference, capacity, successor application, catalog adoption, or promotion.
 
@@ -91,7 +101,7 @@ pipeline rejection is rendered with pipeline ownership and remains a failure.
 
 ## Resume behavior
 
-Resume accepts only the handle. It reloads the versioned root context, validates the
+Ordinary resume accepts only the handle. It reloads the versioned root context, validates the
 complete append-only operation history and every bound byte sequence, and recomputes
 the current gate through `IngestOperationRouting`. For a v0.2 source-progression
 context it resumes the same source-only loop, reusing exact compatible component
@@ -120,6 +130,48 @@ versioned result and output bytes validate. Page/OCR, source identity, registry,
 catalog-base, and source-QA gates are rendered without bypass. Once an editorial
 context and decisions ledger are bound, every later resume stops at the same review
 workspace without invoking progression again.
+
+After the human completes the ledger and reviews it through pipeline's public
+editorial interface, `resume --approve-boundary-by NAME` attests that exact review.
+The front door validates the complete ledger, calls pipeline's public `approve`,
+`freeze-approved`, `validate-approved-freeze`, and `boundary-freeze-stage`
+commands, and retains their exact approval, freeze, operation projection, successor
+authority, and staging receipt. Pipeline owns every validation, allocation, and
+workbook change. After staging verifies the live manifest, the front door retains
+its exact bytes as `HISTORICAL_PROJECT_STATE_OPERATION-UUID.yml` beside the role
+workbooks, as required by the pipeline's historical-state resolver. This immutable
+evidence copy changes no shared role; conflicting or symlinked copies are refused.
+Later workload/release validation uses this retained locator separately from the
+live manifest. An older frozen operation without retained evidence requires
+explicit recovery; resume does not replace its historical binding.
+Repeating the same approval and inputs reuses exact bytes; changed
+inputs fail closed. The front door then requests AFW qualified workload preparation
+and starts the existing local coordinator only for a `PREPARED` result. A verified
+zero-record freeze reports `NO_SUCCESSOR_NEEDED` and does not start work.
+
+On terminal WLO completion, the front door verifies the exact frozen plan and
+asks AFW's public binder and manifest publisher to account for its whole case
+denominator. It asks pipeline's public workload review, standing bulk release,
+and final package commands to validate the resulting evidence and prepare the
+reviewed workbook. For an AFW qualified workload, the standing release uses
+the pipeline's v0.2 input contract with the exact selection locator, AFW and
+scorer roots, and generated workload directory; replay retains these same
+bindings. The configured versioned standing directive and owner
+selection remain pipeline-owned authority; the front door supplies no score
+decisions. Incomplete execution, missing AFW receipts, changed inputs, or a
+blocked package stop before final approval. A later plain `resume` retries
+deterministic handoffs using the retained boundary approval and local intent;
+it never reinterprets a failed WLO execution as complete.
+
+Once the package is ready, `resume --approve-final-by NAME` displays the exact
+pipeline-validated package and prompts for APPROVE or DECLINE. Only an explicit
+APPROVE enters the existing pipeline adoption transaction. A package with a
+stale catalog HEAD or changed reviewed bytes is refused. A repeat invocation
+routes an existing operation-bound package directly to final promotion, without
+rebuilding a workload or reapplying standing scores. It uses IG-19D-3's owner
+validators and retained decision rather than minting a new
+approval. `AF_AFW_ROOT`, `WLO_REPO_ROOT`, and the established component-root
+overrides remain supported.
 
 ## Successor-version authority
 
