@@ -56,14 +56,14 @@ class Ig18cFinalPromotionMatrixTest < Minitest::Test
     {
       id: "standing-authority-and-package-replay",
       repository: :pipeline,
-      file: "test/final_release_package_test.rb",
+      file: "test/integration/final_release_package_test.rb",
       tests: %w[test_clean_package_and_read_only_replay_bind_complete_standing_authority],
       proves: "boundary-created IDs, exact standing acceptance, zero human/machine acceptance, complete counts, and byte-stable package replay"
     },
     {
       id: "optional-frontier-rebinding",
       repository: :pipeline,
-      file: "test/final_release_package_test.rb",
+      file: "test/integration/final_release_package_test.rb",
       tests: %w[
         test_terminal_gap_and_declined_frontier_remain_ready_without_full_scoring
         test_valid_derived_candidate_binds_exact_original_and_separate_frontier_counts
@@ -73,7 +73,7 @@ class Ig18cFinalPromotionMatrixTest < Minitest::Test
     {
       id: "release-reference-drift",
       repository: :pipeline,
-      file: "test/final_release_package_test.rb",
+      file: "test/integration/final_release_package_test.rb",
       tests: %w[
         test_missing_mutated_and_malformed_immutable_references_are_refused
         test_successful_subset_and_rehashed_release_counts_do_not_replace_full_population
@@ -83,7 +83,7 @@ class Ig18cFinalPromotionMatrixTest < Minitest::Test
     {
       id: "lineage-and-concurrent-catalog-safety",
       repository: :pipeline,
-      file: "test/final_release_package_test.rb",
+      file: %w[test/integration/final_release_package_test.rb test/final_release_package_test.rb],
       tests: %w[
         test_current_head_advancement_is_scoring_safe_but_lost_score_blocks_promotion
         test_current_manifest_and_uncommitted_catalog_bytes_cannot_claim_repository_head
@@ -94,7 +94,7 @@ class Ig18cFinalPromotionMatrixTest < Minitest::Test
     {
       id: "authority-count-separation",
       repository: :pipeline,
-      file: "test/final_release_package_test.rb",
+      file: "test/integration/final_release_package_test.rb",
       tests: %w[
         test_human_and_source_terminal_exceptions_remain_distinct
         test_unavailable_ig16b_application_control_cannot_be_replaced_by_record_only_authority
@@ -104,7 +104,7 @@ class Ig18cFinalPromotionMatrixTest < Minitest::Test
     {
       id: "preview-is-non-authoritative",
       repository: :pipeline,
-      file: "test/final_release_package_test.rb",
+      file: "test/integration/final_release_package_test.rb",
       tests: %w[test_preview_is_informational_and_public_cli_validates_without_publication],
       proves: "verified red-cell preview remains optional and grants no score or promotion authority"
     },
@@ -135,12 +135,16 @@ class Ig18cFinalPromotionMatrixTest < Minitest::Test
 
   private
 
+  # Load every named owner file before Minitest filters this group; mixed unit/
+  # integration rows retain their original exact expected run count.
   def run_group(repository, file, tests)
     root = repository == :pipeline ? PIPELINE_ROOT : ROOT
     environment = repository == :front_door ? {"AF_DATA_PIPELINE_ROOT" => PIPELINE_ROOT} : {}
     pattern = "/\\A(?:#{tests.join('|')})\\z/"
     output, status = Open3.capture2e(
-      environment, RbConfig.ruby, "-Ilib", "-Itest", file, "--name", pattern, chdir: root
+      environment, RbConfig.ruby, "-Ilib", "-Itest",
+      "-e", "ARGV.shift(#{Array(file).length}).each { |path| require File.expand_path(path) }",
+      *Array(file), "--name", pattern, chdir: root
     )
     {output:, status:}
   end

@@ -209,7 +209,7 @@ class Ig19cEvidenceReviewExceptionMatrixTest < Minitest::Test
     {
       id: "ig16b-authority-absent",
       repository: "af-data-pipeline",
-      file: "test/final_release_package_test.rb",
+      file: "test/integration/final_release_package_test.rb",
       tests: %w[
         test_clean_package_and_read_only_replay_bind_complete_standing_authority
         test_unavailable_ig16b_application_control_cannot_be_replaced_by_record_only_authority
@@ -226,7 +226,7 @@ class Ig19cEvidenceReviewExceptionMatrixTest < Minitest::Test
     {
       id: "full-population-and-levels-reconciliation",
       repository: "af-data-pipeline",
-      file: "test/final_release_package_test.rb",
+      file: %w[test/integration/final_release_package_test.rb test/final_release_package_test.rb],
       tests: %w[
         test_successful_subset_and_rehashed_release_counts_do_not_replace_full_population
         test_complete_metric_identity_requires_levels_siblings_and_unique_members

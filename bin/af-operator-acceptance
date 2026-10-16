@@ -3,6 +3,10 @@
 
 require "optparse"
 
+# Each owner CLI selects its own bundle. Restore caller Ruby options (including
+# offline guards) before constructing child environments from a bundled Rake run.
+ENV.replace(Bundler.unbundled_env) if defined?(Bundler)
+
 $LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
 require "adventure_finder_operator_acceptance"
 
