@@ -173,6 +173,24 @@ validators and retained decision rather than minting a new
 approval. `AF_AFW_ROOT`, `WLO_REPO_ROOT`, and the established component-root
 overrides remain supported.
 
+Optional frontier supplementation remains a separately requested component-tool
+handoff at final review. The front door does not create its request, check installed
+producer compatibility, or route that branch from `resume`. Use AFDP's
+[Optional frontier producer v0.2](https://github.com/dtnorris/af-data-pipeline/blob/main/docs/FINAL_RELEASE_PACKAGE_V0.1.md#optional-frontier-producer-v02)
+contract: the operator supplies the exact displayed absolute package-input and
+package paths, an explicit frozen rubric (`id`, absolute `path`, `sha256`, `bytes`),
+and a successor version newer than the original staged version bound by the
+release manifest's `lineage.staged_amc.filename`. No rubric or version is inferred.
+Leave original promotion unapproved when requesting that branch. After the
+component's prepare/apply (or decline) and verify operations, prepare a new final
+package from its public `RESULT_DIR/package-inputs.json`, then pass those inputs
+and that package to `af-catalog final-promotion`. An absent/incompatible producer
+or structured `BLOCKED` result grants no supplementation authority. Derived
+values retain `frontier_manual` attribution and require a new exact final approval;
+decline retains the original candidate and validated terminal gaps. Supplements
+cannot chain. Original-candidate promotion remains available under its validated
+terminal-gap authority without an additional mandatory decision.
+
 ## Successor-version authority
 
 `bind-successor-version` validates the existing operation and its frozen bytes, then
