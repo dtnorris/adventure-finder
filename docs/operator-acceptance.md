@@ -8,7 +8,7 @@ provider calls.
 
 `bin/af-test --comprehensive` invokes this public entrypoint after component and
 front-door suites. Both standalone and comprehensive operator acceptance execute
-all 27 currently registered scenarios. Three front-door unit files
+all 28 currently registered scenarios. Three front-door unit files
 (`batch-front-door`, `local-capacity-bootstrap`, and `production-context`) are
 also exercised by front-door rake; they are intentionally rerun under the
 operator harness's credential-free, offline guard rather than marked `COVERED`
@@ -26,6 +26,7 @@ bin/af-operator-acceptance
 bin/af-operator-acceptance --only local-multi-model
 bin/af-operator-acceptance --only operator-lifecycle
 bin/af-operator-acceptance --only batch-front-door
+bin/af-operator-acceptance --only batch-dynamic-sources
 bin/af-operator-acceptance --only audited-recovery
 bin/af-operator-acceptance --only ig19a-entry-contract
 bin/af-operator-acceptance --only ig19b-source-exceptions
@@ -36,6 +37,33 @@ bin/af-operator-acceptance --only final-promotion
 bin/af-operator-acceptance --only ig19d-restart-promotion
 bin/af-operator-acceptance --only ig19d-staleness
 ```
+
+## Optional Batch 39 publishers
+
+`batch-dynamic-sources` runs the real `bin/af-batch resume 39` handoff into real
+WLO with a disposable registry and separately hashed synthetic plan. Only
+publisher output and scorer payloads are fakes. One continuous owner waits with
+empty publishers, consumes later LOW and RPOF capacity, and continues through a
+healthy publisher after idle source failure. Public status/progress observations
+and exact immutable attempt bindings establish continuity. A wrong full digest
+prevents dispatch before a corrected publication enables the same execution.
+
+The synthetic 192-job fixture preserves all four original pool requirements,
+the initial 75 complete / 5 failed / 112 pending boundary, and the original 80
+terminal jobs' bytes/history. Its final 187 complete / 5 failed / 0 pending state
+is `workload_failed`, exit 2. This is offline scheduling/accounting evidence,
+not production scoring or recovery acceptance. The original production plan
+is read only and hash-checked; no real scorer or provider is invoked.
+
+The scenario also loads actual AF-generated YAML with WLO's validator and
+checks optional/required availability, fresh-snapshot retention and expiry,
+invalid replacements, capability matching, fatal registry collision, active
+worker loss and public execution safety refusals. Test-owned process teardown
+includes timeout, interruption, assertion-failure and unrelated-sentinel checks.
+Set `FO25_EVIDENCE_ROOT` to a disposable evidence directory to retain public
+observations, publisher bytes, source YAML, logs and attempt artifacts. Failed
+fixtures are retained at the printed paths. These tests complement the owner
+scenarios; they do not replace the full offline coverage or acceptance gates.
 
 ## Durable restart and staleness proof
 

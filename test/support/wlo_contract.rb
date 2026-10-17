@@ -5,7 +5,7 @@ require "yaml"
 # Match the front door's component-root contract, including explicit overrides.
 # The real WLO contract is required; a missing checkout must not skip these tests.
 WLO_ROOT = File.expand_path(
-  ENV.fetch("WLO_REPOSITORY_ROOT") do
+  ENV["WLO_REPOSITORY_ROOT"] || ENV["WLO_REPO_ROOT"] || begin
     component_root = ENV.fetch("AF_PROJECT_ROOT") do
       YAML.safe_load_file(File.expand_path("../../repos.yml", __dir__))
           .fetch("workspace_root_default")

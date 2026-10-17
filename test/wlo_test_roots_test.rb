@@ -76,7 +76,7 @@ class WloTestRootsTest < Minitest::Test
   end
 
   def run_loader(front, overrides)
-    env = {"AF_PROJECT_ROOT" => nil, "WLO_REPOSITORY_ROOT" => nil, "RUBYLIB" => nil, "RUBYOPT" => nil}
+    env = {"AF_PROJECT_ROOT" => nil, "WLO_REPOSITORY_ROOT" => nil, "WLO_REPO_ROOT" => nil, "RUBYLIB" => nil, "RUBYOPT" => nil}
     Open3.capture3(env.merge(overrides), RbConfig.ruby, "-rjson", "-e",
                   "require './test/support/wlo_contract'; " \
                   "puts JSON.generate([WLO_ROOT, WLO_ROOT_TEST_LOADED_FROM])", chdir: front)
