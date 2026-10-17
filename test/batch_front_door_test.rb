@@ -11,6 +11,8 @@ require "tmpdir"
 require "yaml"
 
 require "adventure_finder_batch"
+require_relative "support/wlo_contract"
+require File.join(WLO_ROOT, "lib/workload_orchestrator")
 
 class BatchFrontDoorTest < Minitest::Test
   PLAN_ID = "production-batch-039-fixture"
@@ -99,12 +101,12 @@ class BatchFrontDoorTest < Minitest::Test
     assert_equal %w[local remote], config.fetch("sources").map { |source| source.fetch("name") }
     local, remote = config.fetch("sources")
     [local, remote].each do |source|
-      assert source.fetch("environment").key?("BUNDLE_LOCKFILE")
-      assert_nil source.dig("environment", "BUNDLE_LOCKFILE")
+      assert source.fetch("environment").values.all?(String)
+      refute source.fetch("environment").key?("BUNDLE_LOCKFILE")
     end
-    assert_equal [@bundle, "exec", File.join(@low, "bin", "low"), "workers", "--json"],
+    assert_equal [@env, "-u", "BUNDLE_LOCKFILE", @bundle, "exec", File.join(@low, "bin", "low"), "workers", "--json"],
                  [local.fetch("command"), *local.fetch("args")]
-    assert_equal [@bundle, "exec", File.join(@rpof, "bin", "rpof"), "workers", "--json"],
+    assert_equal [@env, "-u", "BUNDLE_LOCKFILE", @bundle, "exec", File.join(@rpof, "bin", "rpof"), "workers", "--json"],
                  [remote.fetch("command"), *remote.fetch("args")]
     assert_equal File.join(@rpof, "output", "runpod-fleets"),
                  remote.dig("environment", "RPOF_STATE_ROOT")
@@ -125,6 +127,112 @@ class BatchFrontDoorTest < Minitest::Test
     config = launched_worker_config
     assert_equal ["local"], config.fetch("sources").map { |source| source.fetch("name") }
     assert_equal @low, config.dig("sources", 0, "workdir")
+  end
+
+  # Exercise AF's actual YAML with the owner loader; invalid environments raise
+  # WLO::Error rather than passing through a copied or stubbed validator.
+  def test_generated_configuration_loads_with_real_wlo
+    front_door.run("start", "39")
+    argv = @executor.calls.last.fetch(:argv)
+    path = argv.fetch(argv.index("--worker-sources-config") + 1)
+    sources = WorkloadOrchestrator::WorkerSourceConfiguration.load(path)
+    assert_equal %w[local remote], sources.entries.map(&:name)
+    assert_equal %w[required required], sources.entries.map(&:policy)
+  end
+
+  # Explicit policy maps generate v0.2 for every supported source selection.
+  # The real owner loader proves row shape and required/optional semantics.
+  def test_explicit_policies_load_for_local_remote_and_mixed_selection
+    [["local"], ["remote"], %w[local remote]].each do |names|
+      write_registry(worker_sources: names)
+      mutate_registry { |batch| batch["worker_source_policies"] = names.to_h { |name| [name, "optional"] } }
+      front_door.run("start", "39")
+      argv = @executor.calls.last.fetch(:argv)
+      path = argv.fetch(argv.index("--worker-sources-config") + 1)
+      document = YAML.safe_load_file(path, aliases: false)
+      assert_equal %w[contract_version sources], document.keys.sort
+      assert_equal "wlo-worker-sources/v0.2", document.fetch("contract_version")
+      document.fetch("sources").each do |row|
+        assert_equal %w[args command environment name policy workdir], row.keys.sort
+      end
+      loaded = WorkloadOrchestrator::WorkerSourceConfiguration.load(path)
+      assert_equal names, loaded.entries.map(&:name)
+      assert_equal ["optional"] * names.length, loaded.entries.map(&:policy)
+    end
+  end
+
+  # Configuration errors must refuse before action-check or execution, even
+  # when every declared publisher would otherwise be optional.
+  def test_invalid_source_selections_and_policy_maps_refuse_before_launch
+    [
+      {"worker_sources" => []},
+      {"worker_sources" => %w[local local]},
+      {"worker_sources" => ["unknown"]},
+      {"worker_source_policies" => {}},
+      {"worker_source_policies" => {"local" => "optional"}},
+      {"worker_source_policies" => {"local" => "optional", "remote" => "optional", "extra" => "optional"}},
+      {"worker_source_policies" => {"local" => "ignored", "remote" => "optional"}},
+      {"worker_source_policies" => {"local" => nil, "remote" => "optional"}},
+      {"worker_source_policies" => []},
+      {"worker_sources" => [nil], "worker_source_policies" => {"local" => "optional"}}
+    ].each do |changes|
+      write_registry
+      mutate_registry { |batch| batch.merge!(changes) }
+      assert_raises(AdventureFinderWorkspace::Error, changes.inspect) { front_door.run("start", "39") }
+      assert_empty @executor.calls
+    end
+    write_registry
+    mutate_registry do |batch|
+      batch.delete("worker_sources")
+      batch["worker_source_policies"] = {"local" => "optional", "remote" => "optional"}
+    end
+    assert_raises(AdventureFinderWorkspace::Error) { front_door.run("start", "39") }
+  end
+
+  # Psych normally discards earlier duplicate keys. Ambiguous policy authority
+  # must instead raise AF::Error before either selected publisher is launched.
+  def test_duplicate_yaml_policy_keys_refuse
+    source = File.read(@registry).sub("      worker_sources:",
+      "      worker_source_policies:\n        local: required\n        local: optional\n        remote: optional\n      worker_sources:")
+    File.write(@registry, source)
+    error = assert_raises(AdventureFinderWorkspace::Error) { front_door.run("start", "39") }
+    assert_includes error.message, "duplicate YAML mapping key"
+    assert_empty @executor.calls
+  end
+
+  # Optional availability never excuses a missing authority or publisher file.
+  def test_optional_sources_keep_component_file_and_authority_refusals
+    mutate_registry { |batch| batch["worker_source_policies"] = {"local" => "optional", "remote" => "optional"} }
+    [File.join(@low, "bin/low"), File.join(@low, "Gemfile"),
+     File.join(@rpof, "bin/rpof"), File.join(@rpof, "Gemfile")].each do |path|
+      bytes, mode = File.binread(path), File.stat(path).mode
+      File.delete(path)
+      assert_raises(AdventureFinderWorkspace::Error) { front_door.run("start", "39") }
+      assert_empty @executor.calls
+      File.binwrite(path, bytes)
+      File.chmod(mode, path)
+    end
+    mutate_registry { |batch| batch.delete("local_workers") }
+    assert_raises(AdventureFinderWorkspace::Error) { front_door.run("start", "39") }
+    write_registry
+    mutate_registry { |batch| batch["associated_fleets"] = [] }
+    assert_raises(AdventureFinderWorkspace::Error) { front_door.run("start", "39") }
+  end
+
+  # Distinct registered RPOF roots are ambiguous even when both are optional.
+  # A policy may change availability handling, never publisher authority.
+  def test_optional_remote_refuses_ambiguous_fleet_authority
+    document = YAML.safe_load_file(@registry, aliases: false)
+    batch = document.dig("contexts", "batch", "39")
+    batch["worker_source_policies"] = {"local" => "optional", "remote" => "optional"}
+    batch.fetch("associated_fleets") << "B"
+    other = Marshal.load(Marshal.dump(document.dig("contexts", "fleet", "A")))
+    other.fetch("rpof")["repository_root"] = "other-rpof"
+    document.dig("contexts", "fleet")["B"] = other
+    File.write(@registry, YAML.dump(document))
+    error = assert_raises(AdventureFinderWorkspace::Error) { front_door.run("start", "39") }
+    assert_includes error.message, "one registered RPOF worker-registry authority"
+    assert_empty @executor.calls
   end
 
   def test_remote_only_source_does_not_require_local_checkout
@@ -408,6 +516,14 @@ class BatchFrontDoorTest < Minitest::Test
   end
 
   private
+
+  # Update fixture Batch 39 authority; receives its mutable context and rewrites
+  # fixture YAML only. File/YAML errors propagate to the test.
+  def mutate_registry
+    document = YAML.safe_load_file(@registry, aliases: false)
+    yield document.dig("contexts", "batch", "39")
+    File.write(@registry, YAML.dump(document))
+  end
 
   def front_door(component_runner: nil)
     action_result = lambda do |argv|

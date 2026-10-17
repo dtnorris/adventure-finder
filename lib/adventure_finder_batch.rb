@@ -320,10 +320,15 @@ module AdventureFinderWorkspace
       ]
     end
 
+    # Persist source YAML for WLO, selecting v0.2 only with explicit policies.
+    # Returns its content-addressed path; invalid paths/content raise Error.
     def write_worker_sources_config!(context, fleet, sources)
       bundle = find_executable!("bundle", @bundle_executable)
       entries = sources.map { |source| worker_source_entry(source, context, fleet, bundle) }
-      bytes = YAML.dump("contract_version" => WORKER_SOURCES_CONTRACT_VERSION, "sources" => entries)
+      policies = context["worker_source_policies"]
+      entries.each { |entry| entry["policy"] = policies.fetch(entry.fetch("name")) } if policies
+      version = policies ? "wlo-worker-sources/v0.2" : WORKER_SOURCES_CONTRACT_VERSION
+      bytes = YAML.dump("contract_version" => version, "sources" => entries)
       root = File.join(File.dirname(context.dig("wlo", "output_root")), "worker-sources")
       basename = File.basename(context.dig("wlo", "output_root"))
       path = File.join(root, "#{basename}-#{Digest::SHA256.hexdigest(bytes)[0, 12]}.yml")
@@ -345,24 +350,28 @@ module AdventureFinderWorkspace
       FileUtils.rm_f(temporary) if temporary && File.exist?(temporary)
     end
 
+    # Build one observational publisher invocation from validated context paths.
+    # WLO accepts string environments; env -u preserves lockfile removal before
+    # component Bundler starts, including a contaminated inherited lockfile.
+    # Returns a v0.1 row; missing env executable raises Error.
     def worker_source_entry(source, context, fleet, bundle)
       root, executable, environment =
         if source == "local"
           local_root = context.dig("local_workers", "repository_root")
-          [local_root, "low", { "BUNDLE_GEMFILE" => File.join(local_root, "Gemfile"), "BUNDLE_LOCKFILE" => nil }]
+          [local_root, "low", { "BUNDLE_GEMFILE" => File.join(local_root, "Gemfile") }]
         else
           remote_root = fleet.dig("rpof", "repository_root")
           [remote_root, "rpof", {
-            "BUNDLE_GEMFILE" => File.join(remote_root, "Gemfile"), "BUNDLE_LOCKFILE" => nil,
+            "BUNDLE_GEMFILE" => File.join(remote_root, "Gemfile"),
             "RPOF_STATE_ROOT" => fleet.dig("rpof", "state_root"),
             "RPOF_STATE_REPO_ROOT" => remote_root
           }]
         end
       {
         "name" => source,
-        "command" => bundle,
-        "args" => ["exec", File.join(root, "bin", executable), "workers", "--json"],
-        "environment" => environment.merge("BUNDLE_LOCKFILE" => nil),
+        "command" => find_executable!("env", @env_executable),
+        "args" => ["-u", "BUNDLE_LOCKFILE", bundle, "exec", File.join(root, "bin", executable), "workers", "--json"],
+        "environment" => environment,
         "workdir" => root
       }
     end

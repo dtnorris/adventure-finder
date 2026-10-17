@@ -56,6 +56,16 @@ module AdventureFinderWorkspace
         test_file: "test/batch_front_door_test.rb"
       ),
       Scenario.new(
+        name: "batch-dynamic-sources",
+        description: "FO-25 continuous Batch 39-shaped resume, optional publishers, exact evidence and failure-bearing accounting",
+        repository: "adventure-finder",
+        test_file: "test/integration/batch_dynamic_sources_test.rb",
+        required_paths: {
+          "workload-orchestrator" => "bin/wlo",
+          "af-workloads" => "workloads/production-batch-039-fresh-20260930/execution-plan.json"
+        }
+      ),
+      Scenario.new(
         name: "ig19b-source-exceptions",
         description: "source, conversion, identity, registry, restart, and correction exception matrix",
         repository: "adventure-finder",

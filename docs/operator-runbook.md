@@ -123,6 +123,11 @@ See [WLO's runbook](https://github.com/dtnorris/workload-orchestrator/blob/main/
 The registered batch selects local, remote or both named sources. WLO consumes
 LOW/RPOF registries directly. Zero compatible READY capacity is diagnosed by WLO;
 provider-active capacity is not READY. Neither batch start nor resume creates it.
+Batch 39 explicitly marks both publishers optional. One unavailable publisher
+does not block the other's exact compatible capacity; without either, the same
+foreground owner waits. WLO status retains source-local failures and freshness.
+See [foreground batch configuration](batch-foreground.md) for policy opt-in,
+required-source compatibility, and failure-bearing terminal results.
 
 **Read-only RPOF inspection:**
 

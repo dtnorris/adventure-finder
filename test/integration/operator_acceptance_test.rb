@@ -44,6 +44,7 @@ class OperatorAcceptanceTest < Minitest::Test
       test/support/afw_wlo_v0_3_contract.rb
       test/staged_selection_test.rb
       test/workload_evidence_manifest_test.rb
+      workloads/production-batch-039-fresh-20260930/execution-plan.json
     ])
     build_component(@wlo, %w[
       bin/wlo
@@ -85,7 +86,7 @@ class OperatorAcceptanceTest < Minitest::Test
     assert harness.run
     assert_equal AdventureFinderWorkspace::OperatorAcceptance::SCENARIOS.length, runner.calls.length
     assert_includes out.string, "Network/provider/inference access: blocked"
-    assert_includes out.string, "Acceptance summary: 27/27 scenarios passed"
+    assert_includes out.string, "Acceptance summary: 28/28 scenarios passed"
     assert_includes out.string, "Offline proof: fake providers only; inference calls: 0; paid resources: $0"
     runner.calls.each do |call|
       assert_nil call.dig(:env, "RUNPOD_API_KEY")
@@ -309,7 +310,7 @@ class OperatorAcceptanceTest < Minitest::Test
     refute harness.run
     assert_equal AdventureFinderWorkspace::OperatorAcceptance::SCENARIOS.length, runner.calls.length
     assert_includes err.string, "FAIL rpof-campaign-lifecycle"
-    assert_includes out.string, "Acceptance summary: 26/27 scenarios passed"
+    assert_includes out.string, "Acceptance summary: 27/28 scenarios passed"
   end
 
   def test_operator_lifecycle_uses_rpof_bundle_while_running_from_workspace_repo

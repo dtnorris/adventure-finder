@@ -8,6 +8,8 @@ require "yaml"
 module AdventureFinderWorkspace
   PRODUCTION_CONTEXT_SCHEMA_VERSION = "adventurefinder-production-context/v0.1"
 
+  # Portable batch/fleet authority loaded from a strict YAML registry. Resolves
+  # registered paths and verifies pinned artifacts; invalid authority raises Error.
   class ProductionContextRegistry
     HANDLE_TYPES = %w[batch fleet].freeze
     WORKER_SOURCE_TYPES = %w[local remote].freeze
@@ -41,10 +43,15 @@ module AdventureFinderWorkspace
 
     attr_reader :path, :data, :workspace_root
 
+    # Load context authority from YAML beneath the supplied portable workspace.
+    # Returns a validated registry; missing files, ambiguous YAML or invalid
+    # selections/policies raise Error before component execution.
     def initialize(path, workspace_root:)
       @path = Pathname(path).expand_path
       @workspace_root = Pathname(workspace_root).expand_path.cleanpath
-      @data = YAML.safe_load(@path.read, permitted_classes: [], aliases: false)
+      source = @path.read
+      reject_duplicate_yaml_keys!(YAML.parse(source))
+      @data = YAML.safe_load(source, permitted_classes: [], aliases: false)
       validate!
     rescue Errno::ENOENT
       raise Error, "production context registry not found: #{@path}"
@@ -100,6 +107,20 @@ module AdventureFinderWorkspace
 
     private
 
+    # Reject duplicate mapping keys before Psych discards their first values.
+    # Takes a parsed YAML node, returns nil, and raises Error for ambiguity.
+    def reject_duplicate_yaml_keys!(node)
+      if node.is_a?(Psych::Nodes::Mapping)
+        unless node.children.each_slice(2).all? { |key, _value| key.is_a?(Psych::Nodes::Scalar) }
+          raise Error, "YAML mapping keys must be scalars in #{@path}"
+        end
+        keys = node.children.each_slice(2).map { |key, _value| key.value }
+        raise Error, "duplicate YAML mapping key in #{@path}" unless keys.uniq == keys
+      end
+      node.children&.each { |child| reject_duplicate_yaml_keys!(child) } if node
+      nil
+    end
+
     def validate!
       raise Error, "production context registry must be a mapping" unless data.is_a?(Hash)
       unless data["schema_version"] == PRODUCTION_CONTEXT_SCHEMA_VERSION
@@ -117,6 +138,8 @@ module AdventureFinderWorkspace
       validate_associations(contexts)
     end
 
+    # Validate one named batch, including path, source and policy authority.
+    # Returns nil or validation results; malformed authority raises Error.
     def validate_batch(name, context)
       require_mapping(context, "batch #{name}")
       require_string(context, "production_batch_id", "batch #{name}")
@@ -133,6 +156,7 @@ module AdventureFinderWorkspace
       end
       validate_relative_paths(context, path_fields, "batch #{name}")
       require_string_array(context, "associated_fleets", "batch #{name}")
+      validate_worker_source_policies(name, context) if context.key?("worker_source_policies")
       return unless context.key?("worker_sources")
 
       require_string_array(context, "worker_sources", "batch #{name}")
@@ -146,6 +170,23 @@ module AdventureFinderWorkspace
       if sources.include?("remote") && context.fetch("associated_fleets").empty?
         raise Error, "batch #{name}.worker_sources selects remote without an associated fleet"
       end
+    end
+
+    # Validate explicit policy opt-in against the entire selected source list.
+    # Returns nil; incomplete/extra names or non-contract policies raise Error.
+    def validate_worker_source_policies(name, context)
+      policies = context.fetch("worker_source_policies")
+      label = "batch #{name}.worker_source_policies"
+      require_mapping(policies, label)
+      sources = context["worker_sources"]
+      unless sources.is_a?(Array) && !sources.empty? && sources.all?(String) &&
+             policies.keys.all?(String) && policies.keys.sort == sources.sort
+        raise Error, "#{label} must exactly match explicit worker_sources"
+      end
+      unless policies.values.all? { |policy| %w[required optional].include?(policy) }
+        raise Error, "#{label} policies must be required or optional"
+      end
+      nil
     end
 
     def validate_fleet(name, context)
