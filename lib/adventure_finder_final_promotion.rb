@@ -87,7 +87,7 @@ module AdventureFinderWorkspace
 
       render_review(package, request:)
       render_preview(package) if preview
-      render_frontier_status(package)
+      render_frontier_status(package, inputs_path:, package_path:)
 
       if File.file?(paths.fetch(:decision))
         validate_coordination!(paths, package, request, approver)
@@ -317,15 +317,39 @@ module AdventureFinderWorkspace
       @out.puts "  #{path} (sha256 #{binding.fetch('sha256')}, #{binding.fetch('bytes')} bytes)"
     end
 
-    def render_frontier_status(package)
+    # Print optional component-tool guidance for a validated package and its
+    # absolute input/package paths. Returns no authority, performs no producer
+    # calls or compatibility probe, and leaves IO/key errors visible to callers.
+    def render_frontier_status(package, inputs_path:, package_path:)
       frontier = package.dig("candidate", "frontier")
       residual = package.dig("release", "population", "residual_gap_metrics")
       if frontier
         @out.puts "Optional frontier result: #{frontier.fetch('disposition')} #{frontier.fetch('result_id')}; " \
                   "#{frontier.fetch('writes')} writes, #{frontier.fetch('no_writes')} no-writes; authority=#{frontier.fetch('authority')}"
         @out.puts "This candidate was independently revalidated in this new package; no earlier approval transfers."
+        @out.puts "Frontier supplements cannot chain; this validated disposition is retained."
       elsif residual.positive?
-        @out.puts "Optional IG-17F continuation: unavailable because no pipeline-owned packet producer is installed."
+        command = Shellwords.join([RbConfig.ruby, @pipeline_root.join("bin", "af-frontier-residual-scoring").to_s])
+        @out.puts "Optional IG-17F continuation: AFDP v0.2 component-tool handoff."
+        @out.puts "Routing limitation: this front door does not create a frontier request, verify producer compatibility, or route the residual branch."
+        @out.puts "If separately requested, leave this promotion unapproved before preparing the residual packet."
+        @out.puts "Supply REQUEST.json with exactly:"
+        @out.puts "  schema_version: af-frontier-residual-request/v0.2"
+        @out.puts "  original_package_inputs_path: #{JSON.generate(inputs_path)}"
+        @out.puts "  original_package_path: #{JSON.generate(package_path)}"
+        @out.puts "  rubric: {id, path, sha256, bytes} — explicit nonblank ID, absolute path, lowercase SHA-256 and exact byte size of the operator-selected frozen rubric"
+        @out.puts "  successor_version: explicit version newer than the original staged version bound by the release manifest lineage.staged_amc.filename"
+        @out.puts "The retained package's provenance.nodes.release_manifest.path locates that public release manifest."
+        @out.puts "The paths above name the exact validated public package inputs and retained package; no rubric or successor version is selected here."
+        @out.puts "With an installed producer supporting that contract: #{command} prepare --request REQUEST.json --output PACKET_DIR"
+        @out.puts "Then use its apply --request REQUEST.json --packet PACKET_DIR --return RETURN.json --output RESULT_DIR,"
+        @out.puts "or decline --request REQUEST.json --packet PACKET_DIR --output RESULT_DIR; verify with verify --request REQUEST.json --packet PACKET_DIR --output RESULT_DIR."
+        @out.puts "If the producer is absent/incompatible or returns structured BLOCKED, stop that branch and preserve the refusal; no supplement is validated."
+        @out.puts "NO_GAPS creates no packet and requires no frontier decision."
+        @out.puts "After a verified result, use its public RESULT_DIR/package-inputs.json with af-final-release-package prepare --inputs RESULT_DIR/package-inputs.json --output FINAL_PACKAGE.json."
+        @out.puts "Review that newly validated package with af-catalog final-promotion --inputs RESULT_DIR/package-inputs.json --package FINAL_PACKAGE.json --approver NAME."
+        @out.puts "APPLIED values retain frontier_manual attribution and require the new exact candidate/package and explicit final approval; original approval cannot transfer."
+        @out.puts "DECLINED retains the original candidate and terminal gaps; invalid results grant no score or promotion authority."
         @out.puts "Promotion may continue under the package's independently validated terminal-gap authority."
       end
     end

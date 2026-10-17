@@ -144,6 +144,7 @@ class FinalPromotionTest < Minitest::Test
       assert_includes output.string, "historical V1 mechanical 0/4"
       assert_includes output.string, "human HOLD 0; human REJECT 0; source holds 0"
       assert_includes output.string, "Role change: catalog_head only"
+      refute_includes output.string, "Optional IG-17F continuation:"
       assert_includes output.string, "git add PROJECT_STATE.yml 5e_Adventure_Master_Catalog_8.0.xlsx"
       refute_includes output.string, "Record\\ declined"
       refute_includes output.string, "git add ."
@@ -154,15 +155,67 @@ class FinalPromotionTest < Minitest::Test
     end
   end
 
+  # Original validated terminal-gap authority still needs only final approval.
   def test_ready_release_with_terminal_gaps_reaches_gate_without_ig17f_producer
     package = fixture_package(full_scoring: false, gaps: 1)
     with_front_door(package:, input: "APPROVE\n") do |door, runner, output, paths|
       assert_equal 0, door.run(inputs_path: paths[:inputs], package_path: paths[:package],
                                approver: "David Norris", operation_dir: paths[:operation])
       assert_includes output.string, "AUTHORIZED RELEASE WITH GAPS"
-      assert_includes output.string, "Optional IG-17F continuation: unavailable"
+      assert_includes output.string, "Optional IG-17F continuation: AFDP v0.2 component-tool handoff."
+      refute_includes output.string, "no pipeline-owned packet producer is installed"
       assert_includes output.string, "Promotion may continue under the package's independently validated terminal-gap authority."
       assert runner.calls.any? { |call| call[0, 2] == ["af-final-release-adoption", "adopt"] }
+    end
+  end
+
+  # Installation alone cannot establish compatibility. Rendering names the
+  # conditional public contract without executing absent or arbitrary producers.
+  def test_residual_guidance_is_exact_and_read_only_for_unverified_installations
+    %w[absent incompatible present].each do |installation|
+      package = fixture_package(full_scoring: false, gaps: 1)
+      with_front_door(package:, input: "FRONTIER\n") do |door, runner, output, paths|
+        producer = File.join(paths[:pipeline], "bin", "af-frontier-residual-scoring")
+        File.binwrite(producer, installation == "present" ? "# v0.2 fixture; never execute\n" : "abort 'incompatible producer executed'\n") unless installation == "absent"
+        protected_paths = [paths[:inputs], paths[:package], producer].select { |path| File.file?(path) }
+        before = protected_paths.to_h { |path| [path, File.binread(path)] }
+        assert_equal 3, door.run(inputs_path: paths[:inputs], package_path: paths[:package],
+                                approver: "David Norris", operation_dir: paths[:operation])
+        lines = output.string.lines.map(&:chomp)
+        expected = [
+          "Optional IG-17F continuation: AFDP v0.2 component-tool handoff.",
+          "Routing limitation: this front door does not create a frontier request, verify producer compatibility, or route the residual branch.",
+          "If separately requested, leave this promotion unapproved before preparing the residual packet.",
+          "  schema_version: af-frontier-residual-request/v0.2",
+          "  original_package_inputs_path: #{JSON.generate(paths[:inputs])}",
+          "  original_package_path: #{JSON.generate(paths[:package])}",
+          "  rubric: {id, path, sha256, bytes} — explicit nonblank ID, absolute path, lowercase SHA-256 and exact byte size of the operator-selected frozen rubric",
+          "  successor_version: explicit version newer than the original staged version bound by the release manifest lineage.staged_amc.filename",
+          "With an installed producer supporting that contract: #{Shellwords.join([RbConfig.ruby, producer])} prepare --request REQUEST.json --output PACKET_DIR",
+          "If the producer is absent/incompatible or returns structured BLOCKED, stop that branch and preserve the refusal; no supplement is validated."
+        ]
+        expected.each { |line| assert_includes lines, line, installation }
+        assert_equal %w[validate prepare], runner.calls.map { |call| call[1] }
+        refute File.exist?(File.join(paths[:operation], "adoption-decision.json"))
+        before.each { |path, bytes| assert_equal bytes, File.binread(path), path }
+      end
+    end
+  end
+
+  # Retained APPLIED and DECLINED dispositions must never offer another packet.
+  def test_validated_frontier_dispositions_do_not_offer_chaining
+    %w[APPLIED DECLINED].each do |disposition|
+      package = fixture_package(full_scoring: false, gaps: 1)
+      package["candidate"]["frontier"] = {"result_id" => "f" * 64, "disposition" => disposition,
+        "writes" => 0, "no_writes" => 1, "authority" => "frontier_manual"}
+      with_front_door(package:, input: "") do |door, runner, output, paths|
+        assert_equal 3, door.run(inputs_path: paths[:inputs], package_path: paths[:package],
+                                approver: "David Norris", operation_dir: paths[:operation])
+        assert_includes output.string.lines.map(&:chomp), "Optional frontier result: #{disposition} #{'f' * 64}; 0 writes, 1 no-writes; authority=frontier_manual"
+        assert_includes output.string.lines.map(&:chomp), "Frontier supplements cannot chain; this validated disposition is retained."
+        refute_includes output.string, "prepare --request REQUEST.json"
+        refute runner.calls.any? { |call| %w[approve adopt].include?(call[1]) }
+      end
     end
   end
 
