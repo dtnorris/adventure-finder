@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "minitest/autorun"
+require "json"
 require "open3"
 require "rbconfig"
 
@@ -134,11 +135,15 @@ class Ig19bSourceExceptionMatrixTest < Minitest::Test
 
   def run_group(file, tests)
     pattern = "/\\A(?:#{tests.join('|')})\\z/"
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
     output, status = Open3.capture2e(
       {"AF_IG07C_PIPELINE_SOURCE_ROOT" => PIPELINE_ROOT},
       RbConfig.ruby, "-Ilib", "-Itest", file, "--name", pattern,
       chdir: ROOT
     )
+    puts JSON.generate(file:, tests:, cwd: ROOT,
+      wall_seconds: Process.clock_gettime(Process::CLOCK_MONOTONIC) - started, exitstatus: status.exitstatus)
+    puts output
     {output:, status:}
   end
 end

@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "minitest/autorun"
+require "json"
 require "open3"
 require "rbconfig"
 
@@ -209,10 +210,14 @@ class Ig19bBoundaryExceptionMatrixTest < Minitest::Test
 
   def run_group(file, tests)
     pattern = "/\\A(?:#{tests.join('|')})\\z/"
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
     output, status = Open3.capture2e(
       RbConfig.ruby, "-Ilib", "-Itest", file, "--name", pattern,
       chdir: PIPELINE_ROOT
     )
+    puts JSON.generate(file:, tests:, cwd: PIPELINE_ROOT,
+      wall_seconds: Process.clock_gettime(Process::CLOCK_MONOTONIC) - started, exitstatus: status.exitstatus)
+    puts output
     {output:, status:}
   end
 end

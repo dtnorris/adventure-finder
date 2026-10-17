@@ -9,16 +9,13 @@ require "stringio"
 require "tmpdir"
 require "yaml"
 require_relative "../../lib/adventure_finder_final_promotion"
+require_relative "../support/ig19_git_fixture"
 
 class FinalPromotionPipelineSeamTest < Minitest::Test
   Status = Struct.new(:exitstatus) do
     def success? = exitstatus.zero?
   end
   Result = Struct.new(:stdout, :stderr, :status, keyword_init: true)
-  GIT_ENV = {
-    "GIT_AUTHOR_NAME" => "Synthetic fixture", "GIT_AUTHOR_EMAIL" => "fixture@example.invalid",
-    "GIT_COMMITTER_NAME" => "Synthetic fixture", "GIT_COMMITTER_EMAIL" => "fixture@example.invalid"
-  }.freeze
 
   def setup
     component_root = ENV.fetch("AF_PROJECT_ROOT", "/Users/davidnorris/code/adventure-finder-components")
@@ -103,6 +100,8 @@ class FinalPromotionPipelineSeamTest < Minitest::Test
       assert_equal durable_result, File.binread(result_path)
       assert_equal original_git, git_observation(fixture.fetch(:catalog))
       original_preserved.each { |path, bytes| assert_equal bytes, File.binread(path), path }
+    ensure
+      close_catalogs
     end
   end
 
@@ -134,6 +133,8 @@ class FinalPromotionPipelineSeamTest < Minitest::Test
       %w[adoption-decision.json coordination-decision.json adoption-result.json].each do |name|
         assert File.file?(File.join(fixture.fetch(:operation), name)), name
       end
+    ensure
+      close_catalogs
     end
   end
 
@@ -163,6 +164,8 @@ class FinalPromotionPipelineSeamTest < Minitest::Test
       assert_equal before, snapshot_catalog(fixture.fetch(:catalog))
       assert_equal %w[prepare], runner.adoption_actions
       assert_equal [""], runner.prepare_manifest_statuses
+    ensure
+      close_catalogs
     end
   end
 
@@ -237,19 +240,12 @@ class FinalPromotionPipelineSeamTest < Minitest::Test
     front_door = File.join(root, "adventure-finder")
     components = File.join(root, "adventure-finder-components")
     catalog = File.join(components, "af-xlsx-data-sources")
-    FileUtils.mkdir_p([front_door, catalog])
+    FileUtils.mkdir_p(front_door)
+    sealed = Ig19GitFixture.load("promotion", catalog)
+    (@sealed_catalogs ||= []) << sealed
     base = File.join(catalog, "5e_Adventure_Master_Catalog_1.0.xlsx")
     baseline = File.join(catalog, "5e_Adventure_Master_Catalog_0.5.xlsx")
-    write_compatible_amc(base, rows: [compatible_row("ADV-0001", title: "Existing", scores: {"Seriousness" => 3})])
-    FileUtils.cp(base, baseline)
     manifest = File.join(catalog, "PROJECT_STATE.yml")
-    File.binwrite(manifest, YAML.dump(
-      "schema_version" => AfDataPipeline::ProjectState::SCHEMA_VERSION,
-      "catalog_head" => role_for(base, "1.0"),
-      "matcher_authorized_baseline" => role_for(baseline, "0.5"),
-      "production_dependency_floor" => role_for(baseline, "0.5")
-    ))
-    initialize_git_fixture(catalog)
     head = git(catalog, "rev-parse", "HEAD").strip
 
     candidate = File.join(root, "finalized-candidate.xlsx")
@@ -330,24 +326,10 @@ class FinalPromotionPipelineSeamTest < Minitest::Test
   end
 
   def git(root, *args)
-    stdout, stderr, status = Open3.capture3(GIT_ENV, "git", "-C", root, *args)
+    stdout, stderr, status = Open3.capture3(Ig19GitFixture::GIT_ENV, "git", "-C", root, *args)
     raise "git #{args.join(' ')} failed: #{stderr}" unless status.success?
 
     stdout
-  end
-
-  def initialize_git_fixture(root)
-    git(root, "init", "-q")
-    git(root, "remote", "add", "origin", "fixture://catalog")
-    entries = Dir.children(root).reject { |name| name == ".git" }.sort.map do |name|
-      sha = git(root, "hash-object", "-w", "--", name).strip
-      "100644 blob #{sha}\t#{name}\n"
-    end.join
-    tree = git_with_input(root, entries, "mktree").strip
-    commit = git_with_input(root, "synthetic catalog\n", "commit-tree", tree).strip
-    git(root, "update-ref", "refs/heads/main", commit)
-    git(root, "symbolic-ref", "HEAD", "refs/heads/main")
-    git(root, "read-tree", "--reset", "-u", commit)
   end
 
   def assert_fixture_manifest_clean!(root, phase)
@@ -358,15 +340,15 @@ class FinalPromotionPipelineSeamTest < Minitest::Test
     raise "PROJECT_STATE.yml is dirty #{phase}: #{status}" unless status.empty?
   end
 
-  def git_with_input(root, input, *args)
-    stdout, stderr, status = Open3.capture3(GIT_ENV, "git", "-C", root, *args, stdin_data: input)
-    raise "git #{args.join(' ')} failed: #{stderr}" unless status.success?
-
-    stdout
+  # Check the complete metadata inventory at the end of this bounded seam.
+  def close_catalogs
+    Array(@sealed_catalogs).each(&:close)
+    @sealed_catalogs = []
   end
 
   def git_observation(root)
     {
+      "literal_metadata" => Ig19GitFixture.inventory(File.join(root, ".git"), directories: true),
       "head" => git(root, "rev-parse", "HEAD"),
       "refs" => git(root, "show-ref"),
       "index" => git(root, "ls-files", "--stage")

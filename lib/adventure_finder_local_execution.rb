@@ -23,10 +23,17 @@ module AdventureFinderWorkspace
 
     class Failure < Error
       attr_reader :code
+      attr_accessor :cleanup_failure
 
       def initialize(code, message)
         @code = code
         super("#{code}: #{message}")
+      end
+
+      # Include a secondary cleanup Failure in operator output without replacing
+      # this failure's code, identity, backtrace, or original message.
+      def message
+        cleanup_failure ? "#{super}\n#{cleanup_failure.message}" : super
       end
     end
 
@@ -330,11 +337,45 @@ module AdventureFinderWorkspace
           @sleeper.call(@poll_interval)
         end
       end
+    rescue Exception => primary # Preserve interrupts as well as application failures during cleanup.
+      raise
     ensure
       if handle
-        handle.signal("TERM") unless handle.finished?
-        handle.wait
+        cleanup_failure = cleanup_owned_child(handle)
+        if cleanup_failure
+          if primary.is_a?(Failure)
+            primary.cleanup_failure = cleanup_failure
+          else
+            raise(primary || cleanup_failure, cause: primary ? cleanup_failure : nil)
+          end
+        end
       end
+    end
+
+    # Clean up only this handle's owned child. Return nil or a separate Failure
+    # with PID/operation diagnostics. A denied TERM permits wait only after the
+    # handle independently confirms/reaps the direct child's exit; never retry
+    # a signal after that check, since the process identity could be reused.
+    def cleanup_owned_child(handle)
+      operation = "status"
+      unless handle.finished?
+        operation = "TERM process group"
+        begin
+          handle.signal("TERM")
+        rescue Errno::EPERM => error
+          operation = "TERM denied; recheck direct child"
+          exited = handle.finished?
+          operation = exited ? "TERM denied; direct child exit confirmed; reap/output wait" :
+            "TERM denied; direct child exit unconfirmed; wait skipped; operator must check owned child"
+          handle.wait if exited
+          raise error
+        end
+      end
+      operation = "wait"
+      handle.wait
+      nil
+    rescue StandardError => error
+      Failure.new("WLO_CLEANUP_FAILED", "owned PID #{handle.pid}; #{operation}: #{error.class}: #{error.message}")
     end
 
     def demanded_missing_step(capability_plan, observed, report)

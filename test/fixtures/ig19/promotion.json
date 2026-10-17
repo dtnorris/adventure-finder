@@ -1,0 +1,85 @@
+{
+  "schema": "ig19-sealed-catalog/v1",
+  "head": "7a0a10e8385fcd99cde6e8c3ee939eada709e0a1",
+  "manifest": {
+    "schema_version": "adventurefinder-project-state/v0.2",
+    "catalog_head": {
+      "version": "1.0",
+      "filename": "5e_Adventure_Master_Catalog_1.0.xlsx",
+      "sha256": "7851b517369f4c78a6b2619f0260dcfc3dcd5e05dfa0895e1ba54d33dfc192a4",
+      "bytes": 3838
+    },
+    "matcher_authorized_baseline": {
+      "version": "0.5",
+      "filename": "5e_Adventure_Master_Catalog_0.5.xlsx",
+      "sha256": "7851b517369f4c78a6b2619f0260dcfc3dcd5e05dfa0895e1ba54d33dfc192a4",
+      "bytes": 3838
+    },
+    "production_dependency_floor": {
+      "version": "0.5",
+      "filename": "5e_Adventure_Master_Catalog_0.5.xlsx",
+      "sha256": "7851b517369f4c78a6b2619f0260dcfc3dcd5e05dfa0895e1ba54d33dfc192a4",
+      "bytes": 3838
+    }
+  },
+  "archive_sha256": "64e8daacbad8c501fc878a8ec74b4e081724daf8bf913e06e608b873e56230ed",
+  "files": {
+    ".git/HEAD": {
+      "sha256": "28d25bf82af4c0e2b72f50959b2beb859e3e60b9630a5e8c603dad4ddb2b6e80",
+      "bytes": 21
+    },
+    ".git/config": {
+      "sha256": "f2930aba9591743228c55d5f2f7cc8c3b1f8453d3fb4bdccb1a9aff978425604",
+      "bytes": 137
+    },
+    ".git/index": {
+      "sha256": "433b7ba7e9ca04c7c9f5d5f3f41fb8308d4dd86b222dca15faf2302f8cb221c5",
+      "bytes": 353
+    },
+    ".git/objects/4b/767cefb491b6269e1561f1628b5b2d216266fc": {
+      "sha256": "6dc2ac991f0423c1808d53af8681be0126f9dd7266176e9a142397313f09293c",
+      "bytes": 243
+    },
+    ".git/objects/73/3d1cbb0c29978b1e68c9d8c40beca7647b6771": {
+      "sha256": "089140e694f527b54ebd3e8a734bfe81903747aa642078b8fdf09ab0765af06b",
+      "bytes": 3165
+    },
+    ".git/objects/7a/0a10e8385fcd99cde6e8c3ee939eada709e0a1": {
+      "sha256": "f9f9badcac3c59109f4f85435236180ab69b82a46c6e58e35335e768a31b8e81",
+      "bytes": 148
+    },
+    ".git/objects/c1/1cf4535febc55e99b40e72bf1ecc417eca4519": {
+      "sha256": "554b262be5a0e0306099f3979139b3a5049cbce3a217b460319a405a5987bd9c",
+      "bytes": 128
+    },
+    ".git/refs/heads/main": {
+      "sha256": "fb8892c5056697a8ad3c1601ffb9a164ec653358a3603f853934ec7d78bfe924",
+      "bytes": 41
+    },
+    "5e_Adventure_Master_Catalog_0.5.xlsx": {
+      "sha256": "7851b517369f4c78a6b2619f0260dcfc3dcd5e05dfa0895e1ba54d33dfc192a4",
+      "bytes": 3838
+    },
+    "5e_Adventure_Master_Catalog_1.0.xlsx": {
+      "sha256": "7851b517369f4c78a6b2619f0260dcfc3dcd5e05dfa0895e1ba54d33dfc192a4",
+      "bytes": 3838
+    },
+    "PROJECT_STATE.yml": {
+      "sha256": "769fc157009d9461811af14d3ee139971e1b1f7d50d0be7b880b362eb22ea3dd",
+      "bytes": 592
+    }
+  },
+  "construction": {
+    "pipeline_head": "fceffd6fa5b29ff28d234475f59193c9b393fcd3",
+    "recipe_sha256": {
+      "test/support/standing_bulk_score_release_fixture.rb": "4e3ba3b564313bb3e7dbe5dd327b8a0762af82f2b476ff23882fa99baa71a54e",
+      "test/support/staged_scoring_fixture.rb": "fef2425285e2069dc7e0c16167b26d9a1ab421885418d2e6fe3c0fd703ee078a",
+      "test/support/compatibility_amc_fixture.rb": "97a3befebc2d387496528e147027c6c2c2b10bd7ee6b2c9bd68b6bef59da7721",
+      "test/support/amc_fixture.rb": "543bd373c396b1462a71f8a9b37adffd25fc3bef2db4677a9195fdb9c07f4a6a"
+    },
+    "builder_sha256": "80395dda9aa09f9c770212b77fe7284b944cf235d576125b55002e6b8aa2f2b7",
+    "zip_timestamp": "2026-10-08T00:00:00Z",
+    "git": "git version 2.50.1 (Apple Git-155)",
+    "ruby": "ruby 4.0.6 (2026-07-14 revision 03b6d3f889) +PRISM [arm64-darwin23]"
+  }
+}

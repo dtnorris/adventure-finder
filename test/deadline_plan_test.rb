@@ -2,9 +2,11 @@
 
 require "json"
 require "minitest/autorun"
+require_relative "support/runtime_dependency_isolation"
 require_relative "../lib/adventure_finder_deadline_plan"
 
 class DeadlinePlanTest < Minitest::Test
+  include RuntimeDependencyIsolation
   def measurements
     {
       "contract_version" => "wlo-execution-measurements/v0.1", "read_only" => true,
@@ -216,7 +218,10 @@ class DeadlinePlanTest < Minitest::Test
     assert_equal ['require "time"'], source.lines.grep(/^require/).map(&:strip)
     refute_match(/File\.|IO\.|Net::|Open3|Process\.|Kernel\.|Time\.now|execution\.json|system\(|`/, source)
     refute_match(/rpof|runpod|adventure_finder_workspace|workload_orchestrator\//i, source)
-    assert_empty $LOADED_FEATURES.grep(/local[_-]ollama[_-]workers|runpod[_-]ollama[_-]fleet/i)
+    forbidden = loaded_features_in_subprocess(
+      File.expand_path("../lib/adventure_finder_deadline_plan.rb", __dir__)
+    ).grep(/local[_-]ollama[_-]workers|runpod[_-]ollama[_-]fleet/i)
+    assert_empty forbidden
   end
 
   private

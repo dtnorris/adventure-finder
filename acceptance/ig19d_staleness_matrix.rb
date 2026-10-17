@@ -92,8 +92,8 @@ class Ig19dStalenessMatrixTest < Minitest::Test
       passed = status.success? && summary && summary[0] == tests.length && summary[2..4].all?(&:zero?)
       evidence = scenario.merge(status: passed ? "PASS" : "FAIL", actual: summary,
         command:, cwd: repository, wall_seconds: Process.clock_gettime(Process::CLOCK_MONOTONIC) - started,
-        allowed_mutation: "explicit fixture producer outputs only; replay/validation read-only",
-        forbidden_mutation: "silent base/ID rebind, stale approval reuse, automatic retry or Git persistence",
+        allowed_mutation: "ordinary disposable Git/producer setup; public replay/validation read-only",
+        forbidden_mutation: "silent base/ID rebind, stale approval reuse, automatic retry or public workflow Git persistence",
         preserved: "owner assertions compare exact bound artifacts, identities, independent roles and completed attempts")
       puts "IG-19D predicate evidence: #{JSON.generate(evidence)}"
       puts output

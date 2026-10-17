@@ -2,6 +2,7 @@
 
 require "minitest/autorun"
 require_relative "../support/ig07c_source_acceptance_fixture"
+require_relative "../../lib/adventure_finder_ingest_boundary_continuation"
 
 class Bug02cBoundaryContinuationTest < Minitest::Test
   parallelize_me!
@@ -26,6 +27,8 @@ class Bug02cBoundaryContinuationTest < Minitest::Test
   end
 
   def test_accepted_review_stages_verified_successor_before_missing_afw_fixture
+    # This scenario must refuse at the absent fixture AFW, regardless of caller overrides.
+    missing_afw = {"AF_AFW_ROOT" => File.join(@fixture.components, "af-workloads")}
     require File.join(PIPELINE, "lib", "af_data_pipeline")
     require File.join(PIPELINE, "test", "support", "compatibility_amc_fixture")
     builder = Object.new.extend(CompatibilityAmcFixture)
@@ -52,12 +55,12 @@ class Bug02cBoundaryContinuationTest < Minitest::Test
     end
     arguments.concat(["--prepare-staged-scoring", "--successor-version", "0.0.2"])
     _, start_error, started = @fixture.run_catalog(
-      {"IG07C_MARKDOWN_MODE" => "synthetic_procedure"}, *arguments
+      missing_afw.merge("IG07C_MARKDOWN_MODE" => "synthetic_procedure"), *arguments
     )
     assert started.success?, start_error
 
     operation_id = Ig07cSourceAcceptance::Fixture::OPERATION_ID
-    _, pending_error, pending = @fixture.run_catalog({}, "resume", operation_id,
+    _, pending_error, pending = @fixture.run_catalog(missing_afw, "resume", operation_id,
                                                      "--approve-boundary-by", "Fixture Operator")
     refute pending.success?
     assert_includes pending_error, "cannot approve an unreviewed empty editorial ledger"
@@ -85,7 +88,7 @@ class Bug02cBoundaryContinuationTest < Minitest::Test
     }
     File.binwrite(ledger_path, YAML.dump(ledger))
 
-    output, error, status = @fixture.run_catalog({}, "resume", operation_id,
+    output, error, status = @fixture.run_catalog(missing_afw, "resume", operation_id,
                                                  "--approve-boundary-by", "Fixture Operator")
     refute status.success?, output
     assert_includes output, "VERIFIED STAGED SUCCESSOR"
@@ -104,7 +107,7 @@ class Bug02cBoundaryContinuationTest < Minitest::Test
     exact = %w[approval.json boundary-freeze.yml operation-input.json successor-authority.json].to_h do |name|
       [name, Digest::SHA256.file(File.join(continuation, name)).hexdigest]
     end
-    replay_output, replay_error, replay = @fixture.run_catalog({}, "resume", operation_id,
+    replay_output, replay_error, replay = @fixture.run_catalog(missing_afw, "resume", operation_id,
                                                                "--approve-boundary-by", "Fixture Operator")
     refute replay.success?, replay_output
     assert_includes replay_output, "VERIFIED STAGED SUCCESSOR"

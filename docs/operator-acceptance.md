@@ -84,24 +84,59 @@ The existing [operation composition](INGEST_OPERATION_ROUTING_COMPOSITION_V0.1.m
 [local execution](LOCAL_INGEST_EXECUTION_V0.1.md) contracts remain authoritative;
 IG-16B is exercised only as an unavailable-authority refusal, not enabled.
 
-For IG-19D's narrowly authorized synthetic Git setup, use the validation wrapper:
+The IG-19 fixture qualification wrapper uses checkout-contained scratch by default:
 
 ```bash
-AF_DATA_PIPELINE_ROOT=/path/to/exact/pipeline/revision ruby acceptance/ig19d_validation.rb focused-support
-AF_DATA_PIPELINE_ROOT=/path/to/exact/pipeline/revision ruby acceptance/ig19d_validation.rb focused
-AF_DATA_PIPELINE_ROOT=/path/to/exact/pipeline/revision ruby acceptance/ig19d_validation.rb staleness
-# After ACT checkpoint preservation, pass one repository name for its unchanged default suite:
-AF_DATA_PIPELINE_ROOT=/path/to/exact/pipeline/revision ruby acceptance/ig19d_validation.rb af-data-pipeline
+export AF_PROJECT_ROOT=/path/to/adventure-finder-components
+bundle exec ruby acceptance/ig19d_validation.rb fixture
+bundle exec ruby acceptance/ig19d_validation.rb focused
+bundle exec ruby acceptance/ig19d_validation.rb matrices
+bundle exec ruby acceptance/ig19d_validation.rb adventure-finder
 ```
 
-The wrapper clones component sources into a temporary workspace, removes
-provider credentials, propagates the existing offline guard, and confines Git
-mutations to its marked disposable fixture root. Real checkouts, symlink escapes,
-Git-directory overrides, global configuration and pushes are refused. The
-exception permits fixture history creation only; workflow promotion still must
-preserve HEAD, refs and index. Default runtime, coverage, benchmark, lint and
-dependency tasks remain unchanged. Logs and failed proof fixtures are retained
-under the printed temporary paths for diagnosis.
+`IG19_SCRATCH_ROOT` may select another explicitly permitted disposable directory.
+Focused fixture proofs support spaces. Unchanged default suites retain their
+own path and process-isolation assumptions; report their failures separately.
+The wrapper copies tracked component bytes and independent
+Git metadata into its scratch workspace, removes provider credentials, and
+propagates the existing offline guard. It does not clone shared object stores or
+construct catalog history. Preserve the complete candidate before costly suites;
+checkpoint registration and publication remain separate operator actions.
+
+`test/fixtures/ig19/{standing,promotion}.{json,zip}` contain pre-existing synthetic
+history. The loader pins descriptor SHA-256, archive bytes, contained regular
+paths, native HEAD/tree/index/objects, and committed manifest/workbook bindings.
+The standing input must also match the unchanged owner recipe byte for byte.
+Cold fixture caches and fixed ZIP timestamps isolate scenario preparation.
+The BUG-02C archive is independently pinned by its journey but has different
+`0.0.1` inputs; it cannot replace the standing or promotion histories.
+
+Fixture construction is a separate, explicitly authorized phase. The retained
+`acceptance/build_ig19_git_fixtures.rb` records its recipe hashes and construction
+provenance; normal qualification never invokes it. Its historic builder hash in
+the descriptors identifies the original construction bytes. Rebuilding requires
+separate authority and must use a new absent output directory without replacing
+reviewed artifacts or rebinding their provenance.
+
+The bounded public proof starts after fixture extraction and qualification.
+Real package validation, adoption preparation, explicit promotion and cold replay
+retain native Git reads. Complete metadata inventories (directories and all file
+paths/hashes, including additions/deletions) are compared around each public
+child; package preparation/validation and final state receive the same check.
+`GIT_OPTIONAL_LOCKS=0` prevents optional index refresh. Native Git trace events
+record explicit commands. Application outputs, promoted workbook and
+`PROJECT_STATE.yml` changes remain allowed by their existing assertions.
+These observations establish endpoint nonmutation. They do not prevent or detect
+all transient write-then-restore activity or contain hostile descendants.
+
+The existing disposable-Git helper remains a narrow Ruby setup check, not a
+universal Git interceptor. Unchanged owner/default test suites may construct
+ordinary disposable Git histories during their setup. Those suites are separate
+regression gates and are never claimed mutation-free. No component test is
+rewritten to suppress its setup. Default coverage, runtime, benchmark, lint and
+dependency tasks remain unchanged. Logs survive under the printed scratch paths;
+failed scenario roots are retained for diagnosis. This qualification is not the
+final IG-19E journey verdict or re-entry.
 
 ## IG-19A public entry proof
 

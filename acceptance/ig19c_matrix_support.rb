@@ -93,7 +93,11 @@ module Ig19cMatrixSupport
       command.unshift("exec")
       command.unshift("bundle")
     end
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
     output, status = Open3.capture2e(environment, *command, chdir: root)
+    puts JSON.generate(repository:, file:, tests:, command:, cwd: root,
+      wall_seconds: Process.clock_gettime(Process::CLOCK_MONOTONIC) - started, exitstatus: status.exitstatus)
+    puts output
     if status.success?
       assert_match(/#{tests.length} runs,/, output)
       assert_match(/0 failures, 0 errors/, output)

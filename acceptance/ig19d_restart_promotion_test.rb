@@ -13,6 +13,7 @@ require_relative "../lib/adventure_finder_ingest_operation_store"
 require_relative "../lib/adventure_finder_ingest_routing"
 require_relative "../test/support/ig07c_source_acceptance_fixture"
 require_relative "../test/support/ig19d_disposable_git"
+require_relative "../test/support/ig19_git_fixture"
 
 class Ig19dRestartPromotionTest < Minitest::Test
   ROOT = File.expand_path("..", __dir__)
@@ -30,12 +31,23 @@ class Ig19dRestartPromotionTest < Minitest::Test
     FileUtils.mkdir_p(@elsewhere)
     @commands = []
     @rows = []
+    @trace_directory = Dir.mktmpdir("ig19 git observations ")
+    @git_trace = File.join(@trace_directory, "native-git.jsonl")
+    @previous_git_environment = ENV.to_h.slice("GIT_OPTIONAL_LOCKS", "GIT_TRACE2_EVENT")
+    ENV["GIT_OPTIONAL_LOCKS"] = "0"
+    ENV["GIT_TRACE2_EVENT"] = @git_trace
   end
 
   def teardown
+    native_commands = File.file?(@git_trace) ? File.readlines(@git_trace).map { |line| JSON.parse(line) }
+      .select { |event| event["event"] == "start" }.map { |event| event.fetch("argv") } : []
+    puts "IG-19 native Git observations: #{JSON.generate(native_commands)}"
+    %w[GIT_OPTIONAL_LOCKS GIT_TRACE2_EVENT].each { |key| ENV[key] = @previous_git_environment[key] }
+    FileUtils.remove_entry(@trace_directory)
     puts "IG-19D evidence: #{JSON.generate(rows: @rows, commands: @commands,
       totals: %w[PASS FAIL BLOCKED].to_h { |state| [state, @rows.count { |row| row[:status] == state }] })}"
     @source_fixture&.close
+    @catalog_fixture&.close
     if @rows.any? { |entry| entry[:status] == "FAIL" }
       puts "IG-19D retained failure fixture: #{@temporary}"
     elsif @temporary && File.directory?(@temporary)
@@ -165,7 +177,7 @@ class Ig19dRestartPromotionTest < Minitest::Test
   end
 
   def test_standing_finalization_final_review_promotion_and_fresh_replay
-    fixture = StandingBulkScoreReleaseFixture.new(root: @temporary)
+    fixture = build_standing_fixture
     # Supported owner fixture establishes boundary/staging and synthetic AFW
     # evidence. This is producer setup, not an automatic execution journey.
     release = fixture.release
@@ -185,16 +197,12 @@ class Ig19dRestartPromotionTest < Minitest::Test
       @rows.last[:preserved_hashes] = release_before
     end
     catalog = File.join(@temporary, "disposable catalog")
-    FileUtils.mkdir_p(catalog)
-    FileUtils.cp(File.join(@temporary, "PROJECT_STATE.yml"), catalog)
+    @catalog_fixture = Ig19GitFixture.load("standing", catalog)
     roles = YAML.safe_load_file(File.join(catalog, "PROJECT_STATE.yml"))
-    roles.values.grep(Hash).map { |entry| entry.fetch("filename") }.uniq.each do |name|
-      FileUtils.cp(File.join(@temporary, name), catalog)
+    # Qualify the exact owner release inputs before the public proof interval.
+    (["PROJECT_STATE.yml"] + roles.values.grep(Hash).map { |role| role.fetch("filename") }).uniq.each do |name|
+      assert_equal File.binread(File.join(@temporary, name)), File.binread(File.join(catalog, name)), name
     end
-    git(catalog, "init", "-q")
-    git(catalog, "remote", "add", "origin", "fixture://ig19d-catalog")
-    git(catalog, "add", ".")
-    git(catalog, "commit", "-qm", "IG-19D synthetic fixture baseline")
     File.write(File.join(catalog, "unrelated.txt"), "preserved unrelated operator file\n")
     preserved = snapshot(catalog).reject { |name, _| name.start_with?(".git/") }
     identity = git_identity(catalog)
@@ -208,7 +216,11 @@ class Ig19dRestartPromotionTest < Minitest::Test
       "catalog_repository_root" => catalog,
       "current_project_state_path" => File.join(catalog, "PROJECT_STATE.yml"), "frontier_result_path" => nil) + "\n")
     package = AfDataPipeline::FinalReleasePackage.prepare!(inputs_path: inputs, output_path: package_path).package
+    assert_equal identity, git_identity(catalog)
     assert package.dig("readiness", "ready")
+    assert_equal "original_ig17", package.dig("candidate", "selection")
+    assert_equal package, AfDataPipeline::FinalReleasePackage.validate!(inputs_path: inputs, package_path: package_path).package
+    assert_equal identity, git_identity(catalog)
     operation_dir = File.join(@temporary, "promotion")
     front_env = {"AF_ADVENTURE_FINDER_ROOT" => File.join(@temporary, "front door"), "AF_DATA_PIPELINE_ROOT" => PIPELINE}
     command = [RbConfig.ruby, File.join(ROOT, "bin/af-catalog"), "final-promotion",
@@ -231,6 +243,37 @@ class Ig19dRestartPromotionTest < Minitest::Test
       end
       @rows.last[:identities] = {package_id: package.fetch("package_id"),
         request: JSON.parse(File.read(File.join(operation_dir, "adoption-request.json")))}
+    end
+    # Corrupt only qualified disposable inputs between public proof intervals.
+    # Each refusal must leave the reviewed package/request and application intact.
+    manifest_path = File.join(catalog, "PROJECT_STATE.yml")
+    base_path = File.join(catalog, roles.dig("catalog_head", "filename"))
+    %w[dirty-reviewed-manifest dirty-reviewed-workbook mismatched-committed-binding].each do |scenario|
+      original_manifest = File.binread(manifest_path)
+      original_base = File.binread(base_path)
+      if scenario == "dirty-reviewed-manifest"
+        File.binwrite(manifest_path, original_manifest + "\n")
+      else
+        File.binwrite(base_path, original_base + "changed")
+        if scenario == "mismatched-committed-binding"
+          changed = YAML.safe_load(original_manifest)
+          changed.values.grep(Hash).each { |binding| binding.merge!(AfDataPipeline::StandingBulkScorePolicy.file_binding(base_path)) }
+          File.binwrite(manifest_path, YAML.dump(changed))
+        end
+      end
+      before = snapshot(@temporary)
+      row(scenario, scenario, "exact retained review; altered disposable input",
+          "hard refusal", "no partial application", "restore exact reviewed inputs") do
+        stdout, stderr, status = capture(front_env, *command, stdin_data: "APPROVE\n")
+        assert_equal 2, status.exitstatus, "#{stderr}\n#{stdout}"
+        assert_equal before, snapshot(@temporary)
+        refute File.exist?(File.join(operation_dir, "adoption-decision.json"))
+        refute File.exist?(File.join(operation_dir, "adoption-result.json"))
+        assert_equal identity, git_identity(catalog)
+      end
+    ensure
+      File.binwrite(manifest_path, original_manifest)
+      File.binwrite(base_path, original_base)
     end
     row("same-label-candidate-drift", "changed candidate bytes after review", "retained request; no approval",
         "hard stale refusal", "diagnostic only", "restore evidence or prepare fresh review") do
@@ -337,6 +380,18 @@ class Ig19dRestartPromotionTest < Minitest::Test
   private
 
 
+  # Build the unchanged owner recipe with cold caches and a fixed ZIP time.
+  # Restore earlier scenarios' caches so test order cannot alter fixture bytes.
+  def build_standing_fixture
+    caches = [CompatibilityAmcFixture::WORKBOOK_BYTES_CACHE, StagedScoringFixture::TEMPLATE_CACHE,
+      StandingBulkScoreReleaseFixture::FIXTURE_CACHE, StandingBulkScoreReleaseFixture::ISSUED_AUTHORITY_CACHE]
+    previous = caches.map(&:dup)
+    caches.each(&:clear)
+    Ig19GitFixture.with_fixed_zip_time { StandingBulkScoreReleaseFixture.new(root: @temporary) }
+  ensure
+    caches.zip(previous).each { |cache, saved| cache.replace(saved) }
+  end
+
   # Exercise retained approvals through fresh public CLI processes. Each mutation
   # is applied only to this disposable fixture and restored in ensure; refusals
   # must preserve the entire altered fixture, including literal Git index bytes.
@@ -409,22 +464,27 @@ class Ig19dRestartPromotionTest < Minitest::Test
 
   def capture(environment, *command, stdin_data: "")
     transient = %w[IG07C_PROGRESS_MODE IG07C_MARKDOWN_MODE IG07C_RECEIPT_MODE].to_h { |name| [name, nil] }
+    metadata_before = Ig19GitFixture.inventory(File.join(@catalog_fixture.root, ".git"), directories: true) if @catalog_fixture
     result = Open3.capture3(transient.merge(environment), *command, chdir: @elsewhere, stdin_data:)
+    if @catalog_fixture
+      assert_equal metadata_before, Ig19GitFixture.inventory(File.join(@catalog_fixture.root, ".git"), directories: true),
+        "public workflow changed protected Git metadata"
+    end
     @commands << {argv: command, cwd: @elsewhere, exitstatus: result.last.exitstatus,
       stdout: result.first, stderr: result[1]}
     result
   end
 
   def git(root, *arguments)
-    environment = {"GIT_AUTHOR_NAME" => "Synthetic fixture", "GIT_AUTHOR_EMAIL" => "fixture@example.invalid",
-      "GIT_COMMITTER_NAME" => "Synthetic fixture", "GIT_COMMITTER_EMAIL" => "fixture@example.invalid"}
+    environment = Ig19GitFixture::GIT_ENV
     stdout, stderr, status = Open3.capture3(environment, "git", "-C", root, *arguments)
     assert status.success?, stderr
     stdout
   end
 
   def git_identity(root)
-    {head: git(root, "rev-parse", "HEAD"), refs: git(root, "show-ref"),
+    {metadata: Ig19GitFixture.inventory(File.join(root, ".git"), directories: true),
+      head: git(root, "rev-parse", "HEAD"), refs: git(root, "show-ref"),
       index: file_binding(File.join(root, ".git/index"))}
   end
 

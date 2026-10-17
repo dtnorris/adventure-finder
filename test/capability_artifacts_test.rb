@@ -2,6 +2,7 @@
 
 require "json"
 require "minitest/autorun"
+require_relative "support/runtime_dependency_isolation"
 
 ROOT = File.expand_path("..", __dir__) unless defined?(ROOT)
 require_relative "support/wlo_contract"
@@ -9,6 +10,7 @@ require_relative "support/wlo_contract"
 require "adventure_finder_capability_artifacts"
 
 class CapabilityArtifactsTest < Minitest::Test
+  include RuntimeDependencyIsolation
   DIGEST = "a" * 64
 
   def test_generic_artifact_is_accepted_by_the_normative_wlo_contract
@@ -116,7 +118,10 @@ class CapabilityArtifactsTest < Minitest::Test
   end
 
   def test_no_low_or_rpof_runtime_dependency_is_loaded
-    forbidden = $LOADED_FEATURES.grep(/local[_-]ollama[_-]workers|runpod[_-]ollama[_-]fleet/i)
+    forbidden = loaded_features_in_subprocess(
+      File.expand_path("support/wlo_contract.rb", __dir__),
+      File.expand_path("../lib/adventure_finder_capability_artifacts.rb", __dir__)
+    ).grep(/local[_-]ollama[_-]workers|runpod[_-]ollama[_-]fleet/i)
     assert_empty forbidden
   end
 
