@@ -27,7 +27,8 @@ class BatchDynamicFixture
   # +jobs+ are synthetic descriptors; optional terminal counts use the existing
   # WLO fixture-builder API. Raises on missing/drifted production authority.
   def initialize(jobs:, complete: 1, failed: 1)
-    @root = Dir.mktmpdir("fo25-batch039-")
+    # Canonicalize macOS /var aliases before embedding paths in publisher bundles.
+    @root = File.realpath(Dir.mktmpdir("fo25-batch039-"))
     @output = File.join(root, "execution")
     @workdir = File.join(root, "afw")
     @plan_path = File.join(@workdir, "synthetic-plan.json")
