@@ -195,7 +195,15 @@ The current add CLI submits a count, not a promise to acquire display-preferred
 hardware. Original capability/hardware qualification and RPOF's fresh final
 admission, reservation, budget/deadline/guardian checks remain authoritative.
 
-## Evidence to review — local preparation, then human decision
+## Manual single-job evidence review — optional workflow
+
+This `af-review` workflow is for explicit individual human review, not the
+canonical staged-scoring V2 standing-directive ingestion path. For the clean
+V2 path, ordinary `af-catalog resume` after an approved boundary coordinates
+complete AFW evidence binding and pipeline standing release; eligible proposed
+scores do not require individual ACCEPT/HOLD/REJECT just to finalize a candidate.
+See [the front-door V2 resume contract](CATALOG_INGEST_FRONT_DOOR_V0.1.md)
+and [the pipeline's current runbook](https://github.com/dtnorris/af-data-pipeline/blob/main/docs/operator-runbook.md).
 
 ```bash
 bin/af-review prepare 39 0946-openness
@@ -204,7 +212,8 @@ bin/af-review prepare 39 0946-openness
 AdventureFinder resolves the job and composes AFW evidence binding with pipeline
 review preparation. AFW validates the scoring receipt; pipeline creates/reuses
 the package and reports the existing ledger, counts and next human decision.
-Follow the printed paths and pipeline's [runbook](https://github.com/dtnorris/af-data-pipeline/blob/main/docs/operator-runbook.md)
+For this *manual review* route, follow the printed paths and pipeline's
+[runbook](https://github.com/dtnorris/af-data-pipeline/blob/main/docs/operator-runbook.md)
 to inspect evidence and choose ACCEPT/HOLD/REJECT. Command success is not an
 accepted assessment. Preparation changes no canonical/AMC data; human editorial
 mutation and canonical apply/finalize are separate pipeline-owned gates.

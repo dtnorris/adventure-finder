@@ -265,12 +265,15 @@ the WLO and RPOF sibling checkouts and their already-installed Bundler dependenc
 `bin/af-catalog start` creates a durable operation for one explicitly declared
 digital-book PDF and returns its stable UUID handle. `bin/af-catalog resume HANDLE`
 revalidates that operation in a fresh process and reports its current meaningful gate.
-Supplying an explicit --canonical-destination lets those same commands drive only
-the validated deterministic source-side transitions and stop at the authoritative
-boundary-editorial review workspace. The allowlist, validation, replay, and terminal
-gate are documented in
-[`docs/INGEST_SOURCE_DRIVER_V0.1.md`](docs/INGEST_SOURCE_DRIVER_V0.1.md).
-Both commands are documented in
+The source-only driver using `--canonical-destination` validates deterministic
+source progression up to the boundary-editorial review workspace; that scope is
+documented in [`docs/INGEST_SOURCE_DRIVER_V0.1.md`](docs/INGEST_SOURCE_DRIVER_V0.1.md).
+For an approved boundary and authorized staged-scoring intent, the ordinary
+`resume` continuation proceeds through pipeline staging, AFW-qualified workload
+preparation, local LOW/WLO execution, standing-directive release, and the one
+explicit final-promotion decision. It does not require individual ACCEPT for
+eligible scores or a pre-scoring promotion of the staged catalog. The supported
+public gates and exceptions are documented in
 [`docs/CATALOG_INGEST_FRONT_DOOR_V0.1.md`](docs/CATALOG_INGEST_FRONT_DOOR_V0.1.md).
 
 The `AdventureFinderWorkspace::IngestOperationStore` library creates,
@@ -296,6 +299,10 @@ authority-bound AFW workload is documented in
 [`docs/STAGED_WORKLOAD_PREPARATION_V0.1.md`](docs/STAGED_WORKLOAD_PREPARATION_V0.1.md).
 It records an explicit scoring choice, lets pipeline issue staged authority, and lets
 AFW select the qualified production cases without running scoring or adopting a catalog.
+The explicit preparation/planning/local-start commands are an operator-controlled
+alternative to continuous post-boundary `resume`, not additional mandatory steps.
+The evidence and limits of the clean-local three-decision proof are summarized in
+[`docs/IG19E_V2_CLOSEOUT.md`](docs/IG19E_V2_CLOSEOUT.md).
 
 ### Exact final promotion
 
@@ -317,9 +324,14 @@ bin/af-catalog final-promotion \
 The optional `--preview` flag reports the owner-bound red-cell preview only after
 rehashing it and does not add another approval step. When an independently validated
 IG-17F result is already part of the package, the review attributes it separately and
-uses the derived candidate. Until a pipeline-owned IG-17F packet producer exists,
-packages with eligible residual gaps report that continuation as unavailable and may
-still proceed under their validated terminal-gap authority.
+uses the derived candidate. AFDP now provides `af-frontier-residual-scoring` v0.2
+(`prepare`, `apply`, `decline`, `verify`) for an *optional*, separately requested
+structured frontier handoff. The front door displays the exact component-tool
+instructions but does not generate or route that request automatically. A package
+with eligible terminal residual gaps may still proceed under its independently
+validated gap authority without a frontier request or extra mandatory decision.
+A derived candidate requires its own package validation and fresh final approval;
+the original approval does not transfer.
 
 The front door stores only durable coordination evidence under
 `operations/final-promotions/PACKAGE_ID/`: the pipeline request, pipeline decision,

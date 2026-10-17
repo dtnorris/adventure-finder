@@ -127,9 +127,10 @@ parents are supported through content validation and real-path containment.
 Missing, changed, partial, malformed, wrong-identity, or wrong-schema progression
 outputs stop immediately. A zero child exit is not success unless the expected
 versioned result and output bytes validate. Page/OCR, source identity, registry,
-catalog-base, and source-QA gates are rendered without bypass. Once an editorial
-context and decisions ledger are bound, every later resume stops at the same review
-workspace without invoking progression again.
+catalog-base, and source-QA gates are rendered without bypass. After an editorial
+context and decisions ledger are bound, ordinary resume **before boundary approval**
+stops at that same review workspace without redoing source progression. This is
+not the terminal gate for an operation whose boundary review is approved.
 
 After the human completes the ledger and reviews it through pipeline's public
 editorial interface, `resume --approve-boundary-by NAME` attests that exact review.

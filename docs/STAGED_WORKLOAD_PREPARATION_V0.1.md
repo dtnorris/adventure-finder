@@ -5,6 +5,13 @@ zero-inference AFW workload. Pipeline remains the only staged-scoring authority;
 AFW remains the only qualified-production selector and compiler. This flow does not
 execute scoring or change a shared catalog role.
 
+This document describes **explicit preparation and local-start controls** for an
+operator who needs to inspect or separately authorize those stages. In the
+canonical V2 clean path, ordinary `af-catalog resume` after approved boundaries
+reuses these component authorities and continues through local execution and
+standing release automatically; the manual preparation, plan and `local-start`
+commands below are not additional required operator decision episodes.
+
 Record the explicit choice while starting the durable ingest:
 
 ```bash
