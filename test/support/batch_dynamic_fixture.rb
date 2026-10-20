@@ -14,11 +14,12 @@ require File.join(WLO_ROOT, "lib/workload_orchestrator")
 require_relative "../../lib/adventure_finder_operator_acceptance"
 require_relative "../../lib/adventure_finder_batch"
 
-# Disposable Batch 39 composition. Only publisher bytes and scorer payloads are
+# Disposable batch composition. Only publisher bytes and scorer payloads are
 # fakes. Context resolution, action-check, foreground exec, loading, scheduling,
 # retained attempts and public status all use the actual owner implementations.
 class BatchDynamicFixture
   ROOT = File.expand_path("../..", __dir__)
+  HANDLE = "fo26-default"
   PLAN_RELATIVE = "workloads/production-batch-039-fresh-20260930/execution-plan.json"
   PRODUCTION_SHA = "0396dadb15bf0ca68238fd4f449ca99e58c3a4ee329dadc8a6e242f5da0ae5d1"
   attr_reader :root, :plan, :store, :output, :registry, :plan_path, :pools, :observations
@@ -161,7 +162,7 @@ class BatchDynamicFixture
       path = argv.fetch(argv.index("--worker-sources-config") + 1)
     end
     AdventureFinderWorkspace::BatchFrontDoor.new(registry_path: registry,
-      workspace_root: root, executor: handoff, out: StringIO.new).run("resume", "39")
+      workspace_root: root, executor: handoff, out: StringIO.new).run("resume", HANDLE)
     WorkloadOrchestrator::WorkerSourceConfiguration.load(path)
   end
 
@@ -205,7 +206,7 @@ class BatchDynamicFixture
     environment = AdventureFinderWorkspace::OperatorAcceptance::CREDENTIAL_NAMES.to_h { |name| [name, nil] }
     environment.merge!("BUNDLE_GEMFILE" => nil, "BUNDLE_LOCKFILE" => File.join(root, "hostile.lock"),
       "RUBYOPT" => [ENV["RUBYOPT"], "-r#{guard}"].compact.join(" "))
-    argv = [RbConfig.ruby, File.join(ROOT, "bin/af-batch"), action, "39", "--root", root, "--registry", registry]
+    argv = [RbConfig.ruby, File.join(ROOT, "bin/af-batch"), action, HANDLE, "--root", root, "--registry", registry]
     pid = Process.spawn(environment, *argv, chdir: @workdir,
       out: File.join(root, "owner.stdout"), err: File.join(root, "owner.stderr"))
     @children_mutex.synchronize { @children[pid] = true }
@@ -334,11 +335,14 @@ class BatchDynamicFixture
     RUBY
   end
 
-  # Register only synthetic plan authority beneath this fixture root. Original
-  # Batch 39 plan hash/configuration and component source trees stay untouched.
+  # Register a new synthetic batch without policies to exercise AF's default.
+  # Original Batch 39 authority and component source trees stay untouched.
   def write_registry
     document = YAML.safe_load_file(File.join(ROOT, "config/production_contexts.yml"))
-    batch = document.dig("contexts", "batch", "39")
+    batches = document.dig("contexts", "batch")
+    batch = batches.delete("39")
+    batches[HANDLE] = batch
+    batch.delete("worker_source_policies")
     batch["production_batch_id"] = plan.id
     batch["afw"] = {"repository_root" => "afw", "workload_root" => "afw", "plan_path" => "afw/synthetic-plan.json"}
     batch["wlo"] = {"repository_root" => "wlo", "output_root" => "execution"}
@@ -347,6 +351,7 @@ class BatchDynamicFixture
     rpof = document.dig("contexts", "fleet", "A", "rpof")
     rpof.replace({"repository_root" => "remote", "campaign_path" => "remote/campaign.json",
       "budget_path" => "remote/budget.json", "state_root" => "remote/state", "binding_path" => "remote/binding.json"})
+    document.dig("contexts", "fleet", "A")["associated_batches"] = [HANDLE]
     File.write(registry, YAML.dump(document))
   end
 end

@@ -19,7 +19,7 @@ module AdventureFinderWorkspace
     EXECUTION_ACTIONS = %w[start resume].freeze
     RECOVERY_ACTIONS = %w[retry recovery repair].freeze
     ACTIONS = (EXECUTION_ACTIONS + RECOVERY_ACTIONS).freeze
-    WORKER_SOURCES_CONTRACT_VERSION = "wlo-worker-sources/v0.1"
+    WORKER_SOURCES_CONTRACT_VERSION = "wlo-worker-sources/v0.2"
 
     class ForegroundExecutor
       def call(environment, argv, chdir:)
@@ -320,15 +320,17 @@ module AdventureFinderWorkspace
       ]
     end
 
-    # Persist source YAML for WLO, selecting v0.2 only with explicit policies.
+    # Persist v0.2 source YAML for WLO, defaulting selected sources to optional
+    # only when the validated context has no explicit policy mapping.
     # Returns its content-addressed path; invalid paths/content raise Error.
     def write_worker_sources_config!(context, fleet, sources)
       bundle = find_executable!("bundle", @bundle_executable)
       entries = sources.map { |source| worker_source_entry(source, context, fleet, bundle) }
-      policies = context["worker_source_policies"]
-      entries.each { |entry| entry["policy"] = policies.fetch(entry.fetch("name")) } if policies
-      version = policies ? "wlo-worker-sources/v0.2" : WORKER_SOURCES_CONTRACT_VERSION
-      bytes = YAML.dump("contract_version" => version, "sources" => entries)
+      policies = context.fetch("worker_source_policies") do
+        sources.to_h { |source| [source, "optional"] }
+      end
+      entries.each { |entry| entry["policy"] = policies.fetch(entry.fetch("name")) }
+      bytes = YAML.dump("contract_version" => WORKER_SOURCES_CONTRACT_VERSION, "sources" => entries)
       root = File.join(File.dirname(context.dig("wlo", "output_root")), "worker-sources")
       basename = File.basename(context.dig("wlo", "output_root"))
       path = File.join(root, "#{basename}-#{Digest::SHA256.hexdigest(bytes)[0, 12]}.yml")
@@ -353,7 +355,7 @@ module AdventureFinderWorkspace
     # Build one observational publisher invocation from validated context paths.
     # WLO accepts string environments; env -u preserves lockfile removal before
     # component Bundler starts, including a contaminated inherited lockfile.
-    # Returns a v0.1 row; missing env executable raises Error.
+    # Returns a publisher row before policy is attached; missing env raises Error.
     def worker_source_entry(source, context, fleet, bundle)
       root, executable, environment =
         if source == "local"

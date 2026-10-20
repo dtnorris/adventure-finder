@@ -57,7 +57,7 @@ module AdventureFinderWorkspace
       ),
       Scenario.new(
         name: "batch-dynamic-sources",
-        description: "FO-25 continuous Batch 39-shaped resume, optional publishers, exact evidence and failure-bearing accounting",
+        description: "continuous synthetic batch resume, default optional and explicit required publishers, exact evidence and failure-bearing accounting",
         repository: "adventure-finder",
         test_file: "test/integration/batch_dynamic_sources_test.rb",
         required_paths: {

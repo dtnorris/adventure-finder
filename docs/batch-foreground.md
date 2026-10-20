@@ -27,23 +27,45 @@ does not interpret execution storage. See the [composed runbook](operator-runboo
 
 `AF_PROJECT_ROOT` relocates every registered repository and runtime path. The
 Batch context selects `local`, `remote`, or both in `worker_sources`.
-An explicit `worker_source_policies` mapping opts a context into
-`wlo-worker-sources/v0.2`. It must match every selected source exactly, with
-each value `required` or `optional`. Batch 39 selects both publishers:
+Every newly generated source file uses `wlo-worker-sources/v0.2`. When
+`worker_source_policies` is absent, every selected, registered source defaults
+to `optional`. An explicit mapping overrides this default and must match the
+explicit `worker_sources` selection exactly, with each value `required` or
+`optional`. For example, require fresh remote authority while allowing local
+capacity to be unavailable:
 
 ```yaml
 worker_sources: [local, remote]
 worker_source_policies:
   local: optional
-  remote: optional
+  remote: required
 ```
 
-Contexts without this mapping retain v0.1 and all-required behavior. Invalid,
-duplicate, missing or extra configuration authority refuses before launch;
+Without explicit `worker_sources`, existing selection falls back to `local`
+when `local_workers` is registered and `remote` when `associated_fleets` is
+nonempty. Policies cannot be supplied with this implicit selection: overrides
+still require explicit `worker_sources`. No source is discovered or registered
+automatically. Local-only selection needs no remote checkout or fleet
+registration; remote-only needs no LOW checkout or registration.
+
+Invalid, duplicate, null, false, empty, partial or extra policy declarations
+refuse before launch; only an absent mapping selects the default. Missing
+selected-source registration also refuses. In particular,
 optional availability never excuses missing publisher executables or Gemfiles.
 Each command uses its component Gemfile/workdir. `env -u BUNDLE_LOCKFILE` clears
 inherited lockfile authority before component Bundler starts; source environments
 remain string maps as WLO requires.
+
+This default applies whenever updated AdventureFinder reaches source generation,
+including a subsequent start/resume. Existing content-addressed v0.1/v0.2 files
+are never rewritten, migrated or repinned, and retained execution/attempt/result
+evidence is unchanged. Direct WLO loading of v0.1 remains all-required; explicit
+v0.2 policies remain authoritative. WLO also binds source authority in retained
+executions: changing the generated configuration for an execution that already
+registered different authority may be refused by WLO. Review that owner boundary
+before deployment; the new default does not authorize changing retained metadata
+or a running manager's policies. Batch 39's existing explicit optional mapping
+remains valid and unchanged.
 
 AdventureFinder hands this configuration to WLO; it does not poll, merge,
 deduplicate or republish registry

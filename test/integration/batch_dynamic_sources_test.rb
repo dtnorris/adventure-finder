@@ -23,6 +23,9 @@ class BatchDynamicSourcesTest < Minitest::Test
       {"job_id" => "remote-second", "pool_id" => "gptoss", "depends_on_job_ids" => ["local-first"]},
       {"job_id" => "healthy-third", "pool_id" => "gemma", "depends_on_job_ids" => ["remote-second"]}
     ])
+    context = AdventureFinderWorkspace::ProductionContextRegistry.new(@fixture.registry, workspace_root: @fixture.root)
+      .resolve("batch", BatchDynamicFixture::HANDLE)
+    refute context.key?("worker_source_policies")
     retained = @fixture.retained_evidence(%w[retained-0 retained-1])
     before = @fixture.observe("paused")
     assert_equal "paused", before.fetch("status")
@@ -114,6 +117,41 @@ class BatchDynamicSourcesTest < Minitest::Test
     assert_equal original, @fixture.retained_evidence(%w[retained-0 retained-1])
   end
 
+  # The equivalent explicit-required execution must wait despite exact local
+  # capacity. Fresh empty remote authority then permits the same owner to run.
+  def test_explicit_required_remote_blocks_healthy_local_until_fresh_empty_snapshot
+    @fixture = BatchDynamicFixture.new(jobs: [{"job_id" => "required-control", "pool_id" => "qwen27"}])
+    @fixture.configure do |document|
+      document.dig("contexts", "batch", BatchDynamicFixture::HANDLE)["worker_source_policies"] =
+        {"local" => "optional", "remote" => "required"}
+    end
+    original = @fixture.retained_evidence(%w[retained-0 retained-1])
+    @fixture.publish("local", [@fixture.worker("local", [@fixture.pools.first])])
+    @fixture.unavailable("remote")
+    pid = @fixture.launch
+    blocked = @fixture.await("required remote blocks eligible local") do |report|
+      pool = report.fetch("pool_status").find { |row| row.fetch("pool_id") == "qwen27" }
+      report if report.fetch("executor_active") && pool.fetch("reason") == "REQUIRED_WORKER_SOURCE_UNAVAILABLE"
+    end
+    assert_equal 1, blocked.dig("counts", "pending")
+    assert_equal 0, blocked.dig("counts", "running")
+    pool = blocked.fetch("pool_status").find { |row| row.fetch("pool_id") == "qwen27" }
+    assert_equal 1, pool.dig("workers", "compatible_ready")
+    assert_nil @fixture.store.metadata_for(@fixture.plan.jobs.last)
+    refute File.exist?(File.join(@fixture.root, "afw", "required-control.started"))
+    remote = blocked.fetch("worker_sources").find { |row| row.fetch("source_name") == "remote" }
+    assert_equal "required", remote.fetch("policy")
+    assert remote.fetch("blocking")
+    assert_equal original, @fixture.retained_evidence(%w[retained-0 retained-1])
+    @fixture.publish("remote", [])
+    running = await_running("required-control")
+    assert_same_owner(blocked, running, pid)
+    assert_binding("required-control", "fo25-local")
+    @fixture.release("required-control")
+    assert_equal 2, @fixture.wait(pid).exitstatus, @fixture.diagnostics
+    assert_equal original, @fixture.retained_evidence(%w[retained-0 retained-1])
+  end
+
   # Full synthetic accounting retains the historical boundary, exact four pool
   # identities, prior hashes/history, and executes precisely the 112 pending jobs.
   def test_192_job_accounting_preserves_80_original_terminal_jobs
@@ -183,7 +221,7 @@ class BatchDynamicSourcesTest < Minitest::Test
   # and loss inputs are restricted to this disposable synthetic fixture.
   def test_af_binary_safety_refusals_preserve_all_execution_bytes
     cases = {
-      "paused start" => ["start", "bin/af-batch resume 39", ->(fixture) {}],
+      "paused start" => ["start", "bin/af-batch resume #{BatchDynamicFixture::HANDLE}", ->(fixture) {}],
       "breaker" => ["resume", "circuit breaker", ->(fixture) {}],
       "interruption" => ["resume", "explicit retry authorization", ->(fixture) { fixture.store.record_interruption!("TERM") }],
       "dispatch halt" => ["resume", "dispatch is halted", ->(fixture) { fixture.store.record_dispatch_halt!(kind: "worker_registry", error: "synthetic halt") }],
@@ -196,10 +234,12 @@ class BatchDynamicSourcesTest < Minitest::Test
       "stale production context" => ["resume", "SHA-256 mismatch", ->(fixture) { File.open(fixture.plan_path, "a") { |file| file.write(" ") } }],
       "changed retained workdir" => ["resume", "different execution identity", lambda do |fixture|
         FileUtils.mkdir_p(File.join(fixture.root, "other-workdir"))
-        fixture.configure { |document| document.dig("contexts", "batch", "39", "afw")["repository_root"] = "other-workdir" }
+        fixture.configure { |document| document.dig("contexts", "batch", BatchDynamicFixture::HANDLE, "afw")["repository_root"] = "other-workdir" }
       end],
       "unauthorized source policy" => ["resume", "exactly match", lambda do |fixture|
-        fixture.configure { |document| document.dig("contexts", "batch", "39", "worker_source_policies").delete("remote") }
+        fixture.configure do |document|
+          document.dig("contexts", "batch", BatchDynamicFixture::HANDLE)["worker_source_policies"] = {"local" => "optional"}
+        end
       end]
     }
     cases.each do |name, (action, message, arrange)|
@@ -233,7 +273,10 @@ class BatchDynamicSourcesTest < Minitest::Test
     @fixture.unavailable("remote")
     pid = @fixture.launch
     waiting = @fixture.await("both optional unavailable") do |report|
-      report if report.fetch("executor_active") && report.fetch("worker_sources").length == 2
+      # Source health is visible before an in-progress publisher poll finishes.
+      sources = report.fetch("worker_sources")
+      report if report.fetch("executor_active") && sources.length == 2 &&
+        sources.all? { |source| source.fetch("last_poll_result") == "failure" }
     end
     assert_equal 1, waiting.dig("counts", "pending")
     assert_equal 0, waiting.dig("counts", "running")

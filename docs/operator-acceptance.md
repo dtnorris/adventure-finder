@@ -38,15 +38,19 @@ bin/af-operator-acceptance --only ig19d-restart-promotion
 bin/af-operator-acceptance --only ig19d-staleness
 ```
 
-## Optional Batch 39 publishers
+## Optional batch publishers
 
-`batch-dynamic-sources` runs the real `bin/af-batch resume 39` handoff into real
-WLO with a disposable registry and separately hashed synthetic plan. Only
+`batch-dynamic-sources` runs the real `bin/af-batch resume fo26-default` handoff
+into real WLO with a newly registered disposable batch, no policy mapping, and
+a separately hashed synthetic plan. Only
 publisher output and scorer payloads are fakes. One continuous owner waits with
 empty publishers, consumes later LOW and RPOF capacity, and continues through a
 healthy publisher after idle source failure. Public status/progress observations
 and exact immutable attempt bindings establish continuity. A wrong full digest
 prevents dispatch before a corrected publication enables the same execution.
+An equivalent explicit-required remote control blocks healthy local capacity
+until a fresh empty remote snapshot establishes authority. These defaults and
+overrides follow the [foreground configuration contract](batch-foreground.md).
 
 The synthetic 192-job fixture preserves all four original pool requirements,
 the initial 75 complete / 5 failed / 112 pending boundary, and the original 80
