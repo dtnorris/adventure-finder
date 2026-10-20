@@ -459,19 +459,27 @@ adds operator acceptance after these normal gates.
 Without recent timing history, AFDP's priority hint uses the reported October
 14, 2026 combined duration of 104.11 seconds. This single-run observation is a
 scheduling estimate, not a validated benchmark or a promised runtime. Recent
-successful history still takes precedence. A successful command exit without
-valid, nonempty fast-suite accounting cannot make AFDP pass; integration retains
-its independent completion and coverage evidence requirements.
+successful history still takes precedence. AFDP requires both successful command
+exit and a fresh validated `afdp-suite-result/v1` handoff. Rake's result includes
+all required gates, including integration independence and full coverage. Human
+headings, summaries and completion sentences do not decide AFDP correctness.
 
 Each suite has its own command, status, elapsed time and captured diagnostics.
 Suite counts include both AFDP invocations; physical repository counts and
 scheduling history retain one AFDP entry with cumulative elapsed time, which is
 the sum of suite durations rather than their overlapping wall time. Suite start
 rows omit cumulative repository timing estimates; final workspace wall time is
-measured separately. Minitest
-totals add independent executed invocations, including visible independence and
-coverage runs. Worker subtotals are replaced only by reconciled parent summaries;
-unknown counts are warned about and no previous report is read as test evidence.
+measured separately. AFDP totals preserve observed invocation accounting using
+validated structured outcomes: fast contributes its functional run; integration
+contributes its functional run plus its separately executed full coverage run.
+Each invocation is counted once, regardless of repeated worker/aggregate summaries.
+Quiet health, dependency and benchmark checks retain their gates and historically
+excluded counts.
+The scheduler gives each command a private temporary result path and fresh request
+ID, validates the closed schema independently, and retains counts only from valid
+results, including failed gates with known counts. Missing/invalid counts are
+excluded with a warning. Other repositories retain observed Minitest accounting;
+no previous report supplies test evidence.
 
 AFDP's coverage workers use fresh per-invocation temporary slice and collation
 directories with unique run names. Fast and full reports publish separately to

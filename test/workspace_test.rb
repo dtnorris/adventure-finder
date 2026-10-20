@@ -30,6 +30,21 @@ class AdventureFinderWorkspaceTest < Minitest::Test
       "Integration validation finished in 0.030s.\n"
   end
 
+  # Writes structured outcomes for the fake command's observed invocations:
+  # functional 1/3, dependency fixture 2/3, and full coverage 3/5. The unchanged
+  # text above is presentation; it never supplies authoritative evidence.
+  def self.publish_result(environment, passed: true)
+    path = environment["AFDP_TEST_RESULT_PATH"]
+    return unless path
+
+    integration = environment.fetch("TEST_FIXTURE_SUITE", "") == "integration"
+    counts = integration ? [[1, 3], [2, 3], [3, 5]].transpose.map(&:sum) : [2, 3]
+    record = {"schema" => "afdp-suite-result/v1", "run_id" => environment.fetch("AFDP_TEST_RESULT_RUN_ID"),
+      "suite" => integration ? "integration" : "fast", "status" => passed ? "passed" : "failed",
+      "tests" => counts[0], "assertions" => counts[1], "failures" => 0, "errors" => 0, "skips" => 0}
+    File.write(path, JSON.generate(record))
+  end
+
   FakeStatus = Struct.new(:successful) do
     def success?
       successful
@@ -86,6 +101,8 @@ class AdventureFinderWorkspaceTest < Minitest::Test
 
     def shell_capture(command, chdir:, env: {})
       @calls << [command, chdir.to_s, env]
+      fixture_environment = env.merge("TEST_FIXTURE_SUITE" => command.end_with?("test:integration") ? "integration" : "fast")
+      AdventureFinderWorkspaceTest.publish_result(fixture_environment, passed: command != @fail_command)
       AdventureFinderWorkspace::CommandRunner::Result.new(
         stdout: command == "bundle exec rake test:integration" ? @integration_output : "2 runs, 3 assertions, 0 failures, 0 errors, 0 skips\n",
         stderr: "", status: FakeStatus.new(command != @fail_command)
@@ -217,32 +234,44 @@ class AdventureFinderWorkspaceTest < Minitest::Test
     end
   end
 
-  # Exit zero is insufficient: absent entrypoints, malformed totals, or missing
-  # functional/full coverage/completion evidence all fail the integration gate.
-  def test_pipeline_integration_requires_fresh_complete_public_output
-    valid = self.class.integration_output
-    invalid_outputs = [
-      "",
-      "rake aborted!\nDon't know how to build task 'test:integration'\n",
-      valid.sub("Integration validation finished in 0.030s.\n", ""),
-      valid.sub("Suite: all (coverage)", "Suite: fast (coverage)"),
-      valid.sub("Suite: integration (functional)", "Suite: fast (functional)"),
-      valid.sub("3 runs, 5 assertions", "99 runs, 5 assertions"),
-      valid + valid,
-      valid + "1 runs, 1 assertions, 1 failures, 0 errors, 0 skips\n"
+  # Closed-schema documents, fresh binding and independent exits control both
+  # scheduler modes. A passing peer and misleading output cannot repair evidence.
+  def test_pipeline_requires_fresh_complete_public_results
+    mutations = [
+      ->(record) { nil }, ->(record) { "{" }, ->(record) { record + record },
+      ->(record) { record.sub('"tests":6', '"tests":0,"tests":6') },
+      ->(record) { JSON.generate(JSON.parse(record).merge("run_id" => "0" * 32)) },
+      ->(record) { JSON.generate(JSON.parse(record).merge("suite" => "fast")) },
+      ->(record) { JSON.generate(JSON.parse(record).merge("status" => "incomplete")) },
+      ->(record) { JSON.generate(JSON.parse(record).merge("failures" => 1)) },
+      ->(record) { JSON.generate(JSON.parse(record).reject { |key, _| key == "assertions" }) }
     ]
-    invalid_outputs.each do |output|
-      with_pipeline_workspace(runner: RecordingRunner.new(integration_output: output)) do |workspace, pipeline, runner, out|
-        refute workspace.test(repos: [pipeline], jobs: 2, include_front_door: false)
-        assert_equal 2, runner.calls.length
-        assert_match(/^af-data-pipeline \/ fast\s+PASS/, out.string)
-        assert_match(/^af-data-pipeline \/ integration\s+FAIL/, out.string)
-        assert_includes out.string, "required AFDP integration completion/accounting evidence"
+    [1, 2].each do |jobs|
+      mutations.each do |mutate|
+        runner = RecordingRunner.new
+        runner.define_singleton_method(:shell_capture) do |command, chdir:, env: {}|
+          result = super(command, chdir: chdir, env: env)
+          if command.end_with?("test:integration")
+            path = env.fetch("AFDP_TEST_RESULT_PATH")
+            bytes = mutate.call(File.read(path))
+            bytes ? File.write(path, bytes) : File.unlink(path)
+            result.stdout = AdventureFinderWorkspaceTest.integration_output
+          end
+          result
+        end
+        with_pipeline_workspace(runner: runner) do |workspace, pipeline, _runner, out|
+          refute workspace.test(repos: [pipeline], jobs: jobs, include_front_door: false)
+          assert_match(/^af-data-pipeline \/ fast\s+PASS/, out.string)
+          assert_match(/^af-data-pipeline \/ integration\s+FAIL/, out.string)
+          assert_includes out.string, "accounting evidence missing or invalid"
+          assert_match(/^Total runs:\s+2$/, out.string)
+        end
       end
     end
   end
 
-  # Independent parallel failures cannot suppress or borrow the peer's result.
+  # Exit failures retain their own suite attribution even with a valid passing
+  # document. Missing fast evidence cannot borrow the integration peer's counts.
   def test_parallel_pipeline_failures_and_missing_fast_evidence_fail_closed
     ["bundle exec rake", "bundle exec rake test:integration"].each do |command|
       with_pipeline_workspace(runner: RecordingRunner.new(fail_command: command)) do |workspace, pipeline, runner, out|
@@ -251,21 +280,65 @@ class AdventureFinderWorkspaceTest < Minitest::Test
         assert_includes out.string, "Component phase: 0/1 passed"
       end
     end
-    invalid = ["", "0 runs, 0 assertions, 0 failures, 0 errors, 0 skips\n",
-      "2 runs, malformed assertions\n", "2 runs, 3 assertions, 1 failures, 0 errors, 0 skips\n",
-      self.class.worker_output("fast (functional)", runs: 2, assertions: 3).sub("2 runs", "99 runs")]
-    invalid.each do |output|
-      runner = RecordingRunner.new
-      runner.define_singleton_method(:shell_capture) do |command, chdir:, env: {}|
-        result = super(command, chdir: chdir, env: env)
-        result.stdout = output if command == "bundle exec rake"
-        result
+    runner = RecordingRunner.new
+    runner.define_singleton_method(:shell_capture) do |command, chdir:, env: {}|
+      result = super(command, chdir: chdir, env: env)
+      File.unlink(env.fetch("AFDP_TEST_RESULT_PATH")) if command == "bundle exec rake"
+      result
+    end
+    with_pipeline_workspace(runner: runner) do |workspace, pipeline, _runner, out|
+      refute workspace.test(repos: [pipeline], jobs: 2, include_front_door: false)
+      assert_includes out.string, "required AFDP fast accounting evidence missing or invalid"
+      assert_match(/^af-data-pipeline \/ integration\s+PASS/, out.string)
+    end
+  end
+
+  # Changing or omitting all presentation leaves validated counters and suite
+  # status unchanged, with no heading, summary or completion-sentence dependency.
+  def test_pipeline_cosmetic_output_cannot_change_accounting
+    [1, 2].each do |jobs|
+      ["", "renamed headings and summary\n", "999 runs, 0 assertions, 99 failures, 0 errors, 0 skips\n"].each do |text|
+        runner = RecordingRunner.new
+        runner.define_singleton_method(:shell_capture) do |command, chdir:, env: {}|
+          result = super(command, chdir: chdir, env: env)
+          result.stdout = text
+          result
+        end
+        with_pipeline_workspace(runner: runner) do |workspace, pipeline, _runner, out, err|
+          assert workspace.test(repos: [pipeline], jobs: jobs, include_front_door: false)
+          assert_match(/^Total runs:\s+8$/, out.string)
+          assert_match(/^Total assertions:\s+14$/, out.string)
+          assert_empty err.string
+        end
       end
-      with_pipeline_workspace(runner: runner) do |workspace, pipeline, _runner, out|
-        refute workspace.test(repos: [pipeline], jobs: 2, include_front_door: false)
-        assert_includes out.string, "required AFDP fast accounting evidence missing or invalid"
-        assert_match(/^af-data-pipeline \/ integration\s+PASS/, out.string)
+    end
+  end
+
+
+  # A fully valid passing document cannot repair a nonzero process exit. A
+  # valid failed document retains its own error/skip counters despite nice text.
+  def test_pipeline_status_and_failed_counters_are_independent_of_text
+    runner = RecordingRunner.new
+    runner.define_singleton_method(:shell_capture) do |command, chdir:, env: {}|
+      result = super(command, chdir: chdir, env: env)
+      path = env.fetch("AFDP_TEST_RESULT_PATH")
+      if command == "bundle exec rake"
+        result.status = FakeStatus.new(false)
+      else
+        record = JSON.parse(File.read(path)).merge("status" => "failed", "tests" => 2,
+          "assertions" => 0, "errors" => 1, "skips" => 1)
+        File.write(path, JSON.generate(record))
       end
+      result
+    end
+    with_pipeline_workspace(runner: runner) do |workspace, pipeline, _runner, out|
+      refute workspace.test(repos: [pipeline], jobs: 2, include_front_door: false)
+      assert_match(/^af-data-pipeline \/ fast\s+FAIL/, out.string)
+      assert_match(/^af-data-pipeline \/ integration\s+FAIL/, out.string)
+      assert_match(/^Total runs:\s+4$/, out.string)
+      assert_match(/^Total assertions:\s+3$/, out.string)
+      assert_match(/^Total errors:\s+1$/, out.string)
+      assert_match(/^Total skips:\s+1$/, out.string)
     end
   end
 
@@ -373,7 +446,11 @@ class AdventureFinderWorkspaceTest < Minitest::Test
           abort "incomplete overlap" if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
           sleep 0.005
         end
-        puts(integration ? #{self.class.integration_output.dump} : "2 runs, 3 assertions, 0 failures, 0 errors, 0 skips")
+        require "json"
+        record = {schema: "afdp-suite-result/v1", run_id: ENV.fetch("AFDP_TEST_RESULT_RUN_ID"),
+          suite: phase, status: "passed", tests: integration ? 1 : 2, assertions: 3, failures: 0, errors: 0, skips: 0}
+        File.write(ENV.fetch("AFDP_TEST_RESULT_PATH"), JSON.generate(record))
+        puts "cosmetic output only"
         warn(integration ? "integration diagnostic" : "fast diagnostic")
       RUBY
       FileUtils.chmod(0o755, File.join(tools, "bundle"))
@@ -388,8 +465,8 @@ class AdventureFinderWorkspaceTest < Minitest::Test
       assert_equal 2, identities.uniq.length
       assert_includes out.string, "fast diagnostic"
       assert_includes out.string, "integration diagnostic"
-      assert_match(/^Total runs:\s+8$/, out.string)
-      assert_match(/^Total assertions:\s+14$/, out.string)
+      assert_match(/^Total runs:\s+3$/, out.string)
+      assert_match(/^Total assertions:\s+6$/, out.string)
       assert_empty err.string
     end
   end
@@ -561,8 +638,8 @@ class AdventureFinderWorkspaceTest < Minitest::Test
       result = AdventureFinderWorkspace::Workspace::TestResult.new(name: "af-data-pipeline",
         suite: "integration", result: :fail, output: output)
       totals = workspace.send(:aggregate_minitest_totals, [result])
-      assert_equal({runs: 3, assertions: 10, failures: 0, errors: 0, skips: 0}, totals)
-      assert_includes err.string, "accounting differ; reporting observed subtotals"
+      assert_equal({runs: 0, assertions: 0, failures: 0, errors: 0, skips: 0}, totals)
+      assert_includes err.string, "validated observed test counts unknown"
     end
   end
 
@@ -1210,7 +1287,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
     err = StringIO.new
     workspace = AdventureFinderWorkspace::Workspace.new(manifest: manifest, root: Dir.tmpdir,
       out: StringIO.new, err: err)
-    result = AdventureFinderWorkspace::Workspace::TestResult.new(name: "af-data-pipeline", result: :pass, output: captured)
+    result = AdventureFinderWorkspace::Workspace::TestResult.new(name: "other-component", result: :pass, output: captured)
     expected = {runs: 492, assertions: 4327, failures: 0, errors: 0, skips: 0}
     assert_equal expected, workspace.send(:aggregate_minitest_totals, [result])
     assert_empty err.string
