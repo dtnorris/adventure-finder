@@ -97,7 +97,7 @@ class BatchFrontDoorTest < Minitest::Test
     assert_option argv, "--output", @output
     config_path = argv.fetch(argv.index("--worker-sources-config") + 1)
     config = YAML.safe_load_file(config_path, aliases: false)
-    assert_equal "wlo-worker-sources/v0.1", config.fetch("contract_version")
+    assert_equal "wlo-worker-sources/v0.2", config.fetch("contract_version")
     assert_equal %w[local remote], config.fetch("sources").map { |source| source.fetch("name") }
     local, remote = config.fetch("sources")
     [local, remote].each do |source|
@@ -137,15 +137,22 @@ class BatchFrontDoorTest < Minitest::Test
     path = argv.fetch(argv.index("--worker-sources-config") + 1)
     sources = WorkloadOrchestrator::WorkerSourceConfiguration.load(path)
     assert_equal %w[local remote], sources.entries.map(&:name)
-    assert_equal %w[required required], sources.entries.map(&:policy)
+    assert_equal %w[optional optional], sources.entries.map(&:policy)
   end
 
-  # Explicit policy maps generate v0.2 for every supported source selection.
-  # The real owner loader proves row shape and required/optional semantics.
-  def test_explicit_policies_load_for_local_remote_and_mixed_selection
-    [["local"], ["remote"], %w[local remote]].each do |names|
+  # Missing policies default to optional for explicit and implicit selections.
+  # Real WLO loads exact rows; unselected, unregistered publishers are absent.
+  def test_default_policies_load_for_explicit_and_implicit_selections
+    [["local"], ["remote"], %w[local remote]].product([true, false]).each do |names, explicit|
       write_registry(worker_sources: names)
-      mutate_registry { |batch| batch["worker_source_policies"] = names.to_h { |name| [name, "optional"] } }
+      mutate_registry do |batch|
+        batch.delete("worker_sources") unless explicit
+        batch.delete("local_workers") unless names.include?("local")
+        batch["associated_fleets"] = [] unless names.include?("remote")
+      end
+      document = YAML.safe_load_file(@registry)
+      document.dig("contexts", "fleet").clear unless names.include?("remote")
+      File.write(@registry, YAML.dump(document))
       front_door.run("start", "39")
       argv = @executor.calls.last.fetch(:argv)
       path = argv.fetch(argv.index("--worker-sources-config") + 1)
@@ -158,12 +165,89 @@ class BatchFrontDoorTest < Minitest::Test
       loaded = WorkloadOrchestrator::WorkerSourceConfiguration.load(path)
       assert_equal names, loaded.entries.map(&:name)
       assert_equal ["optional"] * names.length, loaded.entries.map(&:policy)
+      loaded.entries.each do |entry|
+        root, executable = entry.name == "local" ? [@low, "low"] : [@rpof, "rpof"]
+        environment = {"BUNDLE_GEMFILE" => File.join(root, "Gemfile")}
+        if entry.name == "remote"
+          environment.merge!("RPOF_STATE_ROOT" => File.join(root, "output/runpod-fleets"), "RPOF_STATE_REPO_ROOT" => root)
+        end
+        assert_equal [@env, "-u", "BUNDLE_LOCKFILE", @bundle, "exec", File.join(root, "bin", executable), "workers", "--json"], entry.source.argv
+        assert_equal environment, entry.source.environment
+        assert_equal root, entry.source.workdir
+      end
     end
+  end
+
+  # Explicit mixed and all-required mappings remain exact owner authority.
+  def test_explicit_policies_remain_authoritative
+    [%w[optional required], %w[required optional], %w[required required]].each do |policies|
+      mutate_registry { |batch| batch["worker_source_policies"] = %w[local remote].zip(policies).to_h }
+      front_door.run("start", "39")
+      argv = @executor.calls.last.fetch(:argv)
+      path = argv.fetch(argv.index("--worker-sources-config") + 1)
+      assert_equal policies, WorkloadOrchestrator::WorkerSourceConfiguration.load(path).entries.map(&:policy)
+    end
+  end
+
+  # Generating on start/resume leaves retained legacy and explicit YAML bytes
+  # untouched. Direct WLO reads still treat v0.1 as required.
+  def test_generation_preserves_retained_source_files
+    front_door.run("start", "39")
+    document = launched_worker_config
+    directory = File.join(File.dirname(@output), "worker-sources")
+    retained = ["wlo-worker-sources/v0.1", "wlo-worker-sources/v0.2"].to_h do |version|
+      previous = Marshal.load(Marshal.dump(document))
+      previous["contract_version"] = version
+      previous.fetch("sources").each do |row|
+        row["policy"] = "required"
+        row.delete("policy") if version.end_with?("v0.1")
+      end
+      bytes = YAML.dump(previous)
+      path = File.join(directory, "#{PLAN_ID}-#{Digest::SHA256.hexdigest(bytes)[0, 12]}.yml")
+      File.binwrite(path, bytes)
+      [path, bytes]
+    end
+    prepare_retained(status: "paused", jobs: [{"status" => "pending"}], paused: true)
+    before = evidence
+    front_door.run("resume", "39")
+    assert_equal before, evidence
+    retained.each do |path, bytes|
+      assert_equal %w[required required], WorkloadOrchestrator::WorkerSourceConfiguration.load(path).entries.map(&:policy)
+      assert_equal bytes, File.binread(path)
+    end
+    assert_equal %w[optional optional], launched_worker_config.fetch("sources").map { |row| row.fetch("policy") }
+  end
+
+  # Malformed rows fail at WLO's real loader without execution or file repair.
+  def test_malformed_generated_rows_are_rejected_by_wlo
+    front_door.run("start", "39")
+    original = launched_worker_config
+    [
+      ->(row) { row.delete("policy") },
+      ->(row) { row["policy"] = nil },
+      ->(row) { row["policy"] = "ignored" },
+      ->(row) { row["environment"]["BUNDLE_LOCKFILE"] = nil },
+      ->(row) { row["args"] = "workers --json" },
+      ->(row) { row["command"] = "" },
+      ->(row) { row["workdir"] = File.join(@root, "missing") },
+      ->(row) { row["extra"] = true }
+    ].each do |corrupt|
+      document = Marshal.load(Marshal.dump(original))
+      corrupt.call(document.fetch("sources").first)
+      path = File.join(@root, "malformed.yml")
+      bytes = YAML.dump(document)
+      File.binwrite(path, bytes)
+      assert_raises(WorkloadOrchestrator::Error) { WorkloadOrchestrator::WorkerSourceConfiguration.load(path) }
+      assert_equal bytes, File.binread(path)
+    end
+    assert_equal 1, @executor.calls.length
   end
 
   # Configuration errors must refuse before action-check or execution, even
   # when every declared publisher would otherwise be optional.
   def test_invalid_source_selections_and_policy_maps_refuse_before_launch
+    prepare_retained(status: "paused", jobs: [{"status" => "pending"}], paused: true)
+    before = evidence
     [
       {"worker_sources" => []},
       {"worker_sources" => %w[local local]},
@@ -174,12 +258,17 @@ class BatchFrontDoorTest < Minitest::Test
       {"worker_source_policies" => {"local" => "ignored", "remote" => "optional"}},
       {"worker_source_policies" => {"local" => nil, "remote" => "optional"}},
       {"worker_source_policies" => []},
+      {"worker_source_policies" => nil},
+      {"worker_source_policies" => false},
+      {"worker_source_policies" => "optional"},
       {"worker_sources" => [nil], "worker_source_policies" => {"local" => "optional"}}
     ].each do |changes|
       write_registry
       mutate_registry { |batch| batch.merge!(changes) }
       assert_raises(AdventureFinderWorkspace::Error, changes.inspect) { front_door.run("start", "39") }
       assert_empty @executor.calls
+      assert_equal before, evidence
+      assert_empty Dir.glob(File.join(File.dirname(@output), "worker-sources", "*"))
     end
     write_registry
     mutate_registry do |batch|
@@ -187,6 +276,7 @@ class BatchFrontDoorTest < Minitest::Test
       batch["worker_source_policies"] = {"local" => "optional", "remote" => "optional"}
     end
     assert_raises(AdventureFinderWorkspace::Error) { front_door.run("start", "39") }
+    assert_equal before, evidence
   end
 
   # Psych normally discards earlier duplicate keys. Ambiguous policy authority
@@ -202,7 +292,6 @@ class BatchFrontDoorTest < Minitest::Test
 
   # Optional availability never excuses a missing authority or publisher file.
   def test_optional_sources_keep_component_file_and_authority_refusals
-    mutate_registry { |batch| batch["worker_source_policies"] = {"local" => "optional", "remote" => "optional"} }
     [File.join(@low, "bin/low"), File.join(@low, "Gemfile"),
      File.join(@rpof, "bin/rpof"), File.join(@rpof, "Gemfile")].each do |path|
       bytes, mode = File.binread(path), File.stat(path).mode
@@ -211,6 +300,15 @@ class BatchFrontDoorTest < Minitest::Test
       assert_empty @executor.calls
       File.binwrite(path, bytes)
       File.chmod(mode, path)
+    end
+    [@low, @rpof].each do |path|
+      File.rename(path, "#{path}.retained")
+      begin
+        assert_raises(AdventureFinderWorkspace::Error) { front_door.run("start", "39") }
+        assert_empty @executor.calls
+      ensure
+        File.rename("#{path}.retained", path)
+      end
     end
     mutate_registry { |batch| batch.delete("local_workers") }
     assert_raises(AdventureFinderWorkspace::Error) { front_door.run("start", "39") }
@@ -224,7 +322,6 @@ class BatchFrontDoorTest < Minitest::Test
   def test_optional_remote_refuses_ambiguous_fleet_authority
     document = YAML.safe_load_file(@registry, aliases: false)
     batch = document.dig("contexts", "batch", "39")
-    batch["worker_source_policies"] = {"local" => "optional", "remote" => "optional"}
     batch.fetch("associated_fleets") << "B"
     other = Marshal.load(Marshal.dump(document.dig("contexts", "fleet", "A")))
     other.fetch("rpof")["repository_root"] = "other-rpof"

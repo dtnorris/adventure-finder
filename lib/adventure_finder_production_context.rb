@@ -172,7 +172,7 @@ module AdventureFinderWorkspace
       end
     end
 
-    # Validate explicit policy opt-in against the entire selected source list.
+    # Validate an explicit policy override against the explicit source selection.
     # Returns nil; incomplete/extra names or non-contract policies raise Error.
     def validate_worker_source_policies(name, context)
       policies = context.fetch("worker_source_policies")

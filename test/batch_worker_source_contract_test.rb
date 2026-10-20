@@ -64,19 +64,40 @@ class BatchWorkerSourceContractTest < Minitest::Test
     assert_includes out.string, "remote policy=optional state=fresh poll=success blocking=false"
   end
 
-  # No explicit policy opt-in remains v0.1/all-required and blocks on missing
-  # source authority despite another registry having compatible capacity.
-  def test_non_opted_in_required_source_still_blocks
-    @fixture.configure { |document| document.dig("contexts", "batch", "39").delete("worker_source_policies") }
+  # Explicit required still blocks without fresh authority. A valid empty
+  # snapshot permits healthy capacity only until its original expiry.
+  def test_explicit_required_source_blocks_until_fresh_and_after_expiry
+    @fixture.configure do |document|
+      document.dig("contexts", "batch", BatchDynamicFixture::HANDLE)["worker_source_policies"] =
+        {"local" => "optional", "remote" => "required"}
+    end
     @fixture.publish("local", [@fixture.worker("local", [@fixture.pools.first])])
     @fixture.unavailable("remote")
     set = registry_set.poll_once
-    assert_equal %w[required required], set.source_health.values.map { |row| row.fetch("policy") }
+    assert_equal %w[optional required], set.source_health.values.map { |row| row.fetch("policy") }
     assert set.dispatch_blocked?
     assert_equal ["remote"], set.blocking_sources.map { |row| row.fetch("source_name") }
     @fixture.store.clear_pause!
     report = WorkloadOrchestrator::ExecutionReport.new(plan: @fixture.plan, output: @fixture.output).document
     assert_equal "REQUIRED_WORKER_SOURCE_UNAVAILABLE", report.fetch("pool_status").first.fetch("reason")
+
+    @fixture.publish("remote", [], expires_at: @now + 10)
+    set.poll_once
+    refute set.dispatch_blocked?
+    assert_equal ["fo25-local"], assignments(set).map { |assignment| assignment.worker.registry_id }
+    original = checkpoint("remote")
+    @fixture.unavailable("remote")
+    set.poll_once
+    refute set.dispatch_blocked?
+    assert_equal original, checkpoint("remote")
+    @now += 11
+    set.poll_once
+    assert set.dispatch_blocked?
+    assert_equal "stale", set.source_health.dig("remote", "state")
+    assert_equal original, checkpoint("remote")
+    report = WorkloadOrchestrator::ExecutionReport.new(plan: @fixture.plan, output: @fixture.output, clock: -> { @now }).document
+    assert_equal "REQUIRED_WORKER_SOURCE_UNAVAILABLE", report.fetch("pool_status").first.fetch("reason")
+    assert_nil @fixture.store.metadata_for(@fixture.plan.jobs.first)
   end
 
   # Malformed, replayed, forged and stale replacements cannot create capacity
