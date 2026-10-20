@@ -8,6 +8,7 @@ require "shellwords"
 require "thread"
 require "time"
 require "yaml"
+require_relative "adventure_finder_test_result"
 
 module AdventureFinderWorkspace
   SCHEMA_VERSION = "adventurefinder-workspace/v0.1"
@@ -117,7 +118,7 @@ module AdventureFinderWorkspace
   end
 
   class Workspace
-    TestResult = Struct.new(:name, :suite, :command, :result, :elapsed, :output, keyword_init: true)
+    TestResult = Struct.new(:name, :suite, :command, :result, :elapsed, :output, :accounting, keyword_init: true)
 
     attr_reader :manifest, :root, :runner, :out, :err
 
@@ -553,30 +554,31 @@ module AdventureFinderWorkspace
 
       started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       output = nil
-      ok = if capture
-             execution = runner.shell_capture(
-               command,
-               chdir: path,
-               env: test_env
-             )
-             output = execution.stdout.to_s + execution.stderr.to_s
-             execution.success?
-           else
-             runner.shell(command, chdir: path, env: test_env)
-           end
-      elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at
-      if ok && repo["suite"] == "fast"
-        summaries, _verified, warnings = minitest_accounting(output)
-        unless warnings.empty? && summaries.any? { |counts| counts[0].positive? } &&
-            summaries.all? { |counts| counts[2..3].all?(&:zero?) }
-          output = output.to_s + "\nERROR: required AFDP fast accounting evidence missing or invalid\n"
-          ok = false
+      accounting = nil
+      execute = lambda do |result_environment = {}|
+        if capture
+          execution = runner.shell_capture(command, chdir: path, env: test_env.merge(result_environment))
+          output = execution.stdout.to_s + execution.stderr.to_s
+          execution.success?
+        else
+          runner.shell(command, chdir: path, env: test_env.merge(result_environment))
         end
       end
-      if ok && repo["suite"] == "integration" && !integration_output_valid?(output)
-        output = output.to_s + "\nERROR: required AFDP integration completion/accounting evidence missing or invalid\n"
-        ok = false
-      end
+      ok = if name == "af-data-pipeline"
+             AdventureFinderTestResult.channel(repo.fetch("suite")) do |environment, read_result|
+               process_ok = execute.call(environment)
+               begin
+                 accounting = read_result.call
+                 process_ok && accounting["status"] == "passed"
+               rescue AdventureFinderTestResult::InvalidResult => error
+                 output = output.to_s + "\nERROR: required AFDP #{repo['suite']} accounting evidence missing or invalid: #{error.message}\n"
+                 false
+               end
+             end
+           else
+             execute.call
+           end
+      elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at
 
       TestResult.new(
         name: name,
@@ -584,7 +586,8 @@ module AdventureFinderWorkspace
         command: command,
         result: ok ? :pass : :fail,
         elapsed: elapsed,
-        output: output
+        output: output,
+        accounting: accounting
       )
     end
 
@@ -599,7 +602,7 @@ module AdventureFinderWorkspace
     end
 
     # Reports suite outcomes/counts separately from cumulative physical checkout
-    # timing and workspace wall time, using only this invocation's captured output.
+    # timing and workspace wall time. AFDP uses this invocation's validated result.
     def print_test_summary(results, workspace_elapsed:, jobs:)
       out.puts
       out.puts "=== AdventureFinder cross-repo test summary ==="
@@ -614,6 +617,9 @@ module AdventureFinderWorkspace
       minitest_totals = aggregate_minitest_totals(results)
 
       out.puts "#{passed}/#{results.length} suites passed."
+      if results.any? { |result| result.name == "af-data-pipeline" }
+        out.puts "AFDP counts: validated observed invocations; integration includes functional and full coverage runs."
+      end
       results.group_by(&:name).each do |name, suites|
         elapsed = suites.sum { |result| result.elapsed || 0.0 }
         out.puts format("Repository cumulative time: %s %.2fs", name, elapsed)
@@ -681,21 +687,20 @@ module AdventureFinderWorkspace
       [summaries, verified, warnings]
     end
 
-    # Requires the public integration completion marker and reconciled functional
-    # and full-coverage runs from this capture. Returns false for absent evidence.
-    def integration_output_valid?(output)
-      summaries, verified, warnings = minitest_accounting(output)
-      warnings.empty? && verified.count("integration functional") == 1 &&
-        verified.count("all coverage") == 1 &&
-        summaries.all? { |counts| counts[2..3].all?(&:zero?) } &&
-        output.to_s.scan(/^Integration validation finished in \d+\.\d{3}s\.$/).length == 1
-    end
-
     # Sums independent executed Minitest invocations from suite results, returning
     # exact observed totals and emitting warnings for unavailable/invalid counts.
     def aggregate_minitest_totals(results)
       totals = {runs: 0, assertions: 0, failures: 0, errors: 0, skips: 0}
       results.each do |result|
+        if result.name == "af-data-pipeline"
+          if result.accounting
+            counts = result.accounting.values_at(*AdventureFinderTestResult::COUNTERS)
+            totals.keys.each_with_index { |key, column| totals[key] += counts[column] }
+          elsif ![:missing, :not_run].include?(result.result)
+            err.puts "WARNING #{test_label(result)}: validated observed test counts unknown; excluded from totals"
+          end
+          next
+        end
         summaries, _verified, warnings = minitest_accounting(result.output)
         warnings.each { |warning| err.puts "WARNING #{test_label(result)}: #{warning}" }
         if summaries.empty? && ![:missing, :not_run].include?(result.result)
