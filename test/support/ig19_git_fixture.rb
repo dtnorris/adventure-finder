@@ -41,6 +41,17 @@ module Ig19GitFixture
     stdout
   end
 
+  # Run a sealed-fixture workflow without Git's optional index-cache refreshes.
+  # Returns the block's value and restores the caller's setting even on errors.
+  # Required Git writes remain possible and are still rejected by Catalog#verify!.
+  def self.with_read_only_git
+    previous = ENV["GIT_OPTIONAL_LOCKS"]
+    ENV["GIT_OPTIONAL_LOCKS"] = "0"
+    yield
+  ensure
+    ENV["GIT_OPTIONAL_LOCKS"] = previous
+  end
+
   # Use the owner's unchanged XLSX recipe with a fixed ZIP timestamp. Does not
   # change workbook XML, scores, public authority or application clocks.
   def self.with_fixed_zip_time(&block)

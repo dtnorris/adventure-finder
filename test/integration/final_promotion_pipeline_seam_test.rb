@@ -183,7 +183,15 @@ class FinalPromotionPipelineSeamTest < Minitest::Test
       @prepare_manifest_statuses = []
     end
 
+    # Dispatch the supplied component argv/cwd within the sealed Git interval.
+    # Returns the public result; unexpected commands and owner errors propagate.
     def capture(argv, chdir:)
+      Ig19GitFixture.with_read_only_git { dispatch(argv, chdir:) }
+    end
+
+    # Execute the existing in-process component adapter and return its streams
+    # and exit status; invalid roots/commands and owner exceptions propagate.
+    def dispatch(argv, chdir:)
       raise "unexpected pipeline root" unless File.expand_path(chdir) == File.expand_path(@pipeline_root)
 
       script_index = File.basename(argv.first).start_with?("ruby") ? 1 : 0

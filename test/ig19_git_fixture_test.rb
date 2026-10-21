@@ -92,4 +92,72 @@ class Ig19GitFixtureTest < Minitest::Test
       assert_raises(RuntimeError) { fixture.verify! }
     end
   end
+
+  # Native status must observe both sealed histories without refreshing their
+  # index bytes. The scoped environment returns values and restores on errors.
+  def test_read_only_git_scope_preserves_status_bytes_and_restores_environment
+    previous = ENV["GIT_OPTIONAL_LOCKS"]
+    [nil, "1"].each do |setting|
+      ENV["GIT_OPTIONAL_LOCKS"] = setting
+      assert_equal :result, Ig19GitFixture.with_read_only_git { :result }
+      assert_equal [setting], [ENV["GIT_OPTIONAL_LOCKS"]]
+      error = assert_raises(RuntimeError) do
+        Ig19GitFixture.with_read_only_git { raise "original workflow error" }
+      end
+      assert_equal "original workflow error", error.message
+      assert_equal [setting], [ENV["GIT_OPTIONAL_LOCKS"]]
+    end
+    %w[standing promotion].each do |name|
+      fixture = Ig19GitFixture.load(name, File.join(@temporary, name))
+      Ig19GitFixture.with_read_only_git do
+        stdout, stderr, status = Open3.capture3("git", "-C", fixture.root,
+          "status", "--porcelain=v1", "--", "PROJECT_STATE.yml", binmode: true)
+        assert status.success?, stderr
+        assert_equal "".b, stdout
+        assert fixture.verify!
+      end
+      assert fixture.close
+    end
+  ensure
+    ENV["GIT_OPTIONAL_LOCKS"] = previous
+  end
+
+  # Disabling optional refreshes must not excuse changed bytes, deleted metadata
+  # or added files/directories. All corruption stays in extracted fixture copies.
+  def test_read_only_git_scope_still_rejects_prohibited_metadata_mutations
+    paths = %w[HEAD refs/heads/main index config]
+    object = JSON.parse(File.binread(File.join(Ig19GitFixture::DIRECTORY, "standing.json")))
+      .fetch("files").keys.find { |path| path.start_with?(".git/objects/") }.delete_prefix(".git/")
+    Ig19GitFixture.with_read_only_git do
+      fixture = Ig19GitFixture.load("standing", File.join(@temporary, "changed-and-deleted"))
+      (paths + [object]).each do |relative|
+        path = File.join(fixture.root, ".git", relative)
+        original = File.binread(path)
+        %w[changed deleted].each do |kind|
+          if kind == "changed"
+            bytes = original.dup
+            bytes.setbyte(0, bytes.getbyte(0) ^ 1)
+            File.binwrite(path, bytes)
+          else
+            File.unlink(path)
+          end
+          error = assert_raises(RuntimeError) { fixture.verify! }
+          assert_equal "IG-19 forbidden Git metadata change", error.message
+        ensure
+          File.binwrite(path, original)
+        end
+      end
+      assert fixture.verify!
+      %w[added-file added-directory deleted-directory].each do |kind|
+        fixture = Ig19GitFixture.load("standing", File.join(@temporary, kind))
+        case kind
+        when "added-file" then File.binwrite(File.join(fixture.root, ".git/unexpected"), "\x00\xff".b)
+        when "added-directory" then FileUtils.mkdir_p(File.join(fixture.root, ".git/unexpected"))
+        else FileUtils.remove_entry(File.dirname(File.join(fixture.root, ".git", object)))
+        end
+        error = assert_raises(RuntimeError) { fixture.verify! }
+        assert_equal "IG-19 forbidden Git metadata change", error.message
+      end
+    end
+  end
 end

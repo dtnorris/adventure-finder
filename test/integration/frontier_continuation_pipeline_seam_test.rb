@@ -220,7 +220,7 @@ class FrontierContinuationPipelineSeamTest < Minitest::Test
         "original_package_inputs_path" => inputs, "original_package_path" => package,
         "rubric" => {"id" => "Synthetic rubric", "path" => rubric, **AfDataPipeline::StandingBulkScorePolicy.file_binding(rubric)},
         "successor_version" => "0.3"})
-      yield root, owner, inputs, package, request, catalog
+      Ig19GitFixture.with_read_only_git { yield root, owner, inputs, package, request, catalog }
     ensure
       catalog&.close
       caches&.zip(previous)&.each { |cache, saved| cache.replace(saved) }
