@@ -78,6 +78,78 @@ class Fo22dEvidenceReviewCompositionTest < Minitest::Test
     assert_includes stdout, "choose ACCEPT/HOLD/REJECT"
     refute_match(/assessment accepted|canonical applied|AMC applied/i, stdout)
     assert_equal before, canonical_bytes
+    refute_path_exists File.join(@pipeline, "output")
+    refute_path_exists File.join(@pipeline, "audits")
+  end
+
+  # Exercises the unset-selector compatibility route through both real owners.
+  # Returns no value; unexpected process/fixture errors fail the test.
+  def test_unset_data_root_preserves_legacy_review_destinations
+    select_review_storage(nil)
+    stdout, stderr, status = run_front_door
+    assert status.success?, stderr
+    assert_includes stdout, "Review package: #{@review_dir}"
+    assert_includes stdout, "Editorial ledger: #{@audit_dir}"
+    assert_path_exists @ledger_path
+  end
+
+  # Invalid selectors must leave the complete synthetic workspace unchanged.
+  # Restores valid storage and proves recovery; fixture/process errors propagate.
+  def test_invalid_private_roots_refuse_without_writes_and_valid_root_recovers
+    _stdout, stderr, status = run_afw
+    assert status.success?, stderr
+    file_root = File.join(@root, "not-a-directory")
+    File.binwrite(file_root, "sentinel")
+    link_root = File.join(@root, "linked-data")
+    File.symlink(@data_root, link_root)
+    readonly_root = File.join(@root, "readonly-data")
+    FileUtils.mkdir_p(readonly_root)
+    File.chmod(0o555, readonly_root)
+    invalid = {
+      "" => /empty|traversal/,
+      "relative-data" => /existing absolute directory/,
+      File.join(@root, "missing") => /existing absolute directory/,
+      file_root => /existing absolute directory/,
+      link_root => /symlink/,
+      File.join(@data_root, "..", "private-pipeline-data") => /traversal/,
+      @pipeline => /overlaps executable code/,
+      @root => /overlaps executable code/,
+      readonly_root => /unwritable/
+    }
+    invalid.each do |data_root, diagnostic|
+      before = storage_inventory
+      _stdout, stderr, status = run_front_door(data_root:)
+      refute status.success?, "accepted invalid private root #{data_root.inspect}"
+      assert_match diagnostic, stderr
+      assert_equal before, storage_inventory, "invalid root changed durable workspace"
+    end
+    _stdout, stderr, status = run_front_door
+    assert status.success?, stderr
+    assert_path_exists @ledger_path
+  ensure
+    File.chmod(0o755, readonly_root) if readonly_root && File.directory?(readonly_root)
+  end
+
+  # Both deterministic destination branches reject escaping links before writes.
+  # Returns no value; fixture/process errors propagate.
+  def test_symlinked_review_or_audit_destination_refuses_without_writes
+    _stdout, stderr, status = run_afw
+    assert status.success?, stderr
+    outside = File.join(@root, "outside-data")
+    FileUtils.mkdir_p(outside)
+    File.binwrite(File.join(outside, "sentinel"), "unchanged")
+    %w[output audits].each do |branch|
+      link = File.join(@data_root, branch)
+      File.symlink(outside, link)
+      before = storage_inventory
+      _stdout, stderr, status = run_front_door
+      refute status.success?
+      assert_match(/symlink/, stderr)
+      assert_equal before, storage_inventory
+      File.unlink(link)
+    end
+    _stdout, stderr, status = run_front_door
+    assert status.success?, stderr
   end
 
   def test_superseded_attempt_artifacts_are_not_current_and_attempt_two_is_bound
@@ -286,6 +358,7 @@ class Fo22dEvidenceReviewCompositionTest < Minitest::Test
     receipt_before = File.binread(@receipt_path)
     package_before = package_bytes
     ledger_before = File.binread(@ledger_path)
+    inventory_before = storage_inventory
 
     second_stdout, second_stderr, second_status = run_front_door
     assert second_status.success?, second_stderr
@@ -293,6 +366,7 @@ class Fo22dEvidenceReviewCompositionTest < Minitest::Test
     assert_equal package_before, package_bytes
     assert_equal ledger_before, File.binread(@ledger_path)
     assert_equal canonical_before, canonical_bytes
+    assert_equal inventory_before, storage_inventory
     assert_equal first_stdout[/AFW receipt ID: ([0-9a-f]{64})/, 1], second_stdout[/AFW receipt ID: ([0-9a-f]{64})/, 1]
     assert_equal first_stdout[/Review package ID: ([0-9a-f]{64})/, 1], second_stdout[/Review package ID: ([0-9a-f]{64})/, 1]
     assert_includes second_stdout, "Package reused: true"
@@ -351,9 +425,9 @@ class Fo22dEvidenceReviewCompositionTest < Minitest::Test
     @source_file = File.join(@afw, "input/source.md")
     @output = File.join(@afw, "output/workloads/batch/results", JOB_ID)
     @receipt_path = File.join(@afw, "output/workloads/batch/evidence/#{JOB_ID}.json")
-    @review_dir = File.join(@pipeline, "output/adventure-finder-review", WORKLOAD_ID, JOB_ID)
-    @audit_dir = File.join(@pipeline, "audits/adventure-finder-review", WORKLOAD_ID, JOB_ID)
-    @ledger_path = File.join(@audit_dir, "editorial_decisions.csv")
+    data_root = File.join(@root, "private-pipeline-data")
+    FileUtils.mkdir_p(data_root)
+    select_review_storage(data_root)
 
     File.binwrite(@catalog_path, "catalog\n")
     File.binwrite(@qualification_path, "qualification\n")
@@ -511,9 +585,11 @@ class Fo22dEvidenceReviewCompositionTest < Minitest::Test
     end
   end
 
-  def run_front_door
+  # Runs the public CLI with an explicit DPS-05 selector (nil unsets it).
+  # Returns stdout/stderr/process status; OS subprocess errors propagate.
+  def run_front_door(data_root: @data_root)
     Open3.capture3(
-      { "AF_PROJECT_ROOT" => @root }, RbConfig.ruby,
+      { "AF_PROJECT_ROOT" => @root, "AF_DATA_PIPELINE_DATA_ROOT" => data_root }, RbConfig.ruby,
       File.join(@adventure_finder_source, "bin", "af-review"),
       "prepare", "39", "0001-combat", "--root", @root,
       "--registry", @registry_path, "--manifest", @manifest_path
@@ -529,6 +605,7 @@ class Fo22dEvidenceReviewCompositionTest < Minitest::Test
 
   def run_pipeline
     Open3.capture3(
+      { "AF_DATA_PIPELINE_DATA_ROOT" => @data_root },
       RbConfig.ruby, File.join(@pipeline, "bin", "af-data"), "prepare-review", @receipt_path,
       "--afw-root", @afw, "--review-dir", @review_dir, "--audit-dir", @audit_dir,
       chdir: @pipeline
@@ -602,6 +679,29 @@ class Fo22dEvidenceReviewCompositionTest < Minitest::Test
 
   def package_bytes
     Dir.children(@review_dir).sort.to_h { |name| [name, File.binread(File.join(@review_dir, name))] }
+  end
+
+  # Selects only synthetic review/audit paths; nil exercises legacy code storage.
+  # Returns the ledger path and raises no owner validation errors itself.
+  def select_review_storage(data_root)
+    @data_root = data_root
+    storage_root = data_root || @pipeline
+    @review_dir = File.join(storage_root, "output/adventure-finder-review", WORKLOAD_ID, JOB_ID)
+    @audit_dir = File.join(storage_root, "audits/adventure-finder-review", WORKLOAD_ID, JOB_ID)
+    @ledger_path = File.join(@audit_dir, "editorial_decisions.csv")
+  end
+
+  # Inventories synthetic paths without following symlinks. Returns relative
+  # paths mapped to type/mode and file digest/mtime or link target; IO errors
+  # propagate. Directory mtimes are omitted because owner scratch work is removed.
+  def storage_inventory
+    Dir.glob(File.join(@root, "**", "*"), File::FNM_DOTMATCH).sort.to_h do |path|
+      stat = File.lstat(path)
+      value = [stat.ftype, stat.mode]
+      value += [digest(path), stat.mtime.to_r.to_s] if stat.file?
+      value << File.readlink(path) if stat.symlink?
+      [Pathname.new(path).relative_path_from(Pathname.new(@root)).to_s, value]
+    end
   end
 
   def digest(path)

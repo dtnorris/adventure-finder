@@ -170,6 +170,31 @@ class ReviewFrontDoorTest < Minitest::Test
     end
   end
 
+  # The selected DPS-05 destination changes storage only; returns no value and
+  # propagates unexpected fixture/prepare errors after restoring the environment.
+  def test_private_data_root_keeps_executable_and_working_directory_at_code_root
+    previous = ENV["AF_DATA_PIPELINE_DATA_ROOT"]
+    Dir.mktmpdir do |root|
+      paths = build_workspace(root)
+      data_root = File.join(root, "private-data")
+      FileUtils.mkdir_p(data_root)
+      ENV["AF_DATA_PIPELINE_DATA_ROOT"] = data_root
+      runner = FakeRunner.new(receipt_path: paths.fetch(:receipt_path), receipt_id: "a" * 64)
+      door, = front_door(paths, runner)
+
+      assert_equal 0, door.prepare("39", "0941-seriousness")
+      pipeline_call = runner.calls.last
+      assert_equal paths.fetch(:pipeline), pipeline_call.fetch(:chdir)
+      assert_equal File.join(paths.fetch(:pipeline), "bin", "af-data"), pipeline_call.fetch(:argv).first
+      assert_equal File.join(data_root, "output", "adventure-finder-review", paths.fetch(:workload_id),
+                             "batch039-adv0941-seriousness"), pipeline_call.fetch(:argv)[6]
+      assert_equal File.join(data_root, "audits", "adventure-finder-review", paths.fetch(:workload_id),
+                             "batch039-adv0941-seriousness"), pipeline_call.fetch(:argv)[8]
+    end
+  ensure
+    ENV["AF_DATA_PIPELINE_DATA_ROOT"] = previous
+  end
+
   def test_registered_plan_hash_mismatch_fails_before_delegation
     Dir.mktmpdir do |root|
       paths = build_workspace(root)

@@ -212,6 +212,16 @@ and [the pipeline's current runbook](https://github.com/dtnorris/af-data-pipelin
 bin/af-review prepare 39 0946-openness
 ```
 
+Set `AF_DATA_PIPELINE_DATA_ROOT` to an existing absolute private directory to
+place manual review packages under `output/adventure-finder-review/PLAN/JOB`
+and durable ledgers under `audits/adventure-finder-review/PLAN/JOB` there.
+This consumes the pipeline's DPS-05 storage contract: invalid, overlapping,
+unwritable or symlinked destinations fail closed without fallback. Unset keeps
+the compatibility destinations in the pipeline checkout. The manifest and
+`--root` still locate executable code; AFDP runs from that code checkout.
+AFW retains ownership of evidence receipts. Selecting a root does not migrate
+existing packages or ledgers; retain the same selection when replaying review.
+
 AdventureFinder resolves the job and composes AFW evidence binding with pipeline
 review preparation. AFW validates the scoring receipt; pipeline creates/reuses
 the package and reports the existing ledger, counts and next human decision.

@@ -33,6 +33,10 @@ module AdventureFinderWorkspace
       @out = out
     end
 
+    # Prepares review for registered batch/job handles and returns exit status 0.
+    # Uses DPS-05's optional private data root for review/audit destinations;
+    # AFDP owns destination validation. Raises Error for invalid context,
+    # evidence, storage or conflicting durable artifacts reported by components.
     def prepare(batch_handle, job_handle)
       context = verified_batch_context(batch_handle)
       plan = load_frozen_plan(context)
@@ -45,8 +49,9 @@ module AdventureFinderWorkspace
       receipt_path = bind_evidence(context, plan_id, job_id)
       receipt_id = receipt_identity(receipt_path)
       pipeline_root = pipeline_repository_root
-      review_dir = File.join(pipeline_root, "output", "adventure-finder-review", plan_id, job_id)
-      audit_dir = File.join(pipeline_root, "audits", "adventure-finder-review", plan_id, job_id)
+      storage_root = ENV.fetch("AF_DATA_PIPELINE_DATA_ROOT", pipeline_root)
+      review_dir = File.join(storage_root, "output", "adventure-finder-review", plan_id, job_id)
+      audit_dir = File.join(storage_root, "audits", "adventure-finder-review", plan_id, job_id)
       pipeline_output = prepare_review_package(
         pipeline_root:, receipt_path:, afw_root:, review_dir:, audit_dir:
       )
