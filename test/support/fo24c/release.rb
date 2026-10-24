@@ -119,7 +119,17 @@ class Fo24cRelease < Fo22dEvidenceReviewCompositionTest
     assert_equal @wlo, argv[argv.index("--output") + 1]
     sources = YAML.safe_load_file(argv[argv.index("--worker-sources-config") + 1])
     assert_equal ["local"], sources.fetch("sources").map { |row| row.fetch("name") }
-    assert_equal File.join(@root, "local-ollama-workers/bin/low"), sources.dig("sources", 0, "args", 1)
+    # Check the complete component-bundle launch contract, including removal
+    # of an inherited lockfile before LOW's own bundle is selected.
+    local_source = sources.fetch("sources").fetch(0)
+    local_root = File.join(@root, "local-ollama-workers")
+    assert_equal "env", File.basename(local_source.fetch("command"))
+    assert_equal ["-u", "BUNDLE_LOCKFILE", RbConfig.ruby, "exec",
+                  File.join(local_root, "bin/low"), "workers", "--json"],
+                 local_source.fetch("args")
+    assert_equal({"BUNDLE_GEMFILE" => File.join(local_root, "Gemfile")},
+                 local_source.fetch("environment"))
+    assert_equal local_root, local_source.fetch("workdir")
     configured = W::WorkerSourceConfiguration.load(argv[argv.index("--worker-sources-config") + 1])
     entry = configured.entries.fetch(0)
     # Reuse WLO's validated command-source transport seam; no owner selection
@@ -210,6 +220,7 @@ class Fo24cRelease < Fo22dEvidenceReviewCompositionTest
   end
 
   def test_context_unknown_ambiguous_and_frozen_mismatch_fail_closed
+    assert_review_root_restoration
     registry = context_registry
     %w[batch fleet].each { |type| assert_raises(AdventureFinderWorkspace::Error) { registry.resolve(type, "unknown") } }
     resolver = AdventureFinderWorkspace::JobHandleResolver.load(@plan_path)
@@ -502,12 +513,19 @@ class Fo24cRelease < Fo22dEvidenceReviewCompositionTest
   end
 
   class ReviewCommands
+    # Carries the fixture-selected root into minimal guarded child environments.
+    # A nil root preserves the legacy unset selector; capture errors propagate.
+    def initialize(data_root:)
+      @data_root = data_root
+    end
+
     def capture(_environment, argv, chdir:)
       executable = File.basename(argv.first)
       raise "unexpected review command" unless %w[afw-bind-scoring-evidence af-data].include?(executable)
       command = [RbConfig.ruby, *argv]
       guard = File.join(ENV.fetch("AF_FO24C_WORKSPACE_ROOT"), "workload-orchestrator/test/acceptance/fo24a/offline_guard.rb")
-      env = { "PATH" => File.dirname(RbConfig.ruby), "RUBYOPT" => "-r#{guard}" }
+      env = { "PATH" => File.dirname(RbConfig.ruby), "RUBYOPT" => "-r#{guard}",
+              "AF_DATA_PIPELINE_DATA_ROOT" => @data_root }
       out, err, status = Fo24aOfflineGuard.permit(command) do
         Timeout.timeout(20) { Open3.capture3(env, *command, chdir: chdir, unsetenv_others: true) }
       end
@@ -515,18 +533,59 @@ class Fo24cRelease < Fo22dEvidenceReviewCompositionTest
     end
   end
 
+  # Runs the real front door with the fixture root and restores ambient ENV,
+  # including an unset or empty selector, even when owner validation raises.
+  def with_review_data_root(data_root = @data_root)
+    previous = ENV["AF_DATA_PIPELINE_DATA_ROOT"]
+    ENV["AF_DATA_PIPELINE_DATA_ROOT"] = data_root
+    yield
+  ensure
+    ENV["AF_DATA_PIPELINE_DATA_ROOT"] = previous
+  end
+
+  # Verifies selected/unset roots and exact restoration on return and exception.
+  # Uses only synthetic selectors; no owner operation runs with these sentinels.
+  def assert_review_root_restoration
+    previous = ENV["AF_DATA_PIPELINE_DATA_ROOT"]
+    [nil, "", "synthetic-ambient-root"].each do |ambient|
+      ENV["AF_DATA_PIPELINE_DATA_ROOT"] = ambient
+      [@data_root, nil].each do |selected|
+        observed = with_review_data_root(selected) { ENV["AF_DATA_PIPELINE_DATA_ROOT"] }
+        assert_equal [selected], [observed]
+        assert_equal [ambient], [ENV["AF_DATA_PIPELINE_DATA_ROOT"]]
+        error = assert_raises(RuntimeError) do
+          with_review_data_root(selected) do
+            assert_equal [selected], [ENV["AF_DATA_PIPELINE_DATA_ROOT"]]
+            raise "synthetic review refusal"
+          end
+        end
+        assert_equal "synthetic review refusal", error.message
+        assert_equal [ambient], [ENV["AF_DATA_PIPELINE_DATA_ROOT"]]
+      end
+    end
+  ensure
+    ENV["AF_DATA_PIPELINE_DATA_ROOT"] = previous
+  end
+
   def prepare_review
+    previous = ENV.to_h
     out = StringIO.new
     front = AdventureFinderWorkspace::ReviewFrontDoor.new(registry_path: @registry_path,
-      manifest_path: @manifest_path, workspace_root: @root, out: out, component_runner: ReviewCommands.new)
-    assert_equal 0, front.prepare("39", "0001-combat")
+      manifest_path: @manifest_path, workspace_root: @root, out: out,
+      component_runner: ReviewCommands.new(data_root: @data_root))
+    with_review_data_root do
+      assert_equal [@data_root], [ENV["AF_DATA_PIPELINE_DATA_ROOT"]]
+      assert_equal 0, front.prepare("39", "0001-combat")
+    end
     out.string
+  ensure
+    assert_equal previous, ENV.to_h
   end
 
   def assert_pipeline_refuses
     argv = [File.join(@pipeline, "bin/af-data"), "prepare-review", @receipt_path, "--afw-root", @afw,
       "--review-dir", @review_dir, "--audit-dir", @audit_dir]
-    result = ReviewCommands.new.capture({}, argv, chdir: @pipeline)
+    result = ReviewCommands.new(data_root: @data_root).capture({}, argv, chdir: @pipeline)
     refute result.status.success?
     assert_match(/mismatch|digest/, result.stderr)
   end

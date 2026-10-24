@@ -41,12 +41,13 @@ module AdventureFinderWorkspace
 
     class CommandRunner
       class Handle
-        attr_reader :pid
+        attr_reader :pid, :output
 
-        def initialize(pid:, reader:, thread:)
+        def initialize(pid:, reader:, thread:, output: +"")
           @pid = pid
           @reader = reader
           @thread = thread
+          @output = output
           @status = nil
         end
 
@@ -85,15 +86,19 @@ module AdventureFinderWorkspace
           out: writer, err: writer
         )
         writer.close
+        output = +""
         thread = Thread.new do
           loop do
-            out.write(reader.readpartial(4096))
+            chunk = reader.readpartial(4096)
+            # Retain only a bounded prefix for exact launch-refusal diagnosis.
+            output << chunk.byteslice(0, 4096 - output.bytesize) if output.bytesize < 4096
+            out.write(chunk)
             out.flush
           end
         rescue EOFError
           nil
         end
-        Handle.new(pid:, reader:, thread:)
+        Handle.new(pid:, reader:, thread:, output:)
       rescue SystemCallError
         writer&.close unless writer&.closed?
         reader&.close unless reader&.closed?
@@ -163,7 +168,11 @@ module AdventureFinderWorkspace
       paths = validate_binding!(operation_id, capability_plan, intent)
       with_coordination_lock(paths) do
         prepare_files!(capability_plan, intent, paths)
+        resume_refused_since = nil
         loop do
+          if resume_refused_since && monotonic_now - resume_refused_since >= @observation_timeout
+            fail_with("LOCAL_TRANSITION_GATE", "WLO scoped resume remained blocked by execution-lock contention")
+          end
           probe = action_check(paths, "run")
           report = probe.fetch("execution_status") ? execution_report(paths) : nil
           return finish_complete(intent, capability_plan, paths, report) if report&.fetch("status") == "completed"
@@ -178,7 +187,7 @@ module AdventureFinderWorkspace
             fail_with("OPERATOR_PAUSE", "retained transition has no verifiable outstanding pause authority")
           end
           if report&.fetch("paused") && !report.fetch("executor_active") &&
-             state.fetch("phase") == "draining" && owned_pause?(report, state)
+             (state.fetch("phase") == "draining" || resume_refused_since) && owned_pause?(report, state)
             observed = demands(paths, capability_plan)
             unless drained?(observed)
               fail_with("LOCAL_TRANSITION_GATE", "persisted coordinator drain is not publicly drained")
@@ -196,7 +205,11 @@ module AdventureFinderWorkspace
               fail_with("OPERATOR_PAUSE", "WLO operator pause is not yet publicly drained and inactive")
             end
           end
-          if action.fetch("reason") == "executor_active"
+          if action.fetch("reason") == "executor_active" || (resume_refused_since && report&.fetch("executor_active"))
+            if resume_refused_since
+              @sleeper.call(@poll_interval)
+              next
+            end
             phase = %w[draining resuming].include?(state.fetch("phase")) ? state.fetch("phase") : "running"
             state = persist_state(paths, intent, state.merge("phase" => phase))
             outcome = monitor(paths, capability_plan, intent, state, nil)
@@ -219,7 +232,15 @@ module AdventureFinderWorkspace
           token = report&.fetch("paused") && owned_pause?(report, state) ? state["pause_token"] : nil
           handle = spawn_wlo(paths, command, pause_token: token, manual_resume: continue_operator_pause)
           outcome = monitor(paths, capability_plan, intent, state, handle, manual_resume: continue_operator_pause)
-          next if outcome == :drained
+          if outcome == :resume_refused
+            resume_refused_since ||= monotonic_now
+            @sleeper.call(@poll_interval)
+            next
+          end
+          if outcome == :drained
+            resume_refused_since = nil
+            next
+          end
           return outcome
         end
       end
@@ -229,7 +250,8 @@ module AdventureFinderWorkspace
 
     # Observe public control and execution facts; only this invocation's explicit
     # manual authorization can wait for a manual resume to clear an operator hold.
-    # Returns completion/drain, or raises a bounded execution/ownership gate.
+    # Returns completion/drain or an exact scoped-launch refusal for drive to
+    # recheck within one budget; other failures raise an execution/ownership gate.
     def monitor(paths, capability_plan, intent, state, handle, manual_resume: false)
       unknown_since = nil
       install_forwarding_handlers(handle) do
@@ -243,7 +265,18 @@ module AdventureFinderWorkspace
             if TERMINAL_STATUSES.include?(report.fetch("status"))
               fail_with("WLO_EXECUTION_GATE", "WLO exited #{status_detail(process_status)} with #{report.fetch('status')}")
             end
+            # WLO's nonblocking launch lock also contends with public readers.
+            # Only its exact pre-dispatch refusal, with our sole hold still
+            # outstanding, can return to drive's bounded action/ownership checks.
+            if !manual_resume && state.fetch("phase") == "resuming" && report.fetch("paused") && owned_pause?(report, state) &&
+               process_status.exitstatus == 1 && handle.respond_to?(:output) &&
+               handle.output == "ERROR: execution is active; wait for the runner to exit before retrying or resuming\n"
+              return :resume_refused
+            end
             if report.fetch("paused") && !report.fetch("executor_active")
+              if owned_pause?(report, state) && !process_status.success?
+                fail_with("WLO_EXECUTION_GATE", "WLO exited #{status_detail(process_status)} with #{report.fetch('status')}")
+              end
               if state.fetch("phase") == "draining" && owned_pause?(report, state)
                 demands = demands(paths, capability_plan)
                 unless drained?(demands)
@@ -251,6 +284,9 @@ module AdventureFinderWorkspace
                 end
                 persist_state(paths, intent, state.merge("phase" => "drained"))
                 return :drained
+              end
+              if owned_pause?(report, state)
+                fail_with("LOCAL_TRANSITION_GATE", "WLO resume exited without releasing the coordinator-owned drain")
               end
               fail_with("OPERATOR_PAUSE", "WLO is operator-paused; continuing requires explicit operator authority")
             end

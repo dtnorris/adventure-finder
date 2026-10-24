@@ -80,9 +80,17 @@ class LocalIngestExecutionTest < Minitest::Test
       result
     end
 
+    # Wait for this trace's first payload before startup demand observations.
+    # Returns the spawn handle; a missing start marker raises Timeout::Error.
     def spawn(environment, *argv, **options)
       @calls << argv
-      super
+      handle = super
+      if File.basename(argv.first) == "wlo" && argv[1] == "run"
+        Timeout.timeout(10) do
+          sleep 0.005 until File.file?(File.join(@afw, "barriers/a-1.started"))
+        end
+      end
+      handle
     end
 
     private
@@ -204,6 +212,123 @@ class LocalIngestExecutionTest < Minitest::Test
     end
   end
 
+  # Hold a real public action-check inside its shared-lock snapshot while AF
+  # launches scoped resume. Queues establish ordering; timeout only bounds bugs.
+  class ContendedResumeRunner < PublicReadRunner
+    attr_reader :boundary, :resume_launches
+
+    # Bind the observer to the same synthetic plan/workdir/output as AF.
+    def initialize(wlo:, plan:, afw:, output:, remain_active: false)
+      @wlo, @plan, @afw, @output = wlo, plan, afw, output
+      @injected = false
+      @remain_active = remain_active
+      @resume_launches = 0
+    end
+
+    # Release only the test executor owner and join it after assertions.
+    def release_executor
+      @executor_release << true if @executor_release
+      @executor&.value
+    end
+
+    # Retain exact public calls with bearer arguments replaced by fingerprints.
+    def capture(environment, *argv, chdir:)
+      record_command("capture", environment, argv, chdir)
+      super
+    end
+
+    # Return a real reaped child after a proven read-lock refusal. Other launches
+    # wait for their first output, avoiding incidental launch/observer races.
+    def spawn(environment, *argv, **options)
+      record_command("spawn", environment, argv, options.fetch(:chdir))
+      @resume_launches += 1 if argv.include?("--release-pause")
+      unless argv.include?("--release-pause") && !@injected
+        ready = Queue.new
+        destination = options.fetch(:out)
+        writer = Object.new
+        writer.define_singleton_method(:write) { |bytes| destination.write(bytes); ready << true }
+        writer.define_singleton_method(:flush) { destination.flush }
+        handle = super(environment, *argv, **options.merge(out: writer))
+        Timeout.timeout(10) { ready.pop }
+        return handle
+      end
+      @injected = true
+      entered, release = Queue.new, Queue.new
+      plan = WorkloadOrchestrator::Plan.load(@plan)
+      original_sha = plan.method(:sha256)
+      first = true
+      plan.define_singleton_method(:sha256) do
+        if first
+          first = false
+          entered << true
+          release.pop
+        end
+        original_sha.call
+      end
+      store = WorkloadOrchestrator::ExecutionStore.new(plan: plan, workdir: @afw, output_dir: @output)
+      observer = Thread.new { store.action_check("resume") }
+      Timeout.timeout(10) { entered.pop }
+      # Also retain separated byte streams from the identical public launch.
+      record_command("direct_capture", environment, argv, options.fetch(:chdir))
+      stdout, stderr, status = Open3.capture3(environment, *argv, chdir: options.fetch(:chdir))
+      stream = StringIO.new
+      handle = super(environment, *argv, **options.merge(out: stream))
+      child_status = Timeout.timeout(10) { handle.wait }
+      options.fetch(:out).write(stream.string)
+      active = public_status
+      release << true
+      checked = Timeout.timeout(10) { observer.value }
+      if @remain_active
+        owner_entered, @executor_release = Queue.new, Queue.new
+        @executor = Thread.new do
+          store.with_execution_lock do
+            owner_entered << true
+            @executor_release.pop
+          end
+        end
+        Timeout.timeout(10) { owner_entered.pop }
+      end
+      inactive = public_status
+      state = JSON.parse(File.binread(File.join(File.dirname(@output), "state.json")))
+      fingerprint = Digest::SHA256.hexdigest(state.delete("pause_token"))
+      @boundary = {"child_exit" => child_status.exitstatus, "direct_exit" => status.exitstatus,
+        "observer" => checked, "while_observing" => active, "after_observer" => inactive,
+        "af_state" => state, "pause_token_sha256" => fingerprint, "merged_output" => stream.string}
+      if (root = ENV["AF_RESUME_EVIDENCE"])
+        File.binwrite(File.join(root, "lock-refusal.stdout"), stdout)
+        File.binwrite(File.join(root, "lock-refusal.stderr"), stderr)
+        File.binwrite(File.join(root, "af-child.merged"), stream.string)
+        File.write(File.join(root, "boundary.json"), JSON.pretty_generate(@boundary) + "\n")
+      end
+      handle
+    ensure
+      release << true if release && observer&.alive?
+      observer&.join(10)
+    end
+
+    private
+
+    # Preserve command ordering and environment overrides without exposing tokens.
+    def record_command(kind, environment, argv, chdir)
+      return unless (root = ENV["AF_RESUME_EVIDENCE"])
+      redacted = argv.each_with_index.map do |value, index|
+        %w[--owner-token --release-pause].include?(argv[index - 1]) ?
+          "sha256:#{Digest::SHA256.hexdigest(value)}" : value.to_s
+      end
+      File.open(File.join(root, "child-commands.jsonl"), "a") do |file|
+        file.puts JSON.generate(kind: kind, argv: redacted, environment: environment, chdir: chdir,
+                               monotonic_seconds: Process.clock_gettime(Process::CLOCK_MONOTONIC))
+      end
+    end
+
+    # Read only the public status projection; never edit retained WLO evidence.
+    def public_status
+      result = capture({}, File.join(@wlo, "bin/wlo"), "status", @plan, "--output", @output, "--json", chdir: @wlo)
+      raise result.stderr unless result.status.success?
+      JSON.parse(result.stdout)
+    end
+  end
+
   ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
   WORKLOAD = "operation-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
   MODEL_A = "fixture-a:latest"
@@ -305,6 +430,49 @@ class LocalIngestExecutionTest < Minitest::Test
     assert_includes out.string, "Execution: completed"
     assert_includes out.string, "After evidence_complete=true: bin/af-catalog resume #{ID}"
     assert_composed_trace(trace, intent, jobs, output)
+  end
+
+  # A public observer can refuse launch without any executor. The same sole
+  # owned hold must resume to complete attempts once after the observer leaves.
+  def test_scoped_resume_recovers_from_public_observer_lock_contention
+    runner = ContendedResumeRunner.new(wlo: @wlo, plan: @plan_path, afw: @afw,
+                                       output: execution_paths.fetch(:output))
+    assert_equal 0, coordinator(runner:).start(operation_id: ID, selected_by: "David", capability_plan: @capability_plan)
+    facts = runner.boundary
+    assert_equal 1, facts.fetch("child_exit")
+    assert_equal 1, facts.fetch("direct_exit")
+    assert facts.dig("while_observing", "executor_active")
+    refute facts.dig("after_observer", "executor_active")
+    assert_equal "resuming", facts.dig("af_state", "phase")
+    assert_equal "paused", facts.dig("after_observer", "status")
+    refute facts.dig("after_observer", "pause_control", "operator_pause")
+    assert_equal [facts.fetch("pause_token_sha256")], facts.dig("after_observer", "pause_control", "request_ids")
+    assert_equal "execute", facts.dig("observer", "disposition")
+    assert_completed_once
+  end
+
+  # A real execution-lock owner arriving after refusal must retain exclusion;
+  # AF stops within its existing observation budget without another launch.
+  def test_scoped_resume_refuses_within_budget_when_executor_stays_active
+    runner = ContendedResumeRunner.new(wlo: @wlo, plan: @plan_path, afw: @afw,
+                                       output: execution_paths.fetch(:output), remain_active: true)
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    error = assert_raises(AdventureFinderWorkspace::LocalExecution::Failure) do
+      coordinator(runner:).start(operation_id: ID, selected_by: "David", capability_plan: @capability_plan)
+    end
+    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+    assert_equal "LOCAL_TRANSITION_GATE", error.code
+    assert_match(/execution-lock contention/, error.message)
+    assert_equal 1, runner.resume_launches
+    assert runner.boundary.dig("after_observer", "executor_active")
+    assert_operator elapsed, :<, 9.0
+    report = WorkloadOrchestrator::PauseRequests.new(execution_paths.fetch(:output)).snapshot
+    assert_equal [runner.boundary.fetch("pause_token_sha256")], report.fetch("request_ids")
+    refute report.fetch("operator_pause")
+    refute_equal "completed", JSON.parse(File.binread(File.join(execution_paths.fetch(:output), "execution.json"))).fetch("status")
+    puts "BOUNDED_RESUME=#{JSON.generate(elapsed: elapsed, resume_launches: runner.resume_launches, gate: error.code)}"
+  ensure
+    runner&.release_executor
   end
 
   def test_existing_operator_pause_is_not_cleared_or_reclassified_as_coordinator_drain

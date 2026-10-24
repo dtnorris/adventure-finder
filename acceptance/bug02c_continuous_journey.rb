@@ -21,8 +21,14 @@ FileUtils.rm(File.join(pipeline, "bin/af-final-release-package"))
 FileUtils.cp(File.join(components, "bin/af-final-release-package"), File.join(pipeline, "bin/af-final-release-package"))
 FileUtils.chmod(0o755, File.join(pipeline, "bin/af-final-release-package"))
 FileUtils.mkdir_p(File.join(pipeline, "config"))
-%w[staged_scoring_input_policy_v0.1.json standing_bulk_score_ingestion_policy_v0.1.json standing_bulk_score_owner_selection_v0.1.json].each do |name|
-  FileUtils.cp(File.join(components, "config", name), File.join(pipeline, "config", name))
+FileUtils.cp(File.join(components, "config/staged_scoring_input_policy_v0.1.json"),
+             File.join(pipeline, "config/staged_scoring_input_policy_v0.1.json"))
+# Independent synthetic activation retains the owner's scope/flag validators;
+# fixture evidence must never consume the real project owner's directive.
+{"synthetic-policy.json" => "standing_bulk_score_ingestion_policy_v0.1.json",
+ "synthetic-owner-selection.json" => "standing_bulk_score_owner_selection_v0.1.json"}.each do |fixture_name, name|
+  FileUtils.cp(File.join(components, "test/fixtures/standing_bulk_score", fixture_name),
+               File.join(pipeline, "config", name))
 end
 {"af-workloads" => ENV.fetch("AF_AFW_ROOT", File.join(sources, "af-workloads")),
  "af-cli-scoring-utility" => ENV.fetch("AF_SCORER_ROOT", File.join(sources, "af-cli-scoring-utility")),

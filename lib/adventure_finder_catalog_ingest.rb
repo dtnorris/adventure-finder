@@ -226,7 +226,7 @@ module AdventureFinderWorkspace
         operation_store: store,
         intent_store:,
         authorization_store: authority_store_for(context, store),
-        routing:
+        routing:, env:
       ).prepare(
         operation_id:, freeze_path:, approval_path:, bundle_dir:,
         historical_project_state_path:, current_project_state_path:
