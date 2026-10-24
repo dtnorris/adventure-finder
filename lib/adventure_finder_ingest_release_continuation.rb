@@ -27,6 +27,7 @@ module AdventureFinderWorkspace
       @project = Pathname(project_root).expand_path
       @pipeline = Pathname(pipeline_root).expand_path
       @catalog = Pathname(catalog_root).expand_path
+      @env = env
       @afw = Pathname(env.fetch("AF_AFW_ROOT", @project.join("af-workloads").to_s)).expand_path
       @scorer = Pathname(env.fetch("AF_SCORER_ROOT", @project.join("af-cli-scoring-utility").to_s)).expand_path
       @wlo = Pathname(env.fetch("WLO_REPO_ROOT", @project.join("workload-orchestrator").to_s)).expand_path
@@ -41,6 +42,7 @@ module AdventureFinderWorkspace
         preparation["operation_id"] == operation_id && preparation["status"] == "PREPARED" &&
         preparation["qualified_cases"].is_a?(Integer) && preparation["qualified_cases"].positive?
       workload_id = preparation.fetch("workload_id")
+      store_root = authority_store(preparation_dir, operation_id)
       workload = @afw.join("workloads", workload_id)
       plan = workload.join("execution-plan.json")
       fail_with("STALE_WORKLOAD_BINDING", "frozen execution plan changed") unless
@@ -83,7 +85,7 @@ module AdventureFinderWorkspace
       authority_inputs = read_json(preparation_dir.join("authority-inputs.json"))
       staged = {
         "evidence" => authority_inputs.fetch("evidence"),
-        "store_root" => @pipeline.join("output", "staged-scoring-authority", "v0.1").to_s,
+        "store_root" => store_root,
         "current_project_state_path" => @catalog.join("PROJECT_STATE.yml").to_s,
         "workload_binding_path" => @afw.join("workloads", ".selections", workload_id, "frozen-workload.json").to_s,
         "selection_path" => @afw.join("workloads", ".selections", workload_id, "selection.json").to_s,
@@ -137,11 +139,29 @@ module AdventureFinderWorkspace
 
     private
 
+    # Returns the immutable preparation store for this operation, or the
+    # historical checkout locator when no private root was selected. Missing,
+    # changed or symlinked private bindings raise Failure before owner writes.
+    def authority_store(preparation_dir, operation_id)
+      selected = Pathname(@env.fetch("AF_DATA_PIPELINE_DATA_ROOT", @pipeline.to_s))
+        .join("output", "staged-scoring-authority", "v0.1").to_s
+      binding = preparation_dir.join("authority-store.json")
+      if binding.exist? || binding.symlink?
+        fail_with("RELEASE_INPUT_CONFLICT", "authority store binding changed") unless
+          !binding.symlink? && binding.file? &&
+          read_json(binding) == {"operation_id" => operation_id, "store_root" => selected}
+      elsif @env.key?("AF_DATA_PIPELINE_DATA_ROOT")
+        fail_with("RELEASE_INPUT_CONFLICT", "historical authority has no private store binding")
+      end
+      selected
+    end
+
     def invoke(root, command, *arguments)
       executable = root.join("bin", command)
       fail_with("COMPONENT_UNAVAILABLE", "missing owner command #{executable}") unless executable.file? && executable.executable?
       stdout, stderr, status = @runner.call(
         {"AF_PROJECT_ROOT" => @project.to_s, "AF_ADVENTURE_FINDER_ROOT" => @front.to_s,
+         "AF_DATA_PIPELINE_DATA_ROOT" => @env["AF_DATA_PIPELINE_DATA_ROOT"],
          "AFW_ROOT" => @afw.to_s}, executable.to_s, *arguments.map(&:to_s), chdir: root.to_s
       )
       unless status.success?

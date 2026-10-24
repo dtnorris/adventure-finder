@@ -40,7 +40,7 @@ class Fo22dEvidenceReviewCompositionTest < Minitest::Test
     require_source!(File.join(@pipeline_source, "bin", "af-data"))
     require_source!(File.join(@adventure_finder_source, "bin", "af-review"))
 
-    @root = Dir.mktmpdir("fo22d-composition-")
+    @root = File.realpath(Dir.mktmpdir("fo22d-composition-"))
     install_component(@afw_source, "af-workloads-production", ["lib", "bin/afw-bind-scoring-evidence"])
     install_component(@pipeline_source, "af-data-pipeline", ["lib", "bin/af-data"])
     build_fixture

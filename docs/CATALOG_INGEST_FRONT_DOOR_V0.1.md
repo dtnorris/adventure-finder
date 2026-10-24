@@ -150,6 +150,19 @@ inputs fail closed. The front door then requests AFW qualified workload preparat
 and starts the existing local coordinator only for a `PREPARED` result. A verified
 zero-record freeze reports `NO_SUCCESSOR_NEEDED` and does not start work.
 
+`AF_DATA_PIPELINE_DATA_ROOT` selects the existing absolute private AFDP directory
+for `output/staged-scoring-authority/v0.1`. Preparation retains an immutable
+`authority-store.json` locator beside its inputs; AFDP alone issues and validates
+the authority, publication proof and operation lock there. AFW and release
+continuation consume that same store. Restart validates existing authority and
+never reissues missing approval. Changed stores or missing/corrupt publications
+fail closed; selecting a root does not migrate historical authority. Unset keeps
+the checkout store. Older preparations without a locator may validate only in
+that original layout, with their original owner evidence still available.
+Review/release outputs and ingest-operation storage keep their existing paths;
+in private mode AFDP also requires its review/release destinations beneath the
+selected root. An incompatible layout refuses rather than relocating artifacts.
+
 On terminal WLO completion, the front door verifies the exact frozen plan and
 asks AFW's public binder and manifest publisher to account for its whole case
 denominator. It asks pipeline's public workload review, standing bulk release,

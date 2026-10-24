@@ -214,6 +214,29 @@ class StagedWorkloadPreparationTest < Minitest::Test
     assert_equal 1, runner.calls.count { |call| File.basename(call[:argv].first) == "afw-build-workload" }
     assert_includes first.fetch("next_action"), "afw-inspect-workload"
     assert_includes first.fetch("next_action"), "--staged-selection"
+    assert_equal %w[issue validate], runner.calls.select { |call|
+      File.basename(call[:argv].first) == "af-staged-scoring-authority"
+    }.map { |call| call[:argv][1] }
+  end
+
+  # Binds a private store before issuance and refuses a different selector on
+  # restart, before either the authority owner or AFW can receive another call.
+  def test_private_store_is_immutable_across_preparation_restart
+    runner = Runner.new(authority: authority_projection(["ADV-0003"]), afw_root: @afw, ids: ["ADV-0003"])
+    selected = {"AF_DATA_PIPELINE_DATA_ROOT" => directory("private-data")}
+    prepare(service(runner, env: selected))
+    call = runner.calls.first
+    store = File.join(selected.fetch("AF_DATA_PIPELINE_DATA_ROOT"), "output/staged-scoring-authority/v0.1")
+    assert_equal store, call[:argv][call[:argv].index("--store") + 1]
+    assert_equal selected.fetch("AF_DATA_PIPELINE_DATA_ROOT"), call[:environment]["AF_DATA_PIPELINE_DATA_ROOT"]
+    binding = File.join(@front, "output/staged-workload-preparations/v0.1", ID, "authority-store.json")
+    assert_equal({"operation_id" => ID, "store_root" => store}, JSON.parse(File.binread(binding)))
+    calls = runner.calls.length
+    error = assert_raises(AdventureFinderWorkspace::StagedWorkloadPreparation::Failure) do
+      prepare(service(runner, env: {"AF_DATA_PIPELINE_DATA_ROOT" => directory("other-private-data")}))
+    end
+    assert_equal "PREPARATION_CONFLICT", error.code
+    assert_equal calls, runner.calls.length
   end
 
   def test_successful_scoring_output_does_not_change_frozen_preparation_on_resume
@@ -355,12 +378,12 @@ class StagedWorkloadPreparationTest < Minitest::Test
 
   private
 
-  def service(runner, owner: Owner.new(runner:))
+  def service(runner, owner: Owner.new(runner:), env: {})
     AdventureFinderWorkspace::StagedWorkloadPreparation.new(
       front_door_root: @front, project_root: @components, pipeline_root: @pipeline,
       afw_root: @afw, scorer_root: @scorer, source_root: @source,
       catalog_root: @catalog_root, operation_store: @operations, intent_store: @intents,
-      authorization_store: @authorizations, routing: @routing, runner:, afw_coordinator: owner
+      authorization_store: @authorizations, routing: @routing, runner:, afw_coordinator: owner, env:
     )
   end
 

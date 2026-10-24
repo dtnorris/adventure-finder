@@ -215,7 +215,7 @@ module AdventureFinderWorkspace
     def initialize(front_door_root:, project_root:, pipeline_root:, afw_root:, scorer_root:,
                    source_root:, catalog_root:, operation_store:, intent_store:,
                    authorization_store:, routing:, runner: CommandRunner.new,
-                   afw_coordinator: nil)
+                   afw_coordinator: nil, env: ENV)
       @front_door_root = Pathname(front_door_root).expand_path
       @project_root = Pathname(project_root).expand_path
       @pipeline_root = Pathname(pipeline_root).expand_path
@@ -229,6 +229,7 @@ module AdventureFinderWorkspace
       @routing = routing
       @runner = runner
       @afw_coordinator = afw_coordinator
+      @env = env
     end
 
     def prepare(operation_id:, freeze_path:, approval_path:, bundle_dir:,
@@ -242,8 +243,8 @@ module AdventureFinderWorkspace
         current_project_state_path: current_project_state_path || catalog_root.join("PROJECT_STATE.yml")
       )
       documents = preparation_documents(operation_id, paths, intent)
-      persist_preparation_inputs!(operation_id, documents)
-      projection = issue_authority!(operation_id, paths.fetch(:current_project_state_path))
+      action = persist_preparation_inputs!(operation_id, documents)
+      projection = issue_authority!(operation_id, paths.fetch(:current_project_state_path), action:)
       if projection["status"] == "NO_SUCCESSOR_NEEDED"
         result = zero_result(operation_id, intent, projection)
         persist_result!(operation_id, result)
@@ -325,9 +326,13 @@ module AdventureFinderWorkspace
       {"operation-input.json" => operation_input,
        "successor-authorization.json" => successor,
        "authority-inputs.json" => envelope,
+       "authority-store.json" => {"operation_id" => operation_id, "store_root" => authority_root.to_s},
        "intent_id" => intent.fetch("intent_id")}
     end
 
+    # Retains exact preparation inputs and the selected owner store. Returns
+    # "issue" only for a new preparation, otherwise "validate"; missing or
+    # changed retained bindings raise Failure rather than regenerating authority.
     def persist_preparation_inputs!(operation_id, documents)
       destination = preparation_dir(operation_id)
       FileUtils.mkdir_p(preparation_root)
@@ -339,16 +344,24 @@ module AdventureFinderWorkspace
             fail_with("PREPARATION_CONFLICT", "preparation input is missing: #{path}") unless path.file?
             fail_with("PREPARATION_CONFLICT", "preparation input changed: #{name}") unless read_json(path) == document
           end
-          return
+          binding = destination.join("authority-store.json")
+          if binding.exist? || binding.symlink?
+            fail_with("PREPARATION_CONFLICT", "authority store binding changed") unless
+              !binding.symlink? && binding.file? && read_json(binding) == documents.fetch("authority-store.json")
+          elsif @env.key?("AF_DATA_PIPELINE_DATA_ROOT")
+            fail_with("PREPARATION_CONFLICT", "historical authority has no private store binding")
+          end
+          return "validate"
         end
 
         stage = preparation_root.join(".#{operation_id}.tmp-#{Process.pid}-#{SecureRandom.hex(6)}")
         begin
           FileUtils.mkdir_p(stage)
-          documents.slice("operation-input.json", "successor-authorization.json", "authority-inputs.json").each do |name, document|
+          documents.slice("operation-input.json", "successor-authorization.json", "authority-inputs.json", "authority-store.json").each do |name, document|
             write_json(stage.join(name), document)
           end
           File.rename(stage, destination)
+          "issue"
         ensure
           FileUtils.remove_entry(stage) if stage.exist?
         end
@@ -357,18 +370,20 @@ module AdventureFinderWorkspace
       fail_with("PREPARATION_PERSISTENCE_FAILED", e.message)
     end
 
-    def issue_authority!(operation_id, current_state_path)
+    # Invokes AFDP issue for new inputs or read-only validate on restart.
+    # Returns the owner projection; owner refusal raises Failure without retry.
+    def issue_authority!(operation_id, current_state_path, action:)
       executable = pipeline_root.join("bin", "af-staged-scoring-authority")
       required_executable(executable, "pipeline staged-scoring authority")
       response = runner.capture(
         child_environment,
-        executable.to_s, "issue",
+        executable.to_s, action,
         "--inputs", preparation_dir(operation_id).join("authority-inputs.json").to_s,
         "--store", authority_root.to_s,
         "--project-state", current_state_path.to_s,
         chdir: pipeline_root.to_s
       )
-      document = parse_json_output(response.stdout, "pipeline authority")
+      document = response.stdout.to_s.strip.empty? ? {} : parse_json_output(response.stdout, "pipeline authority")
       unless response.status.success? || document["status"] == "NO_SUCCESSOR_NEEDED"
         detail = response.stderr.to_s.strip
         detail = response.stdout.to_s.strip if detail.empty?
@@ -570,8 +585,11 @@ module AdventureFinderWorkspace
       fail_with("INVALID_AUTHORITY", "authorized staged catalog is missing or changed")
     end
 
+    # Returns the selected AFDP store locator; AFDP validates the destination.
+    # An absent selector preserves the existing checkout layout.
     def authority_root
-      pipeline_root.join("output", "staged-scoring-authority", "v0.1")
+      Pathname(@env.fetch("AF_DATA_PIPELINE_DATA_ROOT", pipeline_root.to_s))
+        .join("output", "staged-scoring-authority", "v0.1")
     end
 
     def preparation_root
@@ -587,7 +605,8 @@ module AdventureFinderWorkspace
     end
 
     def child_environment
-      {"AF_PROJECT_ROOT" => project_root.to_s, "AF_ADVENTURE_FINDER_ROOT" => front_door_root.to_s}
+      {"AF_PROJECT_ROOT" => project_root.to_s, "AF_ADVENTURE_FINDER_ROOT" => front_door_root.to_s,
+       "AF_DATA_PIPELINE_DATA_ROOT" => @env["AF_DATA_PIPELINE_DATA_ROOT"]}
     end
 
     def required_file(path, label)
