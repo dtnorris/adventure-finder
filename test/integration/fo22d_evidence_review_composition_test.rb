@@ -372,6 +372,55 @@ class Fo22dEvidenceReviewCompositionTest < Minitest::Test
     assert_includes second_stdout, "Package reused: true"
   end
 
+  # Uses real owner code in a renamed disposable checkout and a detached CLI.
+  # Cold replay must retain exact pending evidence without touching code/targets.
+  def test_logical_dual_checkout_and_detached_front_door_cold_replay
+    logical_code = File.join(@root, "development-components", "af-pipeline")
+    FileUtils.mkdir_p(File.dirname(logical_code))
+    FileUtils.mv(@pipeline, logical_code)
+    @pipeline = logical_code
+    logical_data = File.join(@root, "af-pipeline-data")
+    FileUtils.mv(@data_root, logical_data)
+    select_review_storage(logical_data)
+    detached = File.join(@root, "detached-front-door")
+    install_component(@adventure_finder_source, "detached-front-door", ["lib", "bin/af-review"])
+    @adventure_finder_source = detached
+    # An unrelated conventional checkout must never override an explicit root.
+    FileUtils.mkdir_p(File.join(@root, "af-data-pipeline"))
+    File.binwrite(File.join(@root, "af-data-pipeline", "sentinel"), "unrelated checkout")
+
+    stdout, stderr, status = run_front_door(pipeline_root: logical_code)
+    assert status.success?, stderr
+    assert_includes stdout, "Review package: #{@review_dir}"
+    assert_includes stdout, "Ledger state: pending"
+    before = storage_inventory
+    stdout, stderr, status = run_front_door(pipeline_root: logical_code)
+    assert status.success?, stderr
+    assert_includes stdout, "Package reused: true"
+    assert_equal before, storage_inventory
+    refute_path_exists File.join(logical_code, "output")
+    refute_path_exists File.join(logical_code, "audits")
+  end
+
+  # Invalid explicit code roots cannot fall back to the valid conventional
+  # checkout or bind new evidence. Restoration proves the positive path remains.
+  def test_invalid_explicit_code_roots_fail_without_fallback_or_owner_writes
+    unrelated = File.join(@root, "unrelated-code")
+    FileUtils.mkdir_p(unrelated)
+    linked = File.join(@root, "linked-code")
+    File.symlink(@pipeline, linked)
+    ["", "relative-code", File.join(@root, "missing-code"), unrelated, linked,
+     File.join(@pipeline, "..", "af-data-pipeline")].each do |pipeline_root|
+      before = storage_inventory
+      _stdout, stderr, status = run_front_door(pipeline_root:)
+      refute status.success?, "accepted invalid code root #{pipeline_root.inspect}"
+      assert_match(/pipeline|AF_DATA_PIPELINE_ROOT/, stderr)
+      assert_equal before, storage_inventory
+    end
+    _stdout, stderr, status = run_front_door(pipeline_root: @pipeline)
+    assert status.success?, stderr
+  end
+
   private
 
   def require_source!(path)
@@ -587,9 +636,10 @@ class Fo22dEvidenceReviewCompositionTest < Minitest::Test
 
   # Runs the public CLI with an explicit DPS-05 selector (nil unsets it).
   # Returns stdout/stderr/process status; OS subprocess errors propagate.
-  def run_front_door(data_root: @data_root)
+  def run_front_door(data_root: @data_root, pipeline_root: nil)
     Open3.capture3(
-      { "AF_PROJECT_ROOT" => @root, "AF_DATA_PIPELINE_DATA_ROOT" => data_root }, RbConfig.ruby,
+      { "AF_PROJECT_ROOT" => @root, "AF_DATA_PIPELINE_DATA_ROOT" => data_root,
+        "AF_DATA_PIPELINE_ROOT" => pipeline_root }, RbConfig.ruby,
       File.join(@adventure_finder_source, "bin", "af-review"),
       "prepare", "39", "0001-combat", "--root", @root,
       "--registry", @registry_path, "--manifest", @manifest_path

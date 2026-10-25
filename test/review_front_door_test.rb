@@ -53,6 +53,121 @@ class ReviewFrontDoorTest < Minitest::Test
     end
   end
 
+  # Isolate self-contained fixtures from suite-wide disposable component selectors.
+  # Minitest restores the caller's exact values after every test, including errors.
+  def before_setup
+    super
+    @pipeline_environment = %w[AF_DATA_PIPELINE_ROOT AF_DATA_PIPELINE_DATA_ROOT].to_h do |key|
+      [key, ENV.delete(key)]
+    end
+  end
+
+  # Restore both absent and present selectors; unexpected teardown errors propagate.
+  def after_teardown
+    @pipeline_environment&.each { |key, value| ENV[key] = value }
+    super
+  end
+
+  # Select renamed code independently of private storage and an unrelated legacy
+  # checkout. The public command, cwd and storage arguments must retain ownership.
+  def test_explicit_code_root_selects_renamed_checkout_with_independent_storage
+    Dir.mktmpdir do |temporary|
+      root = File.realpath(temporary)
+      paths = build_workspace(root)
+      selected = File.join(root, "development-components", "af-pipeline")
+      FileUtils.mkdir_p(File.dirname(selected))
+      FileUtils.cp_r(paths.fetch(:pipeline), selected)
+      data = File.join(root, "private-data")
+      FileUtils.mkdir_p(data)
+      ENV["AF_DATA_PIPELINE_ROOT"] = selected
+      ENV["AF_DATA_PIPELINE_DATA_ROOT"] = data
+      runner = FakeRunner.new(receipt_path: paths.fetch(:receipt_path), receipt_id: "a" * 64)
+      door, = front_door(paths, runner)
+
+      assert_equal 0, door.prepare("39", "0941-seriousness")
+      assert_equal %i[afw pipeline], runner.calls.map { |call| call.fetch(:component) }
+      call = runner.calls.last
+      assert_equal selected, call.fetch(:chdir)
+      assert_equal File.join(selected, "bin", "af-data"), call.fetch(:argv).first
+      assert_equal File.join(data, "output", "adventure-finder-review", paths.fetch(:workload_id),
+                             "batch039-adv0941-seriousness"), call.fetch(:argv)[6]
+      assert_equal File.join(data, "audits", "adventure-finder-review", paths.fetch(:workload_id),
+                             "batch039-adv0941-seriousness"), call.fetch(:argv)[8]
+      refute_path_exists File.join(selected, "output")
+      refute_path_exists File.join(paths.fetch(:pipeline), "output")
+    end
+  end
+
+  # Invalid explicit selectors must refuse before AFW can persist its receipt,
+  # even with valid legacy code available. Compare every fixture byte and path.
+  def test_invalid_code_roots_refuse_before_delegation_or_writes
+    Dir.mktmpdir do |temporary|
+      root = File.realpath(temporary)
+      paths = build_workspace(root)
+      no_command = File.join(root, "no-command")
+      FileUtils.mkdir_p(no_command)
+      not_executable = File.join(root, "not-executable")
+      FileUtils.cp_r(paths.fetch(:pipeline), not_executable)
+      File.chmod(0o644, File.join(not_executable, "bin", "af-data"))
+      file = File.join(root, "regular-file")
+      File.binwrite(file, "sentinel")
+      linked = File.join(root, "linked")
+      File.symlink(paths.fetch(:pipeline), linked)
+      linked_parent = File.join(root, "linked-parent")
+      File.symlink(root, linked_parent)
+      invalid = ["", "  ", "relative", File.join(root, "missing"), file, no_command,
+                 not_executable, linked, File.join(linked_parent, "af-data-pipeline"),
+                 File.join(root, ".", "af-data-pipeline"),
+                 File.join(root, "..", File.basename(root), "af-data-pipeline")]
+      before = Dir.glob("#{root}/**/*", File::FNM_DOTMATCH).sort.to_h do |path|
+        [path, File.file?(path) ? File.binread(path) : nil]
+      end
+      invalid.each do |selected|
+        ENV["AF_DATA_PIPELINE_ROOT"] = selected
+        runner = FakeRunner.new(receipt_path: paths.fetch(:receipt_path), receipt_id: "a" * 64)
+        door, = front_door(paths, runner)
+        error = assert_raises(AdventureFinderWorkspace::Error, selected.inspect) do
+          door.prepare("39", "0941-seriousness")
+        end
+        assert_match(/pipeline|AF_DATA_PIPELINE_ROOT/, error.message)
+        assert_empty runner.calls
+        after = Dir.glob("#{root}/**/*", File::FNM_DOTMATCH).sort.to_h do |path|
+          [path, File.file?(path) ? File.binread(path) : nil]
+        end
+        assert_equal before, after
+        refute_path_exists paths.fetch(:receipt_path)
+      end
+    end
+  end
+
+  # Without an override the manifest remains authoritative, and incomplete or
+  # ambiguous legacy installations refuse before owner delegation or writes.
+  def test_legacy_manifest_refuses_ambiguous_missing_and_nonexecutable_code
+    Dir.mktmpdir do |root|
+      paths = build_workspace(root)
+      manifest = YAML.safe_load(File.binread(paths.fetch(:manifest_path)))
+      [[], Array.new(2) { manifest.fetch("repositories").first.dup }].each do |repositories|
+        File.binwrite(paths.fetch(:manifest_path), YAML.dump(manifest.merge("repositories" => repositories)))
+        runner = FakeRunner.new(receipt_path: paths.fetch(:receipt_path), receipt_id: "a" * 64)
+        assert_raises(AdventureFinderWorkspace::Error) do
+          door, = front_door(paths, runner)
+          door.prepare("39", "0941-seriousness")
+        end
+        assert_empty runner.calls
+      end
+      File.binwrite(paths.fetch(:manifest_path), YAML.dump(manifest))
+      File.unlink(File.join(paths.fetch(:pipeline), "bin", "af-data"))
+      runner = FakeRunner.new(receipt_path: paths.fetch(:receipt_path), receipt_id: "a" * 64)
+      door, = front_door(paths, runner)
+      assert_raises(AdventureFinderWorkspace::Error) { door.prepare("39", "0941-seriousness") }
+      assert_empty runner.calls
+      FileUtils.rm_r(paths.fetch(:pipeline))
+      assert_raises(AdventureFinderWorkspace::Error) { door.prepare("39", "0941-seriousness") }
+      assert_empty runner.calls
+      refute_path_exists paths.fetch(:receipt_path)
+    end
+  end
+
   def build_workspace(root, jobs: nil)
     afw = File.join(root, "af-workloads-production")
     workload_id = "production-batch-039-fresh-20260930"
