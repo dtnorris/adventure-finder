@@ -44,11 +44,11 @@ module AdventureFinderWorkspace
       plan_id = context.fetch("production_batch_id")
       safe_path_segment!(plan_id, "registered plan ID")
       safe_path_segment!(job_id, "canonical job ID")
+      pipeline_root = pipeline_repository_root
 
       afw_root = context.dig("afw", "repository_root")
       receipt_path = bind_evidence(context, plan_id, job_id)
       receipt_id = receipt_identity(receipt_path)
-      pipeline_root = pipeline_repository_root
       storage_root = ENV.fetch("AF_DATA_PIPELINE_DATA_ROOT", pipeline_root)
       review_dir = File.join(storage_root, "output", "adventure-finder-review", plan_id, job_id)
       audit_dir = File.join(storage_root, "audits", "adventure-finder-review", plan_id, job_id)
@@ -93,7 +93,39 @@ module AdventureFinderWorkspace
       raise Error, "registered frozen plan is invalid: #{e.message}"
     end
 
+    # Returns the explicit executable checkout or the conventional manifest
+    # location. Invalid overrides never fall back; unsafe roots and missing
+    # public commands raise Error before either owner can persist evidence.
     def pipeline_repository_root
+      if ENV.key?("AF_DATA_PIPELINE_ROOT")
+        selected = ENV.fetch("AF_DATA_PIPELINE_ROOT")
+        unless !selected.strip.empty? && Pathname(selected).absolute? &&
+            !selected.include?("\0") && !selected.split(File::SEPARATOR).any? { |part| %w[. ..].include?(part) }
+          raise Error, "AF_DATA_PIPELINE_ROOT must name an existing absolute pipeline code directory without traversal"
+        end
+        root = Pathname(selected).expand_path
+        current = root
+        loop do
+          raise Error, "pipeline code root contains a symlink: #{current}" if current.symlink?
+          break if current == current.parent
+
+          current = current.parent
+        end
+      else
+        root = manifest_pipeline_root
+      end
+      raise Error, "pipeline repository is not a directory: #{root}" unless root.directory?
+      executable = root.join("bin", "af-data")
+      unless executable.file? && executable.executable?
+        raise Error, "pipeline review command is not executable: #{executable}"
+      end
+
+      root.to_s
+    end
+
+    # Resolves the legacy manifest entry within the workspace. Returns a
+    # Pathname or raises Error for absent, ambiguous or escaping entries.
+    def manifest_pipeline_root
       matches = @manifest.repositories.select { |repo| repo["name"] == PIPELINE_REPOSITORY }
       unless matches.length == 1
         raise Error, "workspace manifest must contain exactly one #{PIPELINE_REPOSITORY} repository"
@@ -102,9 +134,7 @@ module AdventureFinderWorkspace
       root = (@workspace_root / matches.first.fetch("name")).cleanpath
       prefix = "#{@workspace_root}#{File::SEPARATOR}"
       raise Error, "pipeline repository resolves outside workspace root" unless root.to_s.start_with?(prefix)
-      raise Error, "pipeline repository is not a directory: #{root}" unless root.directory?
-
-      root.to_s
+      root
     end
 
     def bind_evidence(context, workload_id, job_id)

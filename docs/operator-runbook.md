@@ -217,8 +217,25 @@ place manual review packages under `output/adventure-finder-review/PLAN/JOB`
 and durable ledgers under `audits/adventure-finder-review/PLAN/JOB` there.
 This consumes the pipeline's DPS-05 storage contract: invalid, overlapping,
 unwritable or symlinked destinations fail closed without fallback. Unset keeps
-the compatibility destinations in the pipeline checkout. The manifest and
-`--root` still locate executable code; AFDP runs from that code checkout.
+the compatibility destinations in the pipeline checkout. `AF_DATA_PIPELINE_ROOT`
+selects the executable checkout explicitly, including a logical `af-pipeline`
+directory outside `--root`; when unset, the manifest and `--root` select the
+conventional `af-data-pipeline` checkout. An explicit code root must be an existing
+absolute directory without traversal or symlink ancestors and contain executable
+`bin/af-data`. An invalid override refuses before evidence binding, without
+falling back to another development or production checkout. AFDP runs from the
+selected code checkout. For a disposable dual-root layout, set both selectors:
+
+```bash
+AF_DATA_PIPELINE_ROOT="$world/development-components/af-pipeline" \
+AF_DATA_PIPELINE_DATA_ROOT="$world/af-pipeline-data" \
+bin/af-review prepare 39 0946-openness --root "$world/production-components" \
+  --registry "$world/contexts.yml"
+```
+
+The registry must identify the intended AFW/WLO context; root configuration does
+not verify Git provenance or authorize editorial decisions. The code/data names
+above are examples, not repository renames or discovery conventions.
 AFW retains ownership of evidence receipts. Selecting a root does not migrate
 existing packages or ledgers; retain the same selection when replaying review.
 

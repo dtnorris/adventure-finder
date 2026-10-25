@@ -123,6 +123,48 @@ class IngestOperationStoreTest < Minitest::Test
     assert_equal "conversion-receipt", inspection["findings"].first["binding_id"]
   end
 
+  # Rebinds a private pipeline locator in a fresh process without rewriting the
+  # operation. Missing/tampered copies must fail; restored bytes replay exactly.
+  def test_private_pipeline_root_rebinding_preserves_identity_on_cold_restart
+    current = create
+    original = "independently invented private intake artifact\n"
+    File.binwrite(File.join(@pipeline_root, "intake.json"), original)
+    bound = advance(current)
+    bound["artifacts"] << artifact("intake", "source_intake", "af-data-pipeline",
+                                  "af-source-intake/v0.1", "pipeline", "intake.json")
+    bound["coordination"]["status"] = "open"
+    persisted = persist(current, bound)
+    revision_bytes = File.binread(@store.revision_path(ID, 1))
+    rebound = File.join(@temporary, "af-pipeline-data")
+    FileUtils.mv(@pipeline_root, rebound)
+    roots = @roots.merge("pipeline" => rebound)
+    script = <<~'RUBY'
+      require "json"
+      require "adventure_finder_ingest_operation_store"
+      store = AdventureFinderWorkspace::IngestOperationStore.new(root: ARGV[0], roots: JSON.parse(ARGV[1]))
+      puts JSON.generate(store.inspect(ARGV[2]))
+    RUBY
+    [original, nil, "tampered private intake", original].each do |content|
+      path = File.join(rebound, "intake.json")
+      content ? File.binwrite(path, content) : File.unlink(path)
+      stdout, stderr, status = Open3.capture3(
+        RbConfig.ruby, "-I#{File.expand_path('../lib', __dir__)}", "-e", script,
+        @store_root, JSON.generate(roots), ID
+      )
+      assert status.success?, stderr
+      inspection = JSON.parse(stdout)
+      if content == original
+        assert_equal "VALID", inspection.fetch("operation_status")
+        assert_equal persisted, Store.new(root: @store_root, roots:).validate!(ID)
+      else
+        assert_equal [content ? "STALE_INPUT" : "MISSING_BOUND_ARTIFACT"],
+                     inspection.fetch("findings").map { |finding| finding.fetch("code") }
+      end
+      assert_equal revision_bytes, File.binread(@store.revision_path(ID, 1))
+    end
+    assert_equal "INVALID", @store.inspect(ID).fetch("operation_status")
+  end
+
   def test_changed_bound_bytes_fail_closed_as_stale_input
     create
     File.binwrite(File.join(@catalog_root, "catalog.xlsx"), "changed catalog fixture\n")
