@@ -6,6 +6,7 @@ require "pathname"
 require "fileutils"
 require_relative "adventure_finder_ingest_routing"
 require_relative "adventure_finder_successor_version_authorization"
+require_relative "adventure_finder_pipeline_data_paths"
 
 module AdventureFinderWorkspace
   # Delegates the attested editorial boundary to pipeline-owned freeze/staging.
@@ -27,6 +28,7 @@ module AdventureFinderWorkspace
       @front_door_root = Pathname(front_door_root).expand_path
       @project_root = Pathname(project_root).expand_path
       @pipeline_root = Pathname(pipeline_root).expand_path
+      @storage_root = PipelineDataPaths.root(code_root: @pipeline_root, legacy_root: @front_door_root)
       @source_root = Pathname(source_root).expand_path
       @catalog_root = Pathname(catalog_root).expand_path
       @out = out
@@ -64,7 +66,7 @@ module AdventureFinderWorkspace
       fail_with("MISSING_CHOICE", "boundary approver must be identified") unless
         approved_by.is_a?(String) && !approved_by.strip.empty? && approved_by == approved_by.strip
 
-      destination = @front_door_root.join("output", "ingest-boundary-continuations", "v0.1", operation_id)
+      destination = @storage_root.join("output", "ingest-boundary-continuations", "v0.1", operation_id)
       check_private_path!(destination)
       fail_with("BOUNDARY_CONTINUATION_CONFLICT", "continuation path is not a directory") if
         destination.exist? && !destination.directory?
@@ -142,8 +144,9 @@ module AdventureFinderWorkspace
     end
 
     def check_private_path!(path)
-      relative = path.relative_path_from(@front_door_root)
-      current = @front_door_root
+      relative = path.relative_path_from(@storage_root)
+      PipelineDataPaths.check_ancestors!(path)
+      current = @storage_root
       relative.each_filename do |part|
         current = current.join(part)
         fail_with("BOUNDARY_CONTINUATION_CONFLICT", "symlinked continuation path: #{current}") if current.symlink?

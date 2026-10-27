@@ -7,18 +7,25 @@ require "fileutils"
 require "yaml"
 require "zip"
 require_relative "../test/support/ig07c_source_acceptance_fixture"
+require_relative "../test/support/dual_root_journey_fixture"
 
 front = File.expand_path("..", __dir__)
 sources = ENV.fetch("AF_PROJECT_ROOT", File.expand_path("../adventure-finder-components", front))
 components = ENV.fetch("AF_DATA_PIPELINE_ROOT", File.join(sources, "af-data-pipeline"))
-fixture = Ig07cSourceAcceptance::Fixture.new(repository_root: front, pipeline_source_root: components)
+dual_root = ARGV.delete("--dual-root")
+abort "usage: ruby acceptance/bug02c_continuous_journey.rb [--dual-root]" unless ARGV.empty?
+fixture_class = dual_root ? Ig07cSourceAcceptance::DualRootFixture : Ig07cSourceAcceptance::Fixture
+fixture = fixture_class.new(repository_root: front, pipeline_source_root: components)
 puts "FIXTURE_ROOT=#{fixture.root}"
 pipeline = fixture.pipeline
 %w[af-data af-staged-scoring-authority af-standing-bulk-score-release af-final-release-package af-final-release-adoption af-project-state].each do |command|
+  next if dual_root
   File.symlink(File.join(components, "bin", command), File.join(pipeline, "bin", command))
 end
-FileUtils.rm(File.join(pipeline, "bin/af-final-release-package"))
-FileUtils.cp(File.join(components, "bin/af-final-release-package"), File.join(pipeline, "bin/af-final-release-package"))
+unless dual_root
+  FileUtils.rm(File.join(pipeline, "bin/af-final-release-package"))
+  FileUtils.cp(File.join(components, "bin/af-final-release-package"), File.join(pipeline, "bin/af-final-release-package"))
+end
 FileUtils.chmod(0o755, File.join(pipeline, "bin/af-final-release-package"))
 FileUtils.mkdir_p(File.join(pipeline, "config"))
 FileUtils.cp(File.join(components, "config/staged_scoring_input_policy_v0.1.json"),
@@ -34,7 +41,20 @@ end
  "af-cli-scoring-utility" => ENV.fetch("AF_SCORER_ROOT", File.join(sources, "af-cli-scoring-utility")),
  "workload-orchestrator" => ENV.fetch("WLO_REPO_ROOT", File.join(sources, "workload-orchestrator"))}.each do |name, source|
   destination = File.join(fixture.components, name)
-  if name == "af-workloads"
+  if dual_root
+    names = %w[bin lib config schemas contracts specifications Gemfile Gemfile.lock]
+    if name == "af-workloads"
+      names = %w[bin lib config/models.yml Gemfile Gemfile.lock
+        production_backlog/qualified_dimensions.yml production_backlog/qualified_number_of_sessions.yml
+        production_backlog/qualified_exploration_emphasis.yml production_backlog/qualified_gm_beginner_suitability.yml
+        production_backlog/qualified_gm_preparation_burden.yml production_backlog/qualified_seriousness.yml
+        production_backlog/ee-v0.5-runtime.yml production_backlog/gmpb-v0.6-runtime.yml
+        production_backlog/seriousness-reset-runtime.yml]
+    end
+    Ig07cSourceAcceptance::DualRootFixture.copy_runtime(source, destination, names:)
+    Ig07cSourceAcceptance::DualRootFixture.copy_git_metadata(source, destination) if
+      %w[af-workloads af-cli-scoring-utility].include?(name)
+  elsif name == "af-workloads"
     FileUtils.mkdir_p(destination)
     Dir.children(source).reject { |entry| %w[workloads build output].include?(entry) }.each do |entry|
       FileUtils.cp_r(File.join(source, entry), File.join(destination, entry))
@@ -43,8 +63,13 @@ end
     FileUtils.cp_r(source, destination)
   end
 end
-FileUtils.cp_r(ENV.fetch("LOW_REPO_ROOT", File.join(sources, "local-ollama-workers")),
-               File.join(fixture.components, "local-ollama-workers"))
+low_source = ENV.fetch("LOW_REPO_ROOT", File.join(sources, "local-ollama-workers"))
+low_destination = File.join(fixture.components, "local-ollama-workers")
+if dual_root
+  Ig07cSourceAcceptance::DualRootFixture.copy_runtime(low_source, low_destination)
+else
+  FileUtils.cp_r(low_source, low_destination)
+end
 FileUtils.chmod(0o755, File.join(fixture.components, "af-workloads/bin/afw-score-job"))
 FileUtils.mkdir_p(File.join(fixture.root, "low-state"))
 
@@ -225,6 +250,7 @@ args = fixture.send(:start_arguments)
   args.slice!(args.index(flag), 2)
 end
 args.concat(["--prepare-staged-scoring", "--successor-version", "0.0.2"])
+fixture.seal_code if dual_root
 fixture_env = {
   "GIT_OPTIONAL_LOCKS" => "0",
   "AF_AFW_ROOT" => File.join(fixture.components, "af-workloads"),
@@ -261,7 +287,7 @@ puts "RESUME_STATUS=#{status.exitstatus}"
 puts stdout.lines.last(25).join
 puts stderr.lines.last(8).join
 abort "public journey stopped before final review" unless status.success?
-release_root = File.join(fixture.front, "output/ingest-releases/v0.1", operation_id)
+release_root = File.join(dual_root ? fixture.data_root : fixture.front, "output/ingest-releases/v0.1", operation_id)
 release_inputs = JSON.parse(File.binread(File.join(release_root, "release-inputs.json")))
 accounting = JSON.parse(File.binread(File.join(release_root, "release/release-accounting.json")))
 package = JSON.parse(File.binread(File.join(release_root, "package.json")))
@@ -298,8 +324,19 @@ candidate = package.dig("candidate", "selected")
 abort "staged and scored successors must have distinct paths and bytes" unless
   staged_path != candidate.fetch("path") && staged.fetch("sha256") != candidate.fetch("sha256")
 protected = [fixture.base, staged_path, File.join(release_root, "package.json"),
+  *(dual_root ? [selection_path, *receipts,
+    *Dir.glob(File.join(fixture.data_root, "output/staged-scoring-authority", "**", "*")).select { |path| File.file?(path) },
+    *Dir.glob(File.join(fixture.front, "output/ingest-operations", "**", "*")).select { |path| File.file?(path) }] : []),
   *Dir.glob(File.join(release_root, "release", "**", "*")).select { |path| File.file?(path) }]
   .to_h { |path| [path, File.binread(path)] }
+protected_modes = protected.keys.to_h { |path| [path, File.stat(path).mode] }
+replay_inventories = if dual_root
+  [File.join(fixture.front, "output/ingest-operations"),
+   File.join(fixture.data_root, "output/staged-scoring-authority"),
+   File.join(fixture.catalog, ".git")].to_h { |path| [path, fixture.inventory(path)] }
+else
+  {}
+end
 puts "STAGED=#{JSON.generate(staged.merge('path' => staged_path))}"
 puts "SCORED=#{JSON.generate(candidate)}"
 package_bytes = File.binread(File.join(release_root, "package.json"))
@@ -312,10 +349,13 @@ abort "public replay did not retain the exact release: #{replay_err}" unless
   File.binread(File.join(fixture.catalog, "PROJECT_STATE.yml")) == before_state &&
   JSON.parse(File.binread(File.join(wlo_output, "jobs.json"))).fetch("jobs") == jobs &&
   Dir.glob(File.join(fixture.components, "af-workloads/output/workloads", workload_id, "evidence", "*.json")) == receipts
+abort "preapproval replay changed operation, authority or Git inventory" unless
+  replay_inventories.all? { |path, inventory| fixture.inventory(path) == inventory }
 puts "PREAPPROVAL_REPLAY=verified"
+fixture.verify_refusals(fixture_env, candidate.fetch("path")) if dual_root
 before_approval = File.binread(File.join(fixture.catalog, "PROJECT_STATE.yml"))
-approval_stdout, approval_stderr, approval_status = Open3.capture3(
-  fixture.send(:environment).merge(fixture_env), File.join(front, "bin/af-catalog"),
+approval_stdout, approval_stderr, approval_status = fixture.run_catalog(
+  fixture_env,
   "resume", operation_id, "--approve-final-by", "Fixture Operator",
   stdin_data: "APPROVE\n", chdir: fixture.root
 )
@@ -340,14 +380,20 @@ puts "PROMOTED=#{new_roles.fetch('catalog_head').inspect}"
 destination = File.join(fixture.catalog, new_roles.dig("catalog_head", "filename"))
 abort "publication bytes differ from approval-bound candidate" unless File.binread(destination) == File.binread(candidate.fetch("path"))
 abort "promotion changed protected release or staged bytes" unless protected.all? { |path, bytes| File.binread(path) == bytes }
+abort "promotion changed protected modes" unless protected_modes.all? { |path, mode| File.stat(path).mode == mode }
 abort "catalog Git bytes changed during observation or promotion" unless
   git_bytes == git_bytes.keys.to_h { |path| [path, File.binread(path)] }
 puts "GIT_INDEX_REFS_OBJECTS=unchanged"
 promoted_state = File.binread(File.join(fixture.catalog, "PROJECT_STATE.yml"))
-promotion_files = Dir.glob(File.join(fixture.front, "operations/final-promotions", "**", "*"))
+promotion_roots = [fixture.front, *(dual_root ? [fixture.data_root] : [])]
+promotion_files = promotion_roots.flat_map { |root| Dir.glob(File.join(root, "operations/final-promotions", "**", "*")) }
   .select { |path| File.file?(path) }.to_h { |path| [path, File.binread(path)] }
-replay_stdout, replay_stderr, replay_status = Open3.capture3(
-  fixture.send(:environment).merge(fixture_env), File.join(front, "bin/af-catalog"),
+promotion_inventories = dual_root ? promotion_roots.to_h do |root|
+  path = File.join(root, "operations/final-promotions")
+  [path, fixture.inventory(path)]
+end : {}
+replay_stdout, replay_stderr, replay_status = fixture.run_catalog(
+  fixture_env,
   "resume", operation_id, "--approve-final-by", "Fixture Operator",
   stdin_data: "", chdir: fixture.root
 )
@@ -360,8 +406,17 @@ abort "post-promotion replay mutated authority, jobs or receipts" unless
   File.binread(File.join(fixture.catalog, "PROJECT_STATE.yml")) == promoted_state &&
   promotion_files.all? { |path, bytes| File.binread(path) == bytes } &&
   protected.all? { |path, bytes| File.binread(path) == bytes } &&
+  protected_modes.all? { |path, mode| File.stat(path).mode == mode } &&
   git_bytes == git_bytes.keys.to_h { |path| [path, File.binread(path)] } &&
   JSON.parse(File.binread(File.join(wlo_output, "jobs.json"))).fetch("jobs") == jobs &&
   Dir.glob(File.join(fixture.components, "af-workloads/output/workloads", workload_id, "evidence", "*.json")) == receipts
+abort "post-promotion replay changed operation, authority, Git or adoption inventory" unless
+  replay_inventories.merge(promotion_inventories).all? { |path, inventory| fixture.inventory(path) == inventory }
 abort "forbidden child call observed" unless fixture.forbidden_calls.empty?
+if dual_root
+  fixture.verify_consumers(%w[af-xlsx-data-sources af-cli-query-matcher af-frontier-pack].to_h do |name|
+    [name, File.join(sources, name)]
+  end)
+  fixture.verify_code
+end
 puts "POSTPROMOTION_REPLAY=verified DECISIONS=3 MANUAL_INTERMEDIATE_COMMANDS=0 PAID_COST=0"

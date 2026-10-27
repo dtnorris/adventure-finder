@@ -10,6 +10,7 @@ require "shellwords"
 require "tempfile"
 require "time"
 require_relative "adventure_finder_workspace"
+require_relative "adventure_finder_pipeline_data_paths"
 
 module AdventureFinderWorkspace
   # Presents one validated final-release package and delegates its exact human
@@ -60,7 +61,7 @@ module AdventureFinderWorkspace
       end
       operation_dir ||= @front_door_root.join("operations", "final-promotions", retained_package.fetch("package_id")).to_s
       operation_dir = Pathname(operation_dir).expand_path.cleanpath
-      paths = operation_paths(operation_dir)
+      paths = operation_paths(operation_dir, package_id: retained_package.fetch("package_id"))
       if File.file?(paths.fetch(:decision)) && read_json(paths.fetch(:decision), "pipeline adoption decision")["decision"] == "APPROVE"
         return replay_promotion(inputs_path, package_path, retained_package, paths, approver)
       end
@@ -78,6 +79,7 @@ module AdventureFinderWorkspace
       end
 
       FileUtils.mkdir_p(operation_dir)
+      FileUtils.mkdir_p(File.dirname(paths.fetch(:request)))
       request = if File.file?(paths.fetch(:request))
                   read_json(paths.fetch(:request), "pipeline adoption request")
                 else
@@ -442,8 +444,13 @@ module AdventureFinderWorkspace
       print_operation_persistence(paths, message: "Record final catalog promotion")
     end
 
+    # Returns existing front-door coordination paths for optional persistence.
+    # Private owner artifacts remain outside the front-door Git suggestion.
     def operation_relative_paths(paths)
-      paths.values.select { |path| File.exist?(path) }.map do |path|
+      paths.values.select do |path|
+        File.exist?(path) && (!ENV.key?("AF_DATA_PIPELINE_DATA_ROOT") ||
+          PipelineDataPaths.contained?(Pathname(path).expand_path, @front_door_root))
+      end.map do |path|
         pathname = Pathname(path).expand_path.cleanpath
         begin
           pathname.relative_path_from(@front_door_root).to_s
@@ -453,11 +460,16 @@ module AdventureFinderWorkspace
       end
     end
 
-    def operation_paths(root)
-      {request: root.join("adoption-request.json").to_s,
-       decision: root.join("adoption-decision.json").to_s,
+    # Keeps front-door coordination local while AFDP's durable adoption request,
+    # decision and replay receipt use private storage. Invalid roots raise Error.
+    def operation_paths(root, package_id:)
+      storage = PipelineDataPaths.root(code_root: @pipeline_root, legacy_root: root)
+      owner = ENV.key?("AF_DATA_PIPELINE_DATA_ROOT") ? storage.join("operations", "final-promotions", package_id) : root
+      PipelineDataPaths.check_ancestors!(owner)
+      {request: owner.join("adoption-request.json").to_s,
+       decision: owner.join("adoption-decision.json").to_s,
        coordination: root.join("coordination-decision.json").to_s,
-       result: root.join("adoption-result.json").to_s}
+       result: owner.join("adoption-result.json").to_s}
     end
 
     def component_failure!(label, result)

@@ -69,8 +69,8 @@ module Ig07cSourceAcceptance
       run_catalog(extra_env, "resume", OPERATION_ID, chdir: @different_cwd)
     end
 
-    def run_catalog(extra_env = {}, *arguments, chdir: @repository_root)
-      Open3.capture3(environment.merge(extra_env), command, *arguments, chdir:)
+    def run_catalog(extra_env = {}, *arguments, chdir: @repository_root, stdin_data: "")
+      Open3.capture3(environment.merge(extra_env), command, *arguments, chdir:, stdin_data:)
     end
 
     def register_source

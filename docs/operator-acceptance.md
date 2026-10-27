@@ -115,6 +115,36 @@ Cold fixture caches and fixed ZIP timestamps isolate scenario preparation.
 The BUG-02C archive is independently pinned by its journey but has different
 `0.0.1` inputs; it cannot replace the standing or promotion histories.
 
+The continuous BUG-02C journey also accepts `--dual-root`:
+
+```bash
+TMPDIR=/absolute/disposable/scratch AF_PROJECT_ROOT=/path/to/prepared/components \
+  bundle exec ruby acceptance/bug02c_continuous_journey.rb --dual-root
+```
+
+This variant copies allowlisted pipeline code into `code/af-pipeline`, uses
+`af-pipeline-data` for AFDP state, and copies the public front door independently.
+It provides no legacy pipeline alias. The existing source/PDF, catalog history,
+synthetic standing policy and owner selection are reused. Converter IO, scorer
+payloads/preflight and LOW observation/client responses are external fakes;
+pipeline review/authority/release/adoption, AFW selection/evidence and WLO
+execution/accounting remain real. It proves deterministic offline mechanics,
+not conversion quality, inference quality, real editorial authority or publication.
+Children remove provider credentials and load the existing offline network guard.
+Run only in qualified disposable roots, including temporary/cache directories.
+
+The retained root contains `root-map.json`, byte/mode inventories, per-process
+executable/library provenance and binary stdout/stderr with invocation metadata.
+Independent missing/tampered evidence/authority, stale bindings, unsafe roots,
+escaped destinations and absent/declined final approval controls must refuse
+without adoption. Decline evidence is retained before restoring fixture authority
+for the independent positive. The positive retains the original 11-job accounting,
+exact reviewed candidate, independent project-state roles and cold replay before
+and after promotion. All three real catalog consumers run against the unchanged
+catalog-owned oracle. Omit `--dual-root` for the ordinary-layout regression.
+These focused proofs do not replace checkpoint registration or required default,
+operator, restart/staleness and affected owner gates.
+
 Fixture construction is a separate, explicitly authorized phase. The retained
 `acceptance/build_ig19_git_fixtures.rb` records its recipe hashes and construction
 provenance; normal qualification never invokes it. Its historic builder hash in

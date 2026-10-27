@@ -137,7 +137,7 @@ module AdventureFinderWorkspace
           "--operation-input", file.path,
           "--source-root", source_root.to_s,
           "--catalog-root", catalog_root.to_s,
-          "--pipeline-root", pipeline_root.to_s
+          "--pipeline-root", store.roots.fetch("pipeline").to_s
         ]
         argv.concat(["--canonical-destination", canonical_destination.to_s]) if canonical_destination
         argv << "--json"

@@ -19,6 +19,7 @@ require_relative "adventure_finder_local_execution"
 require_relative "adventure_finder_staged_scoring_intent"
 require_relative "adventure_finder_staged_workload_preparation"
 require_relative "adventure_finder_successor_version_authorization"
+require_relative "adventure_finder_pipeline_data_paths"
 
 module AdventureFinderWorkspace
   # Human-facing start/resume lifecycle for one durable digital-book ingest.
@@ -263,7 +264,7 @@ module AdventureFinderWorkspace
     end
 
     def continued_boundary_paths(context, operation_id, workspace)
-      destination = Pathname(context.fetch("front_door_root")).join(
+      destination = pipeline_storage_root(context).join(
         "output", "ingest-boundary-continuations", "v0.1", operation_id
       )
       fail_with("BOUNDARY_NOT_READY", "retained boundary continuation is missing") unless
@@ -285,13 +286,13 @@ module AdventureFinderWorkspace
     end
 
     def boundary_approval_path(context, operation_id)
-      Pathname(context.fetch("front_door_root")).join(
+      pipeline_storage_root(context).join(
         "output", "ingest-boundary-continuations", "v0.1", operation_id, "approval.json"
       )
     end
 
     def release_paths(context, operation_id)
-      root = Pathname(context.fetch("front_door_root")).join("output", "ingest-releases", "v0.1", operation_id)
+      root = pipeline_storage_root(context).join("output", "ingest-releases", "v0.1", operation_id)
       {inputs_path: root.join("package-inputs.json").to_s, package_path: root.join("package.json").to_s}
     end
 
@@ -301,6 +302,13 @@ module AdventureFinderWorkspace
         pipeline_root: context.fetch("pipeline_root"), catalog_root: context.fetch("catalog_root"),
         out:, env:
       )
+    end
+
+    # Returns the AFDP handoff store selected for this context, retaining the
+    # historical front-door layout when unset. Unsafe roots raise Error.
+    def pipeline_storage_root(context)
+      PipelineDataPaths.root(code_root: context.fetch("pipeline_root"),
+                             legacy_root: context.fetch("front_door_root"), env:)
     end
 
     # Route this operation's package and approver to owner review or replay.
@@ -377,7 +385,7 @@ module AdventureFinderWorkspace
       roots = {
         "input" => input.dirname.to_s,
         "front_door" => front_door_root.to_s,
-        "pipeline" => pipeline_root.to_s,
+        "pipeline" => PipelineDataPaths.root(code_root: pipeline_root, legacy_root: pipeline_root, env:).to_s,
         "converter" => converter_root.to_s,
         "source" => source_root.to_s,
         "catalog" => catalog.dirname.to_s

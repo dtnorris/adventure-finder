@@ -3,6 +3,7 @@
 require "digest"
 require "fileutils"
 require "json"
+require_relative "adventure_finder_pipeline_data_paths"
 require "open3"
 require "pathname"
 require_relative "adventure_finder_workspace"
@@ -28,6 +29,7 @@ module AdventureFinderWorkspace
       @pipeline = Pathname(pipeline_root).expand_path
       @catalog = Pathname(catalog_root).expand_path
       @env = env
+      @storage = PipelineDataPaths.root(code_root: @pipeline, legacy_root: @front, env:)
       @afw = Pathname(env.fetch("AF_AFW_ROOT", @project.join("af-workloads").to_s)).expand_path
       @scorer = Pathname(env.fetch("AF_SCORER_ROOT", @project.join("af-cli-scoring-utility").to_s)).expand_path
       @wlo = Pathname(env.fetch("WLO_REPO_ROOT", @project.join("workload-orchestrator").to_s)).expand_path
@@ -72,7 +74,7 @@ module AdventureFinderWorkspace
         validated["intended_cases"] == preparation.fetch("qualified_cases") &&
         validated["receipt_count"] == preparation.fetch("qualified_cases")
 
-      root = @front.join("output", "ingest-releases", "v0.1", operation_id)
+      root = @storage.join("output", "ingest-releases", "v0.1", operation_id)
       private_directory!(root)
       review = root.join("review")
       audit = root.join("audit")
@@ -185,8 +187,9 @@ module AdventureFinderWorkspace
     end
 
     def private_directory!(path)
-      current = @front
-      path.relative_path_from(@front).each_filename do |part|
+      PipelineDataPaths.check_ancestors!(path)
+      current = @storage
+      path.relative_path_from(@storage).each_filename do |part|
         current = current.join(part)
         fail_with("UNSAFE_RELEASE_PATH", "release path is symlinked: #{current}") if current.symlink?
       end

@@ -70,6 +70,11 @@ class IngestReleaseContinuationTest < Minitest::Test
       "operation_id" => ID, "status" => "PREPARED", "qualified_cases" => 1, "workload_id" => WORKLOAD
     ))
     selected = File.join(@root, "private-data")
+    # Exercise binding refusals with valid code/private roots; owner calls remain forbidden.
+    FileUtils.mkdir_p([selected, File.join(@pipeline, "bin")])
+    command = File.join(@pipeline, "bin", "af-data")
+    File.write(command, "#!/bin/sh\nexit 99\n")
+    FileUtils.chmod(0o755, command)
     service = AdventureFinderWorkspace::IngestReleaseContinuation.new(
       front_door_root: @front, project_root: @project, pipeline_root: @pipeline,
       catalog_root: @catalog, env: {"AF_DATA_PIPELINE_DATA_ROOT" => selected},

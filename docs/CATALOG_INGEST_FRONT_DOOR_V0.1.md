@@ -71,6 +71,24 @@ binds the explicit canonical-destination locator that authorizes source progress
 The context is not part of operation document identity, and the operation document
 retains only portable root-relative locators plus content digests and byte counts.
 
+`AF_DATA_PIPELINE_ROOT` selects executable code independently of
+`AF_DATA_PIPELINE_DATA_ROOT`, an existing absolute private state directory.
+With private storage selected, the operation's `pipeline` locator resolves there;
+`af-source-progress --pipeline-root` receives that state directory while executable
+paths still resolve in the selected code checkout. Invalid, overlapping or symlinked
+roots refuse without fallback. Replay retains the selected executable context;
+changing an environment selector does not substitute another checkout.
+
+AFDP-owned source audits, boundary approval/freeze artifacts, staged authority,
+workload review/audit, release evidence, final packages and adoption
+request/decision/result files belong under the private root. AdventureFinder's
+operation revisions, editable editorial workspace, workload coordination,
+local execution and final coordination decision retain front-door ownership.
+AFW evidence, WLO accounting, canonical source and catalog outputs retain their
+existing owners. Without the private selector, historical destinations remain
+unchanged. Selecting storage does not move earlier artifacts or grant approval;
+retain the same selectors when resuming an existing journey.
+
 After publishing the handle, start invokes the existing public `convert-cached` PDF
 entry. A reported durable receipt is bound as a converter-owned artifact in revision
 one, then the existing IG-05C2 composer invokes pipeline's public
