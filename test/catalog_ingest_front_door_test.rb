@@ -82,6 +82,37 @@ class CatalogIngestFrontDoorTest < Minitest::Test
     assert_equal before, operation_snapshot
   end
 
+  # Private storage remains bound across cold resume. Changed/unset selectors
+  # refuse before routing; restoring the original returns the same gate/bytes.
+  def test_private_data_selection_must_match_retained_operation_context
+    data = File.join(File.realpath(@temporary), "private-data")
+    alternate = File.join(File.realpath(@temporary), "other-data")
+    FileUtils.mkdir_p([data, alternate])
+    code = File.realpath(@pipeline)
+    executable(File.join(code, "bin/af-data"), "abort 'root validation only'\n")
+    selected = {"AF_DATA_PIPELINE_ROOT" => code, "AF_DATA_PIPELINE_DATA_ROOT" => data}
+    _output, error, started = run_catalog(selected, *start_arguments)
+    assert started.success?, error
+    before = operation_snapshot
+    context = File.binread(File.join(context_root, "#{ID}.json"))
+    router = File.binread(@router_log)
+
+    [alternate, nil].each do |replacement|
+      _output, error, refused = run_catalog(selected.merge("AF_DATA_PIPELINE_DATA_ROOT" => replacement), "resume", ID)
+      refute refused.success?
+      assert_includes error, "PIPELINE_DATA_ROOT_MISMATCH"
+      assert_equal before, operation_snapshot
+      assert_equal context, File.binread(File.join(context_root, "#{ID}.json"))
+      assert_equal router, File.binread(@router_log)
+      assert_empty Dir.children(alternate)
+    end
+    output, error, resumed = run_catalog(selected, "resume", ID)
+    assert resumed.success?, error
+    assert_includes output, "Gate: NEEDS_CANONICAL_MARKDOWN_PLACEMENT"
+    assert_equal before, operation_snapshot
+    assert_equal context, File.binread(File.join(context_root, "#{ID}.json"))
+  end
+
   def test_missing_choices_and_unsupported_input_fail_before_creating_an_operation
     _stdout, stderr, status = dispatch_catalog("start", @pdf)
 

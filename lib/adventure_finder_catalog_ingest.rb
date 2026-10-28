@@ -651,6 +651,9 @@ module AdventureFinderWorkspace
       fail_with("CORRUPT_RESUME_CONTEXT", "could not persist resume context: #{e.class}")
     end
 
+    # Loads a retained operation context and requires its original data binding.
+    # Takes an operation UUID and returns its context; malformed context, unsafe
+    # selectors or changed private storage raise Failure or Error before work.
     def load_context(operation_id)
       path = context_path(operation_id)
       fail_with("UNKNOWN_OPERATION", "unknown operation handle #{operation_id}") unless path.file?
@@ -670,6 +673,11 @@ module AdventureFinderWorkspace
       context.fetch("roots").each_value { |value| absolute_path!(value) }
       %w[catalog_root front_door_root pipeline_root project_root source_root].each do |key|
         absolute_path!(context.fetch(key))
+      end
+      selected_data = PipelineDataPaths.root(code_root: context.fetch("pipeline_root"),
+        legacy_root: context.fetch("pipeline_root"), env:)
+      unless selected_data == Pathname(context.dig("roots", "pipeline"))
+        fail_with("PIPELINE_DATA_ROOT_MISMATCH", "pipeline data selector conflicts with retained context; restore the original configuration")
       end
       context
     rescue JSON::ParserError, TypeError

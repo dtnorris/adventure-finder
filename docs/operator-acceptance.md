@@ -145,6 +145,68 @@ catalog-owned oracle. Omit `--dual-root` for the ordinary-layout regression.
 These focused proofs do not replace checkpoint registration or required default,
 operator, restart/staleness and affected owner gates.
 
+### Coexisting checkouts and reversible selection
+
+The same synthetic journey accepts `--coexistence`, with an optional
+`--switch-only` stop after the first pause/rollback/recovery proof. This extends
+the dual-root proof; `--dual-root` still requires the legacy alias to be absent.
+Both modes retain the same external fakes, catalog history and consumer oracle.
+
+```bash
+TMPDIR=/absolute/disposable/scratch AF_PROJECT_ROOT=/path/to/prepared/components \
+  bundle exec ruby acceptance/bug02c_continuous_journey.rb --coexistence --switch-only
+TMPDIR=/absolute/disposable/scratch AF_PROJECT_ROOT=/path/to/prepared/components \
+  bundle exec ruby acceptance/bug02c_continuous_journey.rb --coexistence
+```
+
+The fixture retains actual legacy runtime code at `components/af-data-pipeline`
+and allowlisted public-shaped code at `code/af-pipeline`, each with independent
+copied Git metadata and accepted source history. The runtime trees are copies,
+not claims of clean full-source checkouts. Synthetic policy activation in the
+split copy remains explicit. Legacy probes use distinct operation/source IDs
+and independent converter/source state so they cannot overwrite retained split
+inputs. Shared front-door/catalog ownership remains unchanged. Steps have one
+writer; this rehearsal makes no concurrent-writer guarantee.
+
+For an operator rehearsal in an already qualified disposable world:
+
+1. Verify source identities, no shared Git administration/object stores or link
+   escapes, separate private state, TMPDIR and caches, offline guards and removed
+   credentials. Save the complete environment/configuration, including which
+   selectors are absent. Retain both code copies and all generated state.
+2. For legacy defaults, set `AF_PROJECT_ROOT` to the component parent and **unset**
+   `AF_DATA_PIPELINE_ROOT` and `AF_DATA_PIPELINE_DATA_ROOT`. An explicit code
+   selector overrides the project-parent default for new operations. An empty
+   selector is a configured invalid value, not an unset variable.
+3. For split work, explicitly select `AF_DATA_PIPELINE_ROOT=/.../code/af-pipeline`
+   and `AF_DATA_PIPELINE_DATA_ROOT=/.../af-pipeline-data` (an existing independent
+   directory). Start through `bin/af-catalog start` with the reviewed synthetic
+   arguments. Stop at the durable editorial gate before authorizing further work.
+4. Restore the saved legacy configuration and start a distinct legacy operation.
+   Check exact split-context/evidence bytes and modes, selected executable/library
+   traces, legacy audit destinations and an unchanged catalog. Restore the saved
+   split configuration and cold-run `bin/af-catalog resume OPERATION` from another
+   directory. It must observe the same retained gate/bindings. A cached gate need
+   not launch another owner process; initial progression must prove real owner IO.
+5. Repeat rollback at final review before explicit fixture approval. Invalid
+   explicit code/data roots, a different valid data root, or legacy configuration
+   for a split-bound operation must refuse without fallback or adoption. Stop on
+   any changed bindings, foreign execution, unexpected writes or failed recovery;
+   preserve the raw failure and restore the original matching configuration.
+6. Adopt only the exact reviewed candidate with explicit fixture approval. After
+   another selector rollback, restore the split configuration and cold replay.
+   Verify completed-job attempts/receipts and catalog roles remain unchanged.
+
+Rollback restores selectors for subsequent legacy work. It does not undo approved
+adoption, restore an older workbook/manifest, delete evidence, rewrite context or
+force cross-checkout continuation. That continuation is not supported by this
+proof; its safe route is restoring the operation's original matching selectors.
+The retained root map records both configurations (JSON `null` means unset), and
+each public invocation records binary output, exit/signal/runtime, process
+identities and before/after owner inventories. Endpoint inventories do not detect
+transient write-and-restore activity. The rehearsal's synthetic approvals grant
+no live migration or publication authority; David owns acceptance and later use.
+
 Fixture construction is a separate, explicitly authorized phase. The retained
 `acceptance/build_ig19_git_fixtures.rb` records its recipe hashes and construction
 provenance; normal qualification never invokes it. Its historic builder hash in

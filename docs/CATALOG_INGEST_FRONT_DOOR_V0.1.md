@@ -78,6 +78,10 @@ With private storage selected, the operation's `pipeline` locator resolves there
 paths still resolve in the selected code checkout. Invalid, overlapping or symlinked
 roots refuse without fallback. Replay retains the selected executable context;
 changing an environment selector does not substitute another checkout.
+Cold resume also requires the retained pipeline data binding: changing or
+unsetting a private data selector refuses before continuation. Restore the
+original matching selectors to resume; rollback selection applies to subsequent
+legacy operations and does not relocate an existing operation.
 
 AFDP-owned source audits, boundary approval/freeze artifacts, staged authority,
 workload review/audit, release evidence, final packages and adoption

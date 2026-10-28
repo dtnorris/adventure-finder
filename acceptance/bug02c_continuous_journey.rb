@@ -8,13 +8,19 @@ require "yaml"
 require "zip"
 require_relative "../test/support/ig07c_source_acceptance_fixture"
 require_relative "../test/support/dual_root_journey_fixture"
+require_relative "../test/support/coexistence_journey_fixture"
 
 front = File.expand_path("..", __dir__)
 sources = ENV.fetch("AF_PROJECT_ROOT", File.expand_path("../adventure-finder-components", front))
 components = ENV.fetch("AF_DATA_PIPELINE_ROOT", File.join(sources, "af-data-pipeline"))
 dual_root = ARGV.delete("--dual-root")
-abort "usage: ruby acceptance/bug02c_continuous_journey.rb [--dual-root]" unless ARGV.empty?
-fixture_class = dual_root ? Ig07cSourceAcceptance::DualRootFixture : Ig07cSourceAcceptance::Fixture
+coexistence = ARGV.delete("--coexistence")
+switch_only = ARGV.delete("--switch-only")
+abort "usage: ruby acceptance/bug02c_continuous_journey.rb [--dual-root | --coexistence [--switch-only]]" unless
+  ARGV.empty? && !(dual_root && coexistence) && (!switch_only || coexistence)
+dual_root ||= coexistence
+fixture_class = coexistence ? Ig07cSourceAcceptance::CoexistenceFixture :
+  (dual_root ? Ig07cSourceAcceptance::DualRootFixture : Ig07cSourceAcceptance::Fixture)
 fixture = fixture_class.new(repository_root: front, pipeline_source_root: components)
 puts "FIXTURE_ROOT=#{fixture.root}"
 pipeline = fixture.pipeline
@@ -259,9 +265,12 @@ fixture_env = {
   "LOW_REPO_ROOT" => File.join(fixture.components, "local-ollama-workers"),
   "LOW_STATE_ROOT" => File.join(fixture.root, "low-state")
 }
+fixture.legacy_probe(fixture_env, "88888888-8888-4888-8888-888888888888") if coexistence
 stdout, stderr, status = fixture.run_catalog(fixture_env.merge("IG07C_MARKDOWN_MODE" => "synthetic_procedure"), *args)
 abort "start: #{stdout}\n#{stderr}" unless status.success?
 puts "START_OK"
+fixture.verify_switch(fixture_env) if coexistence
+exit 0 if switch_only
 operation_id = Ig07cSourceAcceptance::Fixture::OPERATION_ID
 base_bytes = File.binread(fixture.base)
 before_state = File.binread(File.join(fixture.catalog, "PROJECT_STATE.yml"))
@@ -353,6 +362,7 @@ abort "preapproval replay changed operation, authority or Git inventory" unless
   replay_inventories.all? { |path, inventory| fixture.inventory(path) == inventory }
 puts "PREAPPROVAL_REPLAY=verified"
 fixture.verify_refusals(fixture_env, candidate.fetch("path")) if dual_root
+fixture.rollback_selection(fixture_env) if coexistence
 before_approval = File.binread(File.join(fixture.catalog, "PROJECT_STATE.yml"))
 approval_stdout, approval_stderr, approval_status = fixture.run_catalog(
   fixture_env,
@@ -392,6 +402,7 @@ promotion_inventories = dual_root ? promotion_roots.to_h do |root|
   path = File.join(root, "operations/final-promotions")
   [path, fixture.inventory(path)]
 end : {}
+fixture.rollback_selection(fixture_env, adopted: true) if coexistence
 replay_stdout, replay_stderr, replay_status = fixture.run_catalog(
   fixture_env,
   "resume", operation_id, "--approve-final-by", "Fixture Operator",
