@@ -121,6 +121,10 @@ class PrivateStagedScoringAuthoritySeamTest < Minitest::Test
     @root = Dir.mktmpdir("private-authority-seam-")
     @pipeline = File.join(@root, "code")
     FileUtils.cp_r(source, @pipeline)
+    # Fresh AFDP CLIs require the standalone evidence owner beside their code.
+    evidence_source = File.realpath(File.join(source, "..", "af-evidence"))
+    raise "evidence owner must be a disposable copy" unless evidence_source.start_with?(scratch + "/")
+    FileUtils.cp_r(evidence_source, File.join(@root, "af-evidence"))
     @front = File.join(@root, "private", "front")
     @evidence_root = File.join(@root, "evidence")
     FileUtils.mkdir_p([@front, @evidence_root])
