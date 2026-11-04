@@ -243,6 +243,23 @@ class ReviewFrontDoorTest < Minitest::Test
     [door, out]
   end
 
+  # A present invalid AF selector refuses before either owner can persist a
+  # receipt or review package, even though those artifacts remain owner data.
+  def test_invalid_external_selector_refuses_before_owner_review_writes
+    previous = ENV["AF_STATE_ROOT"]
+    ENV["AF_STATE_ROOT"] = ""
+    Dir.mktmpdir do |root|
+      paths = build_workspace(root)
+      runner = FakeRunner.new(receipt_path: paths.fetch(:receipt_path), receipt_id: "a" * 64)
+      door, _out = front_door(paths, runner)
+      assert_raises(AdventureFinderWorkspace::Error) { door.prepare("39", "0941-seriousness") }
+      assert_empty runner.calls
+      refute File.exist?(paths.fetch(:receipt_path))
+    end
+  ensure
+    previous.nil? ? ENV.delete("AF_STATE_ROOT") : ENV["AF_STATE_ROOT"] = previous
+  end
+
   def test_prepare_resolves_context_and_job_then_delegates_exact_public_commands
     Dir.mktmpdir do |root|
       paths = build_workspace(root)

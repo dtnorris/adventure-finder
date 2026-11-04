@@ -113,6 +113,18 @@ router = DATA_PIPELINE_ROOT.join("bin", "af-ingest-next")
 executable!(converter, "cached PDF converter")
 executable!(router, "ingestion next-action router")
 
+# Admit explicit AF state before the converter can publish owner artifacts.
+# The legacy one-shot command itself creates no AF coordination records.
+require_relative "../lib/adventure_finder_state_paths"
+begin
+  AdventureFinderWorkspace::StatePaths.root(
+    front_door_root: ENV.fetch("AF_ADVENTURE_FINDER_ROOT", ROOT.to_s),
+    project_root: CODE_ROOT, owner_roots: [PDF_CONVERTER_ROOT, DATA_PIPELINE_ROOT]
+  )
+rescue AdventureFinderWorkspace::Error => error
+  abort_with(error.message)
+end
+
 build_dir = PDF_CONVERTER_ROOT.join("build")
 venv_bin = PDF_CONVERTER_ROOT.join(".venv", "bin")
 env = {

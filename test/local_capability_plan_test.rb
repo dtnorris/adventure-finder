@@ -34,6 +34,24 @@ class LocalCapabilityPlanTest < Minitest::Test
     FileUtils.remove_entry(@temporary) if @temporary && File.exist?(@temporary)
   end
 
+  # The external preparation resolves the same frozen owner artifacts and exact
+  # capability sequence; planning creates no namespace records of its own.
+  def test_external_preparation_plans_the_same_frozen_workload
+    expected = planner.call(operation_id: ID)
+    state = File.join(@temporary, "state")
+    destination = File.join(state, "output/staged-workload-preparations/v0.1", ID, "result.json")
+    FileUtils.mkdir_p(File.dirname(destination))
+    FileUtils.mv(@result_path, destination)
+    external = AdventureFinderWorkspace::LocalCapabilityPlan.new(
+      front_door_root: @front, project_root: @components,
+      env: {"AF_AFW_ROOT" => @afw, "AF_STATE_ROOT" => state},
+      plan_class: WorkloadOrchestrator::Plan,
+      capability_request_class: WorkloadOrchestrator::OllamaCapabilityRequest
+    )
+    assert_equal expected, external.call(operation_id: ID)
+    assert_equal [destination], Dir.glob(File.join(state, "**", "*"), File::FNM_DOTMATCH).select { |path| File.file?(path) }
+  end
+
   def test_groups_only_exact_capabilities_and_preserves_every_pool_job_and_constraint
     document = planner.call(operation_id: ID)
 

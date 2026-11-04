@@ -4,6 +4,7 @@ require "digest"
 require "fileutils"
 require "json"
 require "pathname"
+require_relative "adventure_finder_state_paths"
 require "securerandom"
 require "time"
 require_relative "adventure_finder_ingest_operation_store"
@@ -45,8 +46,9 @@ module AdventureFinderWorkspace
 
     attr_reader :root, :operation_store, :policy_path
 
-    def self.default_root(front_door_root: ENV["AF_ADVENTURE_FINDER_ROOT"] || File.expand_path("..", __dir__))
-      Pathname(front_door_root).expand_path.join("output", "staged-scoring-intents", "v0.1")
+    # Returns the selected AF state family; invalid explicit selectors raise Error.
+    def self.default_root(front_door_root: ENV["AF_ADVENTURE_FINDER_ROOT"] || File.expand_path("..", __dir__), env: ENV)
+      StatePaths.root(front_door_root:, env:).join("output", "staged-scoring-intents", "v0.1")
     end
 
     def self.canonical(value)

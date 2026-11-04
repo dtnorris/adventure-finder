@@ -121,6 +121,72 @@ returns the converter status. A missing receipt leaves the valid revision-zero
 operation at `NEEDS_FIRST_COMPONENT_ARTIFACT`; resume does not retry conversion. A
 pipeline rejection is rendered with pipeline ownership and remains a failure.
 
+## External AdventureFinder coordination state
+
+`AF_STATE_ROOT` selects an **existing absolute mutable directory** for AF-owned
+durable state. Create a private directory outside selected code and owner-data
+roots, then export `AF_STATE_ROOT=/absolute/private/af-state` before starting.
+It is independent of `AF_PROJECT_ROOT`, `AF_ADVENTURE_FINDER_ROOT` and
+`AF_DATA_PIPELINE_DATA_ROOT`; those still select components, the front-door
+contract locator and AFDP storage. An ordinary common parent of sibling roles
+is not itself a selected role.
+
+Unset selection preserves historical paths and v0.1/v0.2 context bytes and meaning.
+Present empty, relative, traversal-bearing, missing, unwritable or symlinked roots
+refuse without fallback. Containment in either direction with selected code or
+owner data also refuses. Relevant AF destinations are checked before publication;
+symlinks and conflicting directory records refuse. A populated namespace supports
+compatible resume and need not be empty.
+
+| State beneath the selected root | Public entry / responsibility |
+| --- | --- |
+| `output/ingest-operations/v0.1`, `output/ingest-contexts/v0.1` | `af-catalog start`, `resume` and operation lookup |
+| `output/ingest-authorities/successor-version/v0.1`, `output/staged-scoring-intents/v0.1` | Explicit successor selection and staged-scoring choices |
+| `output/ingest-editorial-workspaces/v0.1` | Editable human review copy; bound originals remain owner artifacts |
+| `output/ingest-boundary-continuations/v0.1` | AF operation/authorization projections; AFDP approval/freeze retain their existing destination |
+| `output/staged-workload-preparations/v0.1` | Preparation inputs, authority-store locator and frozen workload references |
+| `output/ingest-releases/v0.1` | AF-composed release/package inputs; AFDP review/release/packages retain their existing destination |
+| `output/local-ingest-executions/v0.1` | Local execution intent, coordinator phase/lock, capability inputs and worker-source configuration |
+| `operations/final-promotions` | AF final coordination decisions; AFDP adoption request/decision/result retain their existing destination |
+| `output/local-capability-requests`, `output/worker-sources` | `af-local bootstrap` and `af-batch` generated coordination inputs |
+
+Read-only capability planning consumes preparation in the selected namespace.
+`af-review` still delegates AFW evidence and AFDP review/audit artifacts to their
+owners. WLO workdir/output/consumer identities, LOW state, AFW workload/evidence,
+converter receipts/builds, canonical sources, catalog roles and telemetry/test
+timing output are not relocated. WLO output historically nested under a checkout
+still requires independent retention. No mid-execution migration is authorized.
+
+External operations write context v0.3 with the original state path and directory
+device/inode binding, unchanged runtime roots and optional source-progression
+locator. Operation v0.1 revisions and independent authorizations keep their formats,
+IDs and hashes. Lookup uses only the selected namespace. Copied contexts, changed
+selectors, replaced state directories, conflicting retained owner/code selectors,
+unsupported context versions and incompatible histories refuse before continuation.
+Restore the original configuration to resume. There is no search, import, approval
+regeneration or relocation command. Revision zero without its separately published
+context is an explicit recovery boundary; starting again with its ID does not
+recreate context. Physical namespace binding is not a new peer-library identity rule.
+
+For same-path code replacement, stop all writers and retain the entire external
+namespace: contexts, every revision, authorizations, intents, editable decisions,
+preparations, capability inputs and final coordination decisions. Also retain every
+bound owner artifact: original input/policy definitions, converter receipt/build,
+AFDP data/approval/freeze/release/adoption artifacts, source registry/canonical files,
+all catalog roles and historical project-state evidence, AFW workload/selection/
+build/evidence, WLO execution/attempt/accounting and LOW state. Preserve selectors
+and source identities separately from backups.
+
+Replace the stopped front door **at the identical absolute code path with identical
+selected code**, materializing only code files. Do not restore checkout output,
+contexts or approvals into the replacement. From another CWD, invoke its absolute
+`bin/af-catalog resume OPERATION-UUID` with original selectors. The declared
+converter-fake/real-AFDP fixture exercises this at
+`NEEDS_CANONICAL_MARKDOWN_PLACEMENT`; it does not establish new-path relocation,
+code-upgrade compatibility, empty-library initialization or full-system recovery.
+Restoring files into a new state directory changes its identity and needs explicit
+recovery outside this interface; a backup alone does not prove resume.
+
 ## Resume behavior
 
 Ordinary resume accepts only the handle. It reloads the versioned root context, validates the
@@ -136,9 +202,10 @@ authority stops rather than substituting a later policy.
 An unknown handle, malformed context, corrupt operation, missing bound artifact,
 changed bytes, incompatible version, unsafe locator, or component contract conflict
 fails closed with the existing stable diagnostic. Root mappings are coordination
-metadata, not semantic identity: after an intentional relocation, they must be
-explicitly repaired and the unchanged bound bytes revalidated; resume never searches
-by filename or silently substitutes content.
+metadata, not semantic identity. Historical readers retain their meaning; external
+v0.3 contexts additionally require the original physical namespace binding. No
+relocation/repair interface is supplied; resume never searches by filename or
+silently substitutes content.
 
 `AF_PROJECT_ROOT` remains the component root and `AF_ADVENTURE_FINDER_ROOT` remains the
 detached front-door root. Existing `AF_PDF_CONVERTER_ROOT` and

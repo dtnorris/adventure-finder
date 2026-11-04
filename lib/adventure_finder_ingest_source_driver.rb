@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "adventure_finder_state_paths"
+
 require "digest"
 require "fileutils"
 require "json"
@@ -66,7 +68,7 @@ module AdventureFinderWorkspace
                 :pipeline_root, :source_root, :catalog_root, :runner
 
     def initialize(store:, routing:, project_root:, front_door_root:, pipeline_root:,
-                   source_root:, catalog_root:, runner: CommandRunner.new)
+                   source_root:, catalog_root:, runner: CommandRunner.new, env: ENV)
       @store = store
       @routing = routing
       @project_root = Pathname(project_root).expand_path
@@ -75,6 +77,7 @@ module AdventureFinderWorkspace
       @source_root = Pathname(source_root).expand_path
       @catalog_root = Pathname(catalog_root).expand_path
       @runner = runner
+      @env = env
     end
 
     def drive(operation_id, canonical_destination:)
@@ -368,7 +371,7 @@ module AdventureFinderWorkspace
     # so publish a separate editable workspace for the human review.
     def editable_review_workspace(operation, bound_dir)
       names = %w[editorial_context.json editorial_decisions.yml editorial_review.md]
-      destination = front_door_root.join("output", "ingest-editorial-workspaces", "v0.1",
+      destination = StatePaths.root(front_door_root:, project_root:, owner_roots: [source_root, catalog_root, pipeline_root], env: @env).join("output", "ingest-editorial-workspaces", "v0.1",
                                         operation.fetch("operation_id"))
       names.each do |name|
         source = bound_dir.join(name)

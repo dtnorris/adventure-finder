@@ -3,6 +3,7 @@
 require "fileutils"
 require "securerandom"
 require_relative "adventure_finder_model_preflight"
+require_relative "adventure_finder_state_paths"
 
 module AdventureFinderWorkspace
   # Explicit operator action that materializes the frozen plan requirement and
@@ -55,8 +56,18 @@ module AdventureFinderWorkspace
         File.dirname(batch.dig("wlo", "output_root")), "local-capability-requests",
         batch.fetch("production_batch_id")
       )
-      FileUtils.mkdir_p(root, mode: 0o700)
+      if ENV.key?("AF_STATE_ROOT")
+        state = StatePaths.root(front_door_root: ENV.fetch("AF_ADVENTURE_FINDER_ROOT", File.expand_path("..", __dir__)),
+          project_root: @registry.workspace_root, owner_roots: [batch.dig("afw", "repository_root"), batch.dig("wlo", "output_root")])
+        root = state.join("output", "local-capability-requests", batch.fetch("production_batch_id")).to_s
+        StatePaths.check_destination!(Pathname(root).join("#{alias_name}.json"), state)
+      end
       path = File.join(root, "#{alias_name}.json")
+      if ENV.key?("AF_STATE_ROOT") && File.exist?(path)
+        raise Error, "external capability request conflicts with retained bytes" unless File.file?(path) && File.binread(path) == bytes
+        return path
+      end
+      FileUtils.mkdir_p(root, mode: 0o700)
       temporary = "#{path}.tmp.#{Process.pid}.#{SecureRandom.hex(4)}"
       File.open(temporary, File::WRONLY | File::CREAT | File::EXCL, 0o600) do |file|
         file.write(bytes)

@@ -26,6 +26,7 @@ module AdventureFinderWorkspace
   class CatalogIngest
     CONTEXT_VERSION = "adventurefinder-catalog-ingest-context/v0.1"
     SOURCE_CONTEXT_VERSION = "adventurefinder-catalog-ingest-context/v0.2"
+    STATE_CONTEXT_VERSION = "adventurefinder-catalog-ingest-context/v0.3"
     RECEIPT_VERSION = "pdf-to-llm-md/conversion-receipt/v0.1"
     CONTEXT_ROOTS = IngestOperation::ROOTS.sort.freeze
     STAGED_SCORING_POLICY = StagedScoringIntentStore::SUPPORTED_POLICY
@@ -72,6 +73,10 @@ module AdventureFinderWorkspace
         fail_with("INVALID_SUCCESSOR_VERSION", "select a dotted numeric successor version for continuous ingest")
       end
       store = store_for(context)
+      if env.key?("AF_STATE_ROOT") &&
+         (store.root.join(operation_id).exist? || context_path(operation_id).exist?)
+        fail_with("CONFLICT", "operation or context already exists; resume it or use explicit recovery for a missing context")
+      end
       choices = source_declaration.to_h do |key, value|
         [key, choice(value, selected_by:, selected_at:)]
       end
@@ -155,7 +160,7 @@ module AdventureFinderWorkspace
                     project_root: context.fetch("project_root"),
                     pipeline_root: context.fetch("pipeline_root"),
                     source_root: context.fetch("source_root"),
-                    catalog_root: context.fetch("catalog_root"), out:
+                    catalog_root: context.fetch("catalog_root"), out:, env:
                   ).drive(operation_id:, review_workspace: result.fetch("review_workspace"), approved_by:)
                 else
                   continued_boundary_paths(context, operation_id, result.fetch("review_workspace"))
@@ -170,7 +175,7 @@ module AdventureFinderWorkspace
         release_paths = release_paths(context, operation_id)
         unless File.file?(release_paths.fetch(:package_path))
           local_intent = LocalExecutionIntentStore.new(
-            root: LocalExecutionIntentStore.default_root(front_door_root: context.fetch("front_door_root"))
+            root: LocalExecutionIntentStore.default_root(front_door_root: context.fetch("front_door_root"), env:)
           ).intent_path(operation_id)
           if local_intent.file?
             local_resume(operation_id, automatic: true)
@@ -293,7 +298,8 @@ module AdventureFinderWorkspace
 
     def release_paths(context, operation_id)
       root = pipeline_storage_root(context).join("output", "ingest-releases", "v0.1", operation_id)
-      {inputs_path: root.join("package-inputs.json").to_s, package_path: root.join("package.json").to_s}
+      coordination = env.key?("AF_STATE_ROOT") ? state_root(context).join("output", "ingest-releases", "v0.1", operation_id) : root
+      {inputs_path: coordination.join("package-inputs.json").to_s, package_path: root.join("package.json").to_s}
     end
 
     def release_continuation(context)
@@ -321,7 +327,7 @@ module AdventureFinderWorkspace
         package.dig("operation", "operation_id") == context.fetch("operation_id")
       FinalPromotion.new(
         front_door_root: context.fetch("front_door_root"), project_root: context.fetch("project_root"),
-        pipeline_root: context.fetch("pipeline_root"), out:
+        pipeline_root: context.fetch("pipeline_root"), out:, env:
       ).run(**ready, approver: final_approver)
     rescue AdventureFinderWorkspace::Error, JSON::ParserError, SystemCallError => e
       fail_with("FINAL_PROMOTION_REFUSED", e.message)
@@ -400,6 +406,13 @@ module AdventureFinderWorkspace
         "catalog_root" => catalog.dirname.to_s,
         "roots" => roots
       }
+      if env.key?("AF_STATE_ROOT")
+        context["contract_version"] = STATE_CONTEXT_VERSION
+        root = state_root(context)
+        validate_operation_id!(operation_id)
+        StatePaths.check_operation!(root, operation_id)
+        context["state_binding"] = StatePaths.binding(root)
+      end
       if canonical_destination
         context["source_progression"] = {
           "canonical_destination" => destination_locator(
@@ -412,7 +425,7 @@ module AdventureFinderWorkspace
 
     def store_for(context)
       IngestOperationStore.new(
-        root: IngestOperationStore.default_root(front_door_root: context.fetch("front_door_root")),
+        root: IngestOperationStore.default_root(front_door_root: context.fetch("front_door_root"), env:),
         roots: context.fetch("roots")
       )
     end
@@ -440,7 +453,7 @@ module AdventureFinderWorkspace
         front_door_root: context.fetch("front_door_root"),
         pipeline_root: context.fetch("pipeline_root"),
         source_root: context.fetch("source_root"),
-        catalog_root: context.fetch("catalog_root")
+        catalog_root: context.fetch("catalog_root"), env:
       )
       driver.drive(
         operation_id,
@@ -454,7 +467,7 @@ module AdventureFinderWorkspace
     def authority_store_for(context, store)
       SuccessorVersionAuthorizationStore.new(
         root: SuccessorVersionAuthorizationStore.default_root(
-          front_door_root: context.fetch("front_door_root")
+          front_door_root: context.fetch("front_door_root"), env:
         ),
         operation_store: store
       )
@@ -462,7 +475,7 @@ module AdventureFinderWorkspace
 
     def scoring_intent_store_for(context, store)
       StagedScoringIntentStore.new(
-        root: StagedScoringIntentStore.default_root(front_door_root: context.fetch("front_door_root")),
+        root: StagedScoringIntentStore.default_root(front_door_root: context.fetch("front_door_root"), env:),
         operation_store: store,
         policy_path: Pathname(context.fetch("pipeline_root")).join(
           "config", "staged_scoring_input_policy_v0.1.json"
@@ -622,7 +635,14 @@ module AdventureFinderWorkspace
     end
 
     def context_root
-      front_door_root.join("output", "ingest-contexts", "v0.1")
+      StatePaths.root(front_door_root:, project_root:, env:).join("output", "ingest-contexts", "v0.1")
+    end
+
+    # Returns this operation's namespace after checking all selected owner roles.
+    # Accepts a validated context and raises Error on unsafe state placement.
+    def state_root(context)
+      StatePaths.root(front_door_root:, project_root:,
+                      owner_roots: [context.fetch("pipeline_root"), *context.fetch("roots").values.reject { |root| root == front_door_root.to_s }], env:)
     end
 
     def context_path(operation_id)
@@ -659,7 +679,13 @@ module AdventureFinderWorkspace
       fail_with("UNKNOWN_OPERATION", "unknown operation handle #{operation_id}") unless path.file?
       context = JSON.parse(File.binread(path))
       base_keys = %w[catalog_root contract_version front_door_root operation_id pipeline_root project_root roots source_root]
-      valid_keys = if context.is_a?(Hash) && context["contract_version"] == SOURCE_CONTEXT_VERSION
+      external = context.is_a?(Hash) && context["contract_version"] == STATE_CONTEXT_VERSION
+      valid_keys = if external
+                     expected = base_keys + %w[state_binding]
+                     expected += %w[source_progression] if context.key?("source_progression")
+                     context.keys.sort == expected.sort &&
+                       (!context.key?("source_progression") || valid_source_progression?(context["source_progression"]))
+                   elsif context.is_a?(Hash) && context["contract_version"] == SOURCE_CONTEXT_VERSION
                      context.keys.sort == (base_keys + %w[source_progression]).sort &&
                        valid_source_progression?(context["source_progression"])
                    else
@@ -673,6 +699,24 @@ module AdventureFinderWorkspace
       context.fetch("roots").each_value { |value| absolute_path!(value) }
       %w[catalog_root front_door_root pipeline_root project_root source_root].each do |key|
         absolute_path!(context.fetch(key))
+      end
+      if external || env.key?("AF_STATE_ROOT")
+        unless external && env.key?("AF_STATE_ROOT") &&
+               context["state_binding"] == StatePaths.binding(state_root(context)) &&
+               context["front_door_root"] == front_door_root.to_s &&
+               context["project_root"] == project_root.to_s
+          fail_with("STATE_ROOT_MISMATCH", "state selector or retained namespace binding changed; restore the original configuration")
+        end
+        {
+          "AF_DATA_PIPELINE_ROOT" => context.fetch("pipeline_root"),
+          "AF_SOURCE_ROOT" => context.fetch("source_root"),
+          "AF_PDF_CONVERTER_ROOT" => context.dig("roots", "converter")
+        }.each do |selector, retained|
+          if env.key?(selector) && Pathname(env.fetch(selector)).expand_path.to_s != retained
+            fail_with("STATE_ROOT_MISMATCH", "#{selector} conflicts with retained context; restore the original configuration")
+          end
+        end
+        StatePaths.check_operation!(state_root(context), operation_id)
       end
       selected_data = PipelineDataPaths.root(code_root: context.fetch("pipeline_root"),
         legacy_root: context.fetch("pipeline_root"), env:)
@@ -950,6 +994,9 @@ module AdventureFinderWorkspace
     rescue CatalogIngest::Failure => e
       err.puts "af-catalog: #{e.message}"
       e.status
+    rescue Error => e
+      err.puts "af-catalog: #{e.message}"
+      1
     end
 
     def self.parse_policy_values(value)

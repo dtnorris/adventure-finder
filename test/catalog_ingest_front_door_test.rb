@@ -506,7 +506,123 @@ class CatalogIngestFrontDoorTest < Minitest::Test
     assert_equal intent_bytes, File.binread(intent_path)
   end
 
+  # Public commands retain independent operation and authority histories per
+  # namespace. This fixture uses its declared mechanical router, not real AFDP.
+  def test_external_namespaces_keep_separate_public_operations_and_authorities
+    states = [directory("state one"), directory("state two")].map { |path| File.realpath(path) }
+    ids = [ID, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"]
+    states.zip(ids).each_with_index do |(state, operation_id), index|
+      selected = {"AF_STATE_ROOT" => state}
+      arguments = start_arguments.map { |argument| argument == ID ? operation_id : argument }
+      stdout, stderr, status = run_catalog(selected, *arguments)
+      assert status.success?, stderr
+      assert_includes stdout, "Gate: NEEDS_CANONICAL_MARKDOWN_PLACEMENT"
+      _stdout, stderr, status = run_catalog(selected, "bind-successor-version", operation_id,
+        "--successor-version", "7.5.#{index + 1}", "--selected-by", "David")
+      assert status.success?, stderr
+      context = JSON.parse(File.binread(File.join(state, "output/ingest-contexts/v0.1", "#{operation_id}.json")))
+      assert_equal AdventureFinderWorkspace::CatalogIngest::STATE_CONTEXT_VERSION, context.fetch("contract_version")
+      assert_equal @front, context.dig("roots", "front_door")
+      assert_equal @pipeline, context.fetch("pipeline_root")
+      assert_equal state, context.dig("state_binding", "root")
+    end
+    before = states.map { |state| external_snapshot(state) }
+    states.zip(ids).each do |state, operation_id|
+      stdout, stderr, status = run_catalog({"AF_STATE_ROOT" => state}, "resume", operation_id)
+      assert status.success?, stderr
+      assert_includes stdout, "Gate: NEEDS_CANONICAL_MARKDOWN_PLACEMENT"
+    end
+    _stdout, stderr, status = run_catalog({"AF_STATE_ROOT" => states.last}, "resume", ID)
+    refute status.success?
+    assert_includes stderr, "UNKNOWN_OPERATION"
+    assert_equal before, states.map { |state| external_snapshot(state) }
+    refute File.exist?(File.join(@front, "output"))
+  end
+
+  # Invalid selectors and owner/code overlaps fail before converter or AF writes.
+  def test_invalid_external_selectors_refuse_before_start_writes
+    state = directory("state")
+    alias_path = File.join(@temporary, "state alias")
+    File.symlink(state, alias_path)
+    ["", "relative", state + "/../state", state + "/absent", alias_path,
+      File.realpath(@front), File.realpath(@source), File.realpath(@catalog)].each do |value|
+      _stdout, stderr, status = run_catalog({"AF_STATE_ROOT" => value}, *start_arguments)
+      refute status.success?, value
+      refute_empty stderr
+      refute File.exist?(@converter_log)
+      refute File.exist?(File.join(@front, "output"))
+      assert_empty Dir.children(state)
+    end
+  end
+
+  # Copied contexts, unsupported versions, missing contexts and stale owner bytes
+  # refuse with no cross-root search or regeneration of separately retained state.
+  def test_external_context_refusals_preserve_original_history
+    state = File.realpath(directory("state"))
+    alternate = File.realpath(directory("other state"))
+    selected = {"AF_STATE_ROOT" => state}
+    _stdout, stderr, status = run_catalog(selected, *start_arguments)
+    assert status.success?, stderr
+    before = external_snapshot(state)
+    path = File.join(state, "output/ingest-contexts/v0.1", "#{ID}.json")
+    original = File.binread(path)
+    FileUtils.cp_r(File.join(state, "output"), alternate)
+    _stdout, stderr, status = run_catalog({"AF_STATE_ROOT" => alternate}, "resume", ID)
+    refute status.success?
+    assert_includes stderr, "STATE_ROOT_MISMATCH"
+    assert_equal before, external_snapshot(state)
+    context = JSON.parse(original)
+    context.fetch("state_binding")["inode"] += 1
+    File.binwrite(path, JSON.generate(context))
+    wrong_identity = external_snapshot(state)
+    _stdout, stderr, status = run_catalog(selected, "resume", ID)
+    refute status.success?
+    assert_includes stderr, "STATE_ROOT_MISMATCH"
+    assert_equal wrong_identity, external_snapshot(state)
+    context = JSON.parse(original)
+    context["contract_version"] = "future/v99"
+    File.binwrite(path, JSON.generate(context))
+    corrupt_before = external_snapshot(state)
+    _stdout, stderr, status = run_catalog(selected, "resume", ID)
+    refute status.success?
+    assert_includes stderr, "CORRUPT_RESUME_CONTEXT"
+    assert_equal corrupt_before, external_snapshot(state)
+    File.unlink(path)
+    missing_before = external_snapshot(state)
+    _stdout, stderr, status = run_catalog(selected, "resume", ID)
+    refute status.success?
+    assert_includes stderr, "UNKNOWN_OPERATION"
+    assert_equal missing_before, external_snapshot(state)
+    _stdout, stderr, status = run_catalog(selected, *start_arguments)
+    refute status.success?
+    assert_includes stderr, "CONFLICT"
+    assert_equal missing_before, external_snapshot(state)
+    File.binwrite(path, original)
+    metadata_path = File.join(state, "output/ingest-operations/v0.1", ID, "store.json")
+    metadata_bytes = File.binread(metadata_path)
+    metadata = JSON.parse(metadata_bytes)
+    metadata["contract_version"] = "foreign-store/v99"
+    File.binwrite(metadata_path, JSON.generate(metadata))
+    foreign_before = external_snapshot(state)
+    stdout, stderr, status = run_catalog(selected, "resume", ID)
+    refute status.success?
+    assert_includes stdout + stderr, "INCOMPATIBLE_VERSION"
+    assert_equal foreign_before, external_snapshot(state)
+    File.binwrite(metadata_path, metadata_bytes)
+    File.binwrite(@base, "changed catalog\n")
+    stdout, _stderr, status = run_catalog(selected, "resume", ID)
+    refute status.success?
+    assert_includes stdout, "STALE_INPUT"
+    assert_equal before, external_snapshot(state)
+  end
+
   private
+
+  # Returns exact relative file hashes for refusal/replay comparisons; reads only.
+  def external_snapshot(root)
+    Dir.glob(File.join(root, "**", "*"), File::FNM_DOTMATCH).select { |path| File.file?(path) }
+      .sort.to_h { |path| [path.delete_prefix(root), Digest::SHA256.file(path).hexdigest] }
+  end
 
   # The dispatcher consumes argv; each call gets its own array and streams.
   # Executable/restart scenarios continue to use run_catalog below.

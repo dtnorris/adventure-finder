@@ -30,6 +30,20 @@ or edits a registry. Environment overrides remain supported through
 `AF_PROJECT_ROOT`, `AF_ADVENTURE_FINDER_ROOT`, `AF_AFW_ROOT`, `LOW_REPO_ROOT`,
 `LOW_STATE_ROOT`, and `WLO_REPO_ROOT`.
 
+With `AF_STATE_ROOT` selected, AF reads preparation records and retains execution
+intent, coordinator phase/lock, worker-source configuration and capability inputs
+in that external namespace. Unset selection preserves legacy paths. Planning,
+start, resume and status use the original namespace and bound owner selectors;
+invalid or changed selection refuses without importing context or authorization.
+
+WLO's existing output remains
+`$AF_ADVENTURE_FINDER_ROOT/output/local-ingest-executions/v0.1/OPERATION_UUID/wlo`.
+Its workdir, consumer identity, attempts and accounting are unchanged. Retain WLO
+state independently even when nested in a checkout; AFW and LOW state also remain
+with their owners. The
+[front-door state contract](CATALOG_INGEST_FRONT_DOOR_V0.1.md#external-adventurefinder-coordination-state)
+defines the complete backup set and narrower same-path replacement proof.
+
 For each frozen sequence step, the driver first inspects LOW's fresh public
 publication. If the exact requirement is not READY, it gives LOW the frozen generic
 capability request and then independently re-reads the public publication and applies

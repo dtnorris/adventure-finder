@@ -85,6 +85,26 @@ class BatchFrontDoorTest < Minitest::Test
     FileUtils.rm_rf(@root)
   end
 
+  # The public batch action externalizes its generated AF input without moving
+  # WLO output/workdir or changing worker authority; the executor is declared fake.
+  def test_external_worker_sources_preserve_the_wlo_execution_selection
+    state = File.join(@root, "state")
+    FileUtils.mkdir_p(state)
+    previous = ENV["AF_STATE_ROOT"]
+    ENV["AF_STATE_ROOT"] = state
+    assert_equal 0, front_door.run("start", "39")
+    argv = @executor.calls.fetch(0).fetch(:argv)
+    config = argv.fetch(argv.index("--worker-sources-config") + 1)
+    assert config.start_with?(File.join(state, "output/worker-sources/"))
+    assert_option argv, "--output", @output
+    assert_option argv, "--workdir", @afw
+    bytes = File.binread(config)
+    assert_equal 0, front_door.run("start", "39")
+    assert_equal bytes, File.binread(config)
+  ensure
+    previous.nil? ? ENV.delete("AF_STATE_ROOT") : ENV["AF_STATE_ROOT"] = previous
+  end
+
   def test_bs01_bs03_bs13_bs16_first_start_uses_exact_plan_and_wlo_foreground_only
     assert_equal 0, front_door.run("start", "39")
     call = @executor.calls.fetch(0)

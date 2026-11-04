@@ -171,7 +171,58 @@ class Ig05c3OperationRoutingRestartAcceptanceTest < Minitest::Test
     refute File.exist?(@forbidden_log)
   end
 
+  # Uses real AFDP routing and the existing declared converter/catalog fakes.
+  # Replacement removes all first-checkout bytes and cold-resumes from another
+  # CWD at the identical absolute code path, retaining separate owner artifacts.
+  def test_external_state_survives_same_path_tracked_code_replacement
+    @state_root = directory("external state")
+    @cli_path = File.join(@front, "bin", "af-catalog")
+    source_identity = materialize_front_door
+    started_out, started_err, started_status = run_catalog(@first_cwd, *start_arguments)
+    assert started_status.success?, started_err + started_out
+    assert_includes started_out, "Gate: NEEDS_CANONICAL_MARKDOWN_PLACEMENT"
+    _stdout, stderr, status = run_catalog(@first_cwd, "bind-successor-version", ID,
+      "--successor-version", "7.5.2", "--selected-by", "David")
+    assert status.success?, stderr
+    before = operation_snapshot
+    owner_paths = [@pdf, @base, @policy, receipt_path]
+    owner_bytes = owner_paths.to_h { |path| [path, File.binread(path)] }
+    original_operation = store.load(ID)
+    FileUtils.remove_entry(@front)
+    assert_equal before, operation_snapshot
+    assert_equal source_identity, materialize_front_door
+    refute File.exist?(File.join(@front, "output"))
+    resumed_out, resumed_err, resumed_status = run_catalog(@second_cwd, "resume", ID)
+    assert resumed_status.success?, resumed_err + resumed_out
+    assert_includes resumed_out, "Gate: NEEDS_CANONICAL_MARKDOWN_PLACEMENT"
+    assert_equal original_operation, store.load(ID)
+    assert_equal before, operation_snapshot
+    assert_equal owner_bytes, owner_paths.to_h { |path| [path, File.binread(path)] }
+    refute File.exist?(File.join(@front, "output"))
+    refute File.exist?(@forbidden_log)
+  end
+
   private
+
+  # Materializes only the candidate's tracked runtime inventory (plus new AF
+  # runtime files awaiting operator application), preserving bytes and modes.
+  # No Git administration, output, context or approval directory is copied.
+  def materialize_front_door
+    repository = File.expand_path("../..", __dir__)
+    inventory, error, status = Open3.capture3("git", "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", "bin", "lib", chdir: repository)
+    raise error unless status.success?
+
+    inventory.split("\0").uniq.sort.to_h do |relative|
+      original = File.join(repository, relative)
+      raise "runtime inventory contains a symlink" if File.symlink?(original)
+
+      destination = File.join(@front, relative)
+      FileUtils.mkdir_p(File.dirname(destination))
+      FileUtils.copy_file(original, destination)
+      File.chmod(File.stat(original).mode & 0o777, destination)
+      [relative, {"sha256" => Digest::SHA256.file(destination).hexdigest, "mode" => File.stat(destination).mode & 0o777}]
+    end
+  end
 
   def start!
     _stdout, stderr, status = run_catalog(@first_cwd, *start_arguments)
@@ -203,11 +254,12 @@ class Ig05c3OperationRoutingRestartAcceptanceTest < Minitest::Test
         "AF_PDF_CONVERTER_ROOT" => @converter,
         "AF_DATA_PIPELINE_ROOT" => @pipeline,
         "AF_SOURCE_ROOT" => @source,
+        "AF_STATE_ROOT" => @state_root,
         "IG05C3_PHASE" => arguments.first == "start" ? "start" : "resume",
         "PATH" => [File.dirname(RbConfig.ruby), @forbidden_bin, ENV.fetch("PATH", "")]
           .join(File::PATH_SEPARATOR)
       },
-      File.expand_path("../../bin/af-catalog", __dir__),
+      @cli_path || File.expand_path("../../bin/af-catalog", __dir__),
       *arguments,
       chdir: cwd
     )
@@ -215,7 +267,7 @@ class Ig05c3OperationRoutingRestartAcceptanceTest < Minitest::Test
 
   def store
     @store ||= Store.new(
-      root: File.join(@front, "output", "ingest-operations", "v0.1"),
+      root: File.join(@state_root || @front, "output", "ingest-operations", "v0.1"),
       roots: {
         "input" => @input_root,
         "front_door" => @front,
@@ -331,9 +383,10 @@ class Ig05c3OperationRoutingRestartAcceptanceTest < Minitest::Test
   end
 
   def operation_snapshot
-    Dir.glob(File.join(@front, "output", "**", "*"), File::FNM_DOTMATCH)
+    root = @state_root || @front
+    Dir.glob(File.join(root, "output", "**", "*"), File::FNM_DOTMATCH)
        .select { |path| File.file?(path) }
-       .sort.to_h { |path| [path.delete_prefix(@front), Digest::SHA256.file(path).hexdigest] }
+       .sort.to_h { |path| [path.delete_prefix(root), Digest::SHA256.file(path).hexdigest] }
   end
 
   def directory(relative)
