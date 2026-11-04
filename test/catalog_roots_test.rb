@@ -22,6 +22,7 @@ class CatalogRootsTest < Minitest::Test
           [front, converter, pipeline].each { |path| FileUtils.mkdir_p(File.join(path, "bin")) }
           catalog = File.join(front, "bin/af-catalog")
           FileUtils.cp(File.expand_path("../bin/af-catalog", __dir__), catalog)
+          FileUtils.cp_r(File.expand_path("../lib", __dir__), front)
           FileUtils.chmod(0o755, catalog)
           pdf = File.join(dir, "source.pdf")
           routed = File.join(dir, "routed.json")

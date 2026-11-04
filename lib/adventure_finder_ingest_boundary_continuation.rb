@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "adventure_finder_state_paths"
+
 require "json"
 require "open3"
 require "pathname"
@@ -23,12 +25,13 @@ module AdventureFinderWorkspace
 
     def initialize(store:, routing:, authorization_store:, front_door_root:,
                    project_root:, pipeline_root:, source_root:, catalog_root:,
-                   out: $stdout, runner: nil)
+                   out: $stdout, runner: nil, env: ENV)
       @store, @routing, @authorization_store = store, routing, authorization_store
       @front_door_root = Pathname(front_door_root).expand_path
       @project_root = Pathname(project_root).expand_path
       @pipeline_root = Pathname(pipeline_root).expand_path
-      @storage_root = PipelineDataPaths.root(code_root: @pipeline_root, legacy_root: @front_door_root)
+      @env = env
+      @storage_root = PipelineDataPaths.root(code_root: @pipeline_root, legacy_root: @front_door_root, env:)
       @source_root = Pathname(source_root).expand_path
       @catalog_root = Pathname(catalog_root).expand_path
       @out = out
@@ -57,7 +60,10 @@ module AdventureFinderWorkspace
       dossier_path = @store.binding_path(operation_id, dossier.fetch("artifact_id"))
       base_path = @store.binding_path(operation_id, "base_catalog")
       bundle = Pathname(review_workspace).expand_path
-      expected_bundle = @front_door_root.join("output", "ingest-editorial-workspaces", "v0.1", operation_id)
+      state = StatePaths.root(front_door_root: @front_door_root, project_root: @project_root,
+                              owner_roots: [@source_root, @catalog_root, @pipeline_root], env: @env)
+      StatePaths.check_operation!(state, operation_id) if @env.key?("AF_STATE_ROOT")
+      expected_bundle = state.join("output", "ingest-editorial-workspaces", "v0.1", operation_id)
       fail_with("BOUNDARY_NOT_READY", "review workspace is not the operation's editable handoff") unless
         bundle == expected_bundle && bundle.directory? && !bundle.symlink?
       authorization = @authorization_store.projection(operation_id)
@@ -67,6 +73,7 @@ module AdventureFinderWorkspace
         approved_by.is_a?(String) && !approved_by.strip.empty? && approved_by == approved_by.strip
 
       destination = @storage_root.join("output", "ingest-boundary-continuations", "v0.1", operation_id)
+      coordination = @env.key?("AF_STATE_ROOT") ? state.join("output", "ingest-boundary-continuations", "v0.1", operation_id) : destination
       check_private_path!(destination)
       fail_with("BOUNDARY_CONTINUATION_CONFLICT", "continuation path is not a directory") if
         destination.exist? && !destination.directory?
@@ -96,8 +103,9 @@ module AdventureFinderWorkspace
         fail_with(prepared.dig("diagnostic", "code") || "BOUNDARY_NOT_READY",
                   prepared.dig("diagnostic", "message") || "freeze projection refused")
       end
-      operation_input = destination.join("operation-input.json")
-      authority_input = destination.join("successor-authority.json")
+      FileUtils.mkdir_p(coordination)
+      operation_input = coordination.join("operation-input.json")
+      authority_input = coordination.join("successor-authority.json")
       write_exact(operation_input, prepared.projection)
       write_exact(authority_input, authorization)
       state = @catalog_root.join("PROJECT_STATE.yml")

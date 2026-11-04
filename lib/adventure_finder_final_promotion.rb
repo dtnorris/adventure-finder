@@ -11,6 +11,7 @@ require "tempfile"
 require "time"
 require_relative "adventure_finder_workspace"
 require_relative "adventure_finder_pipeline_data_paths"
+require_relative "adventure_finder_state_paths"
 
 module AdventureFinderWorkspace
   # Presents one validated final-release package and delegates its exact human
@@ -21,6 +22,7 @@ module AdventureFinderWorkspace
     DECISION_SCHEMA = "af-final-release-adoption-decision/v0.1"
     RESULT_SCHEMA = "af-final-release-adoption-result/v0.1"
     COORDINATION_SCHEMA = "adventurefinder-final-promotion-decision/v0.1"
+    STATE_COORDINATION_SCHEMA = "adventurefinder-final-promotion-decision/v0.2"
     SHA256 = /\A[0-9a-f]{64}\z/
 
     class ComponentRunner
@@ -34,17 +36,18 @@ module AdventureFinderWorkspace
 
     def initialize(front_door_root:, project_root:, pipeline_root: nil,
                    component_runner: ComponentRunner.new, input: $stdin,
-                   out: $stdout, err: $stderr, clock: -> { Time.now.utc })
+                   out: $stdout, err: $stderr, clock: -> { Time.now.utc }, env: ENV)
       @front_door_root = Pathname(front_door_root).expand_path.cleanpath
       @project_root = Pathname(project_root).expand_path.cleanpath
       @pipeline_root = Pathname(
-        pipeline_root || ENV.fetch("AF_DATA_PIPELINE_ROOT", @project_root.join("af-data-pipeline").to_s)
+        pipeline_root || env.fetch("AF_DATA_PIPELINE_ROOT", @project_root.join("af-data-pipeline").to_s)
       ).expand_path.cleanpath
       @runner = component_runner
       @input = input
       @out = out
       @err = err
       @clock = clock
+      @env = env
     end
 
     def run(inputs_path:, package_path:, approver:, operation_dir: nil, preview: false)
@@ -59,9 +62,28 @@ module AdventureFinderWorkspace
       unless retained_package["package_id"].to_s.match?(SHA256)
         raise Error, "final-release package has no exact package identity"
       end
-      operation_dir ||= @front_door_root.join("operations", "final-promotions", retained_package.fetch("package_id")).to_s
+      owner_roots = [@pipeline_root]
+      if @env.key?("AF_STATE_ROOT")
+        inputs = read_json(inputs_path, "final-release inputs")
+        owner_roots << inputs["catalog_repository_root"] if inputs["catalog_repository_root"]
+        manifest = retained_package.dig("provenance", "nodes", "current_project_state", "path")
+        owner_roots << File.dirname(manifest) if manifest
+      end
+      state = StatePaths.root(front_door_root: @front_door_root, project_root: @project_root,
+                             owner_roots:, env: @env)
+      operation_dir ||= state.join("operations", "final-promotions", retained_package.fetch("package_id")).to_s
       operation_dir = Pathname(operation_dir).expand_path.cleanpath
+      StatePaths.check_destination!(operation_dir, state) if @env.key?("AF_STATE_ROOT")
       paths = operation_paths(operation_dir, package_id: retained_package.fetch("package_id"))
+      if @env.key?("AF_STATE_ROOT") && File.exist?(paths.fetch(:coordination))
+        retained = read_json(paths.fetch(:coordination), "AdventureFinder coordination decision")
+        unless retained["schema_version"] == STATE_COORDINATION_SCHEMA &&
+               retained["state_binding"] == StatePaths.binding(state) &&
+               retained["package_id"] == retained_package.fetch("package_id") &&
+               retained["coordination_id"] == digest(retained.except("coordination_id"))
+          raise Error, "final-promotion state binding is foreign, corrupt or incompatible"
+        end
+      end
       if File.file?(paths.fetch(:decision)) && read_json(paths.fetch(:decision), "pipeline adoption decision")["decision"] == "APPROVE"
         return replay_promotion(inputs_path, package_path, retained_package, paths, approver)
       end
@@ -386,6 +408,12 @@ module AdventureFinderWorkspace
         "pipeline_decision" => {"decision_id" => decision.fetch("decision_id"), "path" => File.expand_path(decision_path),
                                 **file_binding(decision_path)}
       }
+      if @env.key?("AF_STATE_ROOT")
+        document["schema_version"] = STATE_COORDINATION_SCHEMA
+        document["state_binding"] = StatePaths.binding(StatePaths.root(
+          front_door_root: @front_door_root, project_root: @project_root, env: @env
+        ))
+      end
       document["coordination_id"] = digest(document)
       write_once(path, JSON.pretty_generate(document) + "\n", "coordination decision")
     end
@@ -393,7 +421,13 @@ module AdventureFinderWorkspace
     def validate_coordination!(paths, package, request, approver)
       decision = read_json(paths.fetch(:decision), "pipeline adoption decision")
       coordination = read_json(paths.fetch(:coordination), "AdventureFinder coordination decision")
-      unless decision["schema_version"] == DECISION_SCHEMA && coordination["schema_version"] == COORDINATION_SCHEMA &&
+      external = @env.key?("AF_STATE_ROOT")
+      expected_schema = external ? STATE_COORDINATION_SCHEMA : COORDINATION_SCHEMA
+      expected_binding = external ? StatePaths.binding(StatePaths.root(
+        front_door_root: @front_door_root, project_root: @project_root, env: @env
+      )) : nil
+      unless decision["schema_version"] == DECISION_SCHEMA && coordination["schema_version"] == expected_schema &&
+             coordination["state_binding"] == expected_binding &&
              coordination["package_id"] == package["package_id"] && coordination["request_id"] == request["request_id"] &&
              coordination["decided_by"] == approver && decision["decided_by"] == approver &&
              coordination["decision"] == decision["decision"] &&
@@ -448,7 +482,7 @@ module AdventureFinderWorkspace
     # Private owner artifacts remain outside the front-door Git suggestion.
     def operation_relative_paths(paths)
       paths.values.select do |path|
-        File.exist?(path) && (!ENV.key?("AF_DATA_PIPELINE_DATA_ROOT") ||
+        File.exist?(path) && (!@env.key?("AF_DATA_PIPELINE_DATA_ROOT") && !@env.key?("AF_STATE_ROOT") ||
           PipelineDataPaths.contained?(Pathname(path).expand_path, @front_door_root))
       end.map do |path|
         pathname = Pathname(path).expand_path.cleanpath
@@ -463,9 +497,13 @@ module AdventureFinderWorkspace
     # Keeps front-door coordination local while AFDP's durable adoption request,
     # decision and replay receipt use private storage. Invalid roots raise Error.
     def operation_paths(root, package_id:)
-      storage = PipelineDataPaths.root(code_root: @pipeline_root, legacy_root: root)
-      owner = ENV.key?("AF_DATA_PIPELINE_DATA_ROOT") ? storage.join("operations", "final-promotions", package_id) : root
+      legacy = @env.key?("AF_STATE_ROOT") ? @front_door_root.join("operations", "final-promotions", package_id) : root
+      storage = PipelineDataPaths.root(code_root: @pipeline_root, legacy_root: legacy, env: @env)
+      owner = @env.key?("AF_DATA_PIPELINE_DATA_ROOT") ? storage.join("operations", "final-promotions", package_id) : legacy
       PipelineDataPaths.check_ancestors!(owner)
+      if @env.key?("AF_STATE_ROOT")
+        StatePaths.check_destination!(root.join("coordination-decision.json"), Pathname(@env.fetch("AF_STATE_ROOT")))
+      end
       {request: owner.join("adoption-request.json").to_s,
        decision: owner.join("adoption-decision.json").to_s,
        coordination: root.join("coordination-decision.json").to_s,

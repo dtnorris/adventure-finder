@@ -60,6 +60,31 @@ class LocalCapacityTest < Minitest::Test
     FileUtils.chmod(0o755, @bundle)
   end
 
+  # The public action writes only the frozen generic request to AF state; the
+  # declared executor observes the same LOW invocation and refuses foreign bytes.
+  def test_external_capability_request_is_replay_safe_and_conflict_refusing
+    state = File.join(@root, "state")
+    FileUtils.mkdir_p(state)
+    previous = ENV["AF_STATE_ROOT"]
+    ENV["AF_STATE_ROOT"] = state
+    registry = AdventureFinderWorkspace::ProductionContextRegistry.new(@registry_path, workspace_root: @root)
+    executor = Executor.new
+    action = AdventureFinderWorkspace::LocalCapacity.new(registry:, executor:, bundle_executable: @bundle,
+      capability_request_class: WorkloadOrchestrator::OllamaCapabilityRequest)
+    assert_equal 0, action.bootstrap(batch_handle: "39", alias_name: "qwen35")
+    path = File.join(state, "output/local-capability-requests/batch-39/qwen35.json")
+    bytes = File.binread(path)
+    assert_equal @requirement, JSON.parse(bytes).fetch("ollama")
+    assert_equal 0, action.bootstrap(batch_handle: "39", alias_name: "qwen35")
+    assert_equal bytes, File.binread(path)
+    File.binwrite(path, "foreign")
+    assert_raises(AdventureFinderWorkspace::Error) { action.bootstrap(batch_handle: "39", alias_name: "qwen35") }
+    assert_equal "foreign", File.binread(path)
+    assert_equal 2, executor.calls.length
+  ensure
+    previous.nil? ? ENV.delete("AF_STATE_ROOT") : ENV["AF_STATE_ROOT"] = previous
+  end
+
   def teardown
     FileUtils.remove_entry(@root)
   end

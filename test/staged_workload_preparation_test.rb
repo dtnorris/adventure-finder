@@ -192,6 +192,23 @@ class StagedWorkloadPreparationTest < Minitest::Test
     FileUtils.remove_entry(@dir)
   end
 
+  # AF preparation state is external; owner authority and frozen AFW artifacts
+  # retain their original locators and the declared fake owner seams on replay.
+  def test_external_preparation_retains_frozen_owner_bindings
+    state = directory("external-state")
+    selected = {"AF_STATE_ROOT" => state}
+    runner = Runner.new(authority: authority_projection(["ADV-0003"]), afw_root: @afw, ids: ["ADV-0003"])
+    first = prepare(service(runner, env: selected))
+    assert_equal "PREPARED", first.fetch("status")
+    assert_equal first, prepare(service(runner, env: selected))
+    retained = File.join(state, "output/staged-workload-preparations/v0.1", ID)
+    binding = JSON.parse(File.binread(File.join(retained, "authority-store.json")))
+    assert_equal File.join(@pipeline, "output/staged-scoring-authority/v0.1"), binding.fetch("store_root")
+    assert first.dig("plan", "path").start_with?(@afw + File::SEPARATOR)
+    refute File.exist?(File.join(@front, "output/staged-workload-preparations"))
+    assert_equal 1, runner.calls.count { |call| File.basename(call[:argv].first) == "afw-build-workload" }
+  end
+
   def test_multiple_new_ids_prepare_once_and_restart_retains_owner_inspection
     ids = %w[ADV-0003 ADV-0004]
     projection = authority_projection(ids)

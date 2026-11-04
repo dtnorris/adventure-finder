@@ -67,6 +67,16 @@ root to make a failed production verification pass.
 
 ## Model preflight and execution
 
+`AF_STATE_ROOT` optionally selects existing external AF coordination storage for
+catalog operations, `af-local bootstrap` capability requests and `af-batch`
+worker-source inputs. It takes precedence over historical AF state paths without
+changing registered owner artifacts or WLO/LOW storage. Unset preserves legacy
+behavior; invalid explicit selection refuses before persistent work. Retain the
+original selector for resume. The
+[state ownership/replacement procedure](CATALOG_INGEST_FRONT_DOOR_V0.1.md#external-adventurefinder-coordination-state)
+defines complete backups and recovery limits. Selection grants no execution,
+approval, migration or publication authority.
+
 **Read-only plan resolution, no worker contact/inference:**
 
 ```bash

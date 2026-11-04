@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "adventure_finder_state_paths"
+
 require "digest"
 require "json"
 require "pathname"
@@ -249,7 +251,7 @@ module AdventureFinderWorkspace
       unless operation_id.is_a?(String) && UUID_V4.match?(operation_id)
         fail_with("INVALID_OPERATION_HANDLE", "operation handle must be a lowercase UUIDv4")
       end
-      front_door_root.join("output", "staged-workload-preparations", "v0.1", operation_id, "result.json")
+      StatePaths.root(front_door_root:, project_root:, env:).join("output", "staged-workload-preparations", "v0.1", operation_id, "result.json")
     end
 
     def afw_root

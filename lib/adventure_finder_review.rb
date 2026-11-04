@@ -6,6 +6,7 @@ require "pathname"
 require_relative "adventure_finder_workspace"
 require_relative "adventure_finder_production_context"
 require_relative "adventure_finder_job_handle_resolver"
+require_relative "adventure_finder_state_paths"
 
 module AdventureFinderWorkspace
   # Composes the public AFW evidence-binding and pipeline review-preparation
@@ -45,6 +46,8 @@ module AdventureFinderWorkspace
       safe_path_segment!(plan_id, "registered plan ID")
       safe_path_segment!(job_id, "canonical job ID")
       pipeline_root = pipeline_repository_root
+      StatePaths.root(front_door_root: ENV.fetch("AF_ADVENTURE_FINDER_ROOT", File.expand_path("..", __dir__)),
+        project_root: @workspace_root, owner_roots: [pipeline_root, context.dig("afw", "repository_root"), context.dig("wlo", "output_root")])
 
       afw_root = context.dig("afw", "repository_root")
       receipt_path = bind_evidence(context, plan_id, job_id)

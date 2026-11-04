@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "adventure_finder_state_paths"
+
 require "digest"
 require "fileutils"
 require "json"
@@ -38,7 +40,7 @@ module AdventureFinderWorkspace
     end
 
     def prepare(operation_id:)
-      preparation_dir = @front.join("output", "staged-workload-preparations", "v0.1", operation_id)
+      preparation_dir = StatePaths.root(front_door_root: @front, project_root: @project, owner_roots: [@catalog], env: @env).join("output", "staged-workload-preparations", "v0.1", operation_id)
       preparation = read_json(preparation_dir.join("result.json"))
       fail_with("RELEASE_NOT_READY", "qualified workload preparation is unavailable") unless
         preparation["operation_id"] == operation_id && preparation["status"] == "PREPARED" &&
@@ -75,6 +77,10 @@ module AdventureFinderWorkspace
         validated["receipt_count"] == preparation.fetch("qualified_cases")
 
       root = @storage.join("output", "ingest-releases", "v0.1", operation_id)
+      coordination = @env.key?("AF_STATE_ROOT") ? StatePaths.root(
+        front_door_root: @front, project_root: @project, owner_roots: [@catalog], env: @env
+      ).join("output", "ingest-releases", "v0.1", operation_id) : root
+      StatePaths.check_operation!(Pathname(@env.fetch("AF_STATE_ROOT")), operation_id) if @env.key?("AF_STATE_ROOT")
       private_directory!(root)
       review = root.join("review")
       audit = root.join("audit")
@@ -83,7 +89,8 @@ module AdventureFinderWorkspace
       end
       invoke(@pipeline, "af-data", "prepare-workload-review", manifest,
              "--afw-root", @afw, "--review-dir", review, "--audit-dir", audit)
-      release_inputs = root.join("release-inputs.json")
+      FileUtils.mkdir_p(coordination)
+      release_inputs = coordination.join("release-inputs.json")
       authority_inputs = read_json(preparation_dir.join("authority-inputs.json"))
       staged = {
         "evidence" => authority_inputs.fetch("evidence"),
@@ -118,7 +125,7 @@ module AdventureFinderWorkspace
       counts = manifest_document.fetch("counts")
       fail_with("INVALID_RELEASE_ACCOUNTING", "release used individual or machine acceptance") unless
         counts["individual_human_accepted"] == 0 && counts["ig16b_machine_accepted"] == 0
-      package_inputs = root.join("package-inputs.json")
+      package_inputs = coordination.join("package-inputs.json")
       write_or_verify!(package_inputs, {
         "schema_version" => "af-final-release-package-inputs/v0.1",
         "release_inputs_path" => release_inputs.to_s,

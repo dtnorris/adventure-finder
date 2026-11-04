@@ -556,6 +556,40 @@ class FinalPromotionTest < Minitest::Test
     end
   end
 
+  # A retained external coordination decision replays the same owner decision;
+  # copying it into a different namespace refuses before any owner invocation.
+  def test_external_final_decision_retains_owner_paths_and_namespace_identity
+    root = Dir.mktmpdir("external-final-")
+    package = fixture_package
+    paths = workspace_paths(File.join(root, "roles"), package)
+    state = File.join(root, "state")
+    FileUtils.mkdir_p(state)
+    runner = OwnerRunner.new(package:)
+    output = StringIO.new
+    selected = {"AF_STATE_ROOT" => state}
+    door = build_door(paths, runner, input: StringIO.new("DECLINE\n"), output:, env: selected)
+    arguments = {inputs_path: paths[:inputs], package_path: paths[:package], approver: "David"}
+    assert_equal 3, door.run(**arguments)
+    coordination = File.join(state, "operations/final-promotions", package.fetch("package_id"), "coordination-decision.json")
+    bytes = File.binread(coordination)
+    assert_equal state, JSON.parse(bytes).dig("state_binding", "root")
+    assert File.file?(File.join(paths[:operation], "adoption-decision.json"))
+    refute File.exist?(File.join(paths[:operation], "coordination-decision.json"))
+    assert_equal 3, door.run(**arguments)
+    assert_equal bytes, File.binread(coordination)
+    alternate = File.join(root, "other-state")
+    FileUtils.mkdir_p(alternate)
+    FileUtils.cp_r(File.join(state, "operations"), alternate)
+    calls = runner.calls.length
+    foreign = build_door(paths, runner, input: StringIO.new("APPROVE\n"), output:, env: {"AF_STATE_ROOT" => alternate})
+    error = assert_raises(AdventureFinderWorkspace::Error) { foreign.run(**arguments) }
+    assert_includes error.message, "state binding"
+    assert_equal calls, runner.calls.length
+    assert_equal bytes, File.binread(coordination)
+  ensure
+    FileUtils.remove_entry(root) if root && File.directory?(root)
+  end
+
   private
 
   def with_front_door(root: nil, package: fixture_package, input:, fail_adopt: false,
@@ -573,11 +607,11 @@ class FinalPromotionTest < Minitest::Test
     FileUtils.remove_entry(root) if owned_root && root && File.directory?(root)
   end
 
-  def build_door(paths, runner, input:, output:)
+  def build_door(paths, runner, input:, output:, env: ENV)
     AdventureFinderWorkspace::FinalPromotion.new(
       front_door_root: paths.fetch(:front_door), project_root: paths.fetch(:components),
       pipeline_root: paths.fetch(:pipeline), component_runner: runner, input:, out: output,
-      clock: -> { Time.utc(2026, 10, 12, 1, 30, 0) }
+      clock: -> { Time.utc(2026, 10, 12, 1, 30, 0) }, env:
     )
   end
 

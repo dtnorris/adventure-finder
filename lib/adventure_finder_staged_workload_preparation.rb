@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "adventure_finder_state_paths"
+
 require "csv"
 require "digest"
 require "fileutils"
@@ -593,7 +595,7 @@ module AdventureFinderWorkspace
     end
 
     def preparation_root
-      front_door_root.join("output", "staged-workload-preparations", "v0.1")
+      StatePaths.root(front_door_root:, project_root:, owner_roots: [source_root, catalog_root, afw_root, pipeline_root, scorer_root], env: @env).join("output", "staged-workload-preparations", "v0.1")
     end
 
     def preparation_dir(operation_id)

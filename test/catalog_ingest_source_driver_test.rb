@@ -47,6 +47,29 @@ class CatalogIngestSourceDriverTest < Minitest::Test
     FileUtils.remove_entry(@temporary) if @temporary && File.exist?(@temporary)
   end
 
+  # The public source journey publishes an editable workspace in AF state while
+  # bound pipeline artifacts and source/catalog locators retain their owners.
+  def test_external_state_source_review_replays_without_checkout_output
+    state = File.realpath(directory("external-state"))
+    selected = {"AF_STATE_ROOT" => state}
+    stdout, stderr, status = run_catalog(selected, *start_arguments)
+    assert status.success?, stderr + stdout
+    review = File.join(state, "output/ingest-editorial-workspaces/v0.1", ID)
+    assert_includes stdout, "Review workspace: #{review}"
+    assert File.file?(File.join(review, "editorial_decisions.yml"))
+    decisions = File.join(review, "editorial_decisions.yml")
+    original = File.binread(decisions)
+    before = Dir.glob(File.join(state, "**", "*"), File::FNM_DOTMATCH).select { |path| File.file?(path) }
+      .to_h { |path| [path, File.binread(path)] }
+    stdout, stderr, status = run_catalog(selected, "resume", ID)
+    assert status.success?, stderr + stdout
+    assert_includes stdout, "Gate: BOUNDARY_EDITORIAL_REVIEW"
+    assert_equal original, File.binread(decisions)
+    assert_equal before, before.keys.to_h { |path| [path, File.binread(path)] }
+    refute File.exist?(File.join(@front, "output"))
+    refute File.exist?(@forbidden_log)
+  end
+
   def test_editable_review_publication_replays_decisions_and_refuses_conflicts
     bound_dir = directory("bound-editorial")
     %w[editorial_context.json editorial_decisions.yml editorial_review.md].each do |name|

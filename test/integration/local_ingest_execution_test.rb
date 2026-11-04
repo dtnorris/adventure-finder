@@ -381,6 +381,31 @@ class LocalIngestExecutionTest < Minitest::Test
     FileUtils.remove_entry(@root) if @root && File.exist?(@root)
   end
 
+  # Only AF preparation/coordination uses external storage. Real WLO contracts
+  # and the existing declared LOW/job fakes retain the original execution paths
+  # and immutable intent across a fresh coordinator's resume/status calls.
+  def test_external_af_coordination_retains_wlo_execution_identity
+    state = directory("external-state")
+    source = File.join(@front, "output/staged-workload-preparations")
+    FileUtils.mkdir_p(File.join(state, "output"))
+    FileUtils.mv(source, File.join(state, "output/staged-workload-preparations"))
+    @environment["AF_STATE_ROOT"] = state
+    frozen_plan = File.binread(@plan_path)
+    assert_equal 0, coordinator.start(operation_id: ID, selected_by: "David", capability_plan: @capability_plan)
+    coordination = File.join(state, "output/local-ingest-executions/v0.1", ID)
+    intent_path = File.join(coordination, "intent.json")
+    intent_bytes = File.binread(intent_path)
+    intent = JSON.parse(intent_bytes)
+    assert_equal execution_paths.fetch(:output), intent.dig("execution", "output")
+    assert File.file?(File.join(coordination, "state.json"))
+    assert File.file?(File.join(execution_paths.fetch(:output), "execution.json"))
+    refute File.exist?(File.join(@front, "output/local-ingest-executions/v0.1", ID, "intent.json"))
+    assert_equal 0, coordinator.resume(operation_id: ID, capability_plan: @capability_plan)
+    assert_equal 0, coordinator.status(operation_id: ID, capability_plan: @capability_plan)
+    assert_equal intent_bytes, File.binread(intent_path)
+    assert_equal frozen_plan, File.binread(@plan_path)
+  end
+
   def test_real_low_and_wlo_public_seams_complete_two_capabilities_in_one_execution
     trace = TraceRunner.new(afw: @afw, wlo: @wlo, plan: @plan_path, output: execution_paths.fetch(:output))
     service = coordinator(runner: trace)

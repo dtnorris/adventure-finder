@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "adventure_finder_state_paths"
+
 require "digest"
 require "fileutils"
 require "json"
@@ -332,8 +334,14 @@ module AdventureFinderWorkspace
       entries.each { |entry| entry["policy"] = policies.fetch(entry.fetch("name")) }
       bytes = YAML.dump("contract_version" => WORKER_SOURCES_CONTRACT_VERSION, "sources" => entries)
       root = File.join(File.dirname(context.dig("wlo", "output_root")), "worker-sources")
+      if ENV.key?("AF_STATE_ROOT")
+        state = StatePaths.root(front_door_root: ENV.fetch("AF_ADVENTURE_FINDER_ROOT", File.expand_path("..", __dir__)),
+          project_root: @registry.workspace_root, owner_roots: [context.dig("afw", "repository_root"), context.dig("wlo", "output_root")])
+        root = state.join("output", "worker-sources").to_s
+      end
       basename = File.basename(context.dig("wlo", "output_root"))
       path = File.join(root, "#{basename}-#{Digest::SHA256.hexdigest(bytes)[0, 12]}.yml")
+      StatePaths.check_destination!(Pathname(path), state) if ENV.key?("AF_STATE_ROOT")
       FileUtils.mkdir_p(root)
       if File.file?(path)
         raise Error, "worker-source configuration content mismatch: #{path}" unless File.binread(path) == bytes

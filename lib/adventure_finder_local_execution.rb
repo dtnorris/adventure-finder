@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "adventure_finder_state_paths"
+
 require "digest"
 require "fileutils"
 require "json"
@@ -665,9 +667,10 @@ module AdventureFinderWorkspace
       low = Pathname(env.fetch("LOW_REPO_ROOT", project_root.join("local-ollama-workers").to_s)).expand_path
       wlo = Pathname(env.fetch("WLO_REPO_ROOT", project_root.join("workload-orchestrator").to_s)).expand_path
       coordination = intent_store.operation_dir(operation_id)
-      output = coordination.join("wlo")
+      # WLO owns this retained execution locator, independently of AF storage.
+      output = front_door_root.join("output", "local-ingest-executions", "v0.1", operation_id, "wlo")
       preparation = read_json(
-        front_door_root.join("output", "staged-workload-preparations", "v0.1", operation_id, "result.json"),
+        StatePaths.root(front_door_root:, project_root:, env:).join("output", "staged-workload-preparations", "v0.1", operation_id, "result.json"),
         "staged workload preparation"
       )
       plan = Pathname(preparation.dig("plan", "path").to_s).expand_path
@@ -776,7 +779,7 @@ module AdventureFinderWorkspace
 
     def preparation_summary(operation_id)
       document = read_json(
-        front_door_root.join("output", "staged-workload-preparations", "v0.1", operation_id, "result.json"),
+        StatePaths.root(front_door_root:, project_root:, env:).join("output", "staged-workload-preparations", "v0.1", operation_id, "result.json"),
         "staged workload preparation"
       )
       "selected=#{document.fetch('selected').length} deferred=#{document.fetch('deferred').length} " \
@@ -886,7 +889,7 @@ module AdventureFinderWorkspace
 
     def intent_store
       @intent_store ||= LocalExecutionIntentStore.new(
-        root: LocalExecutionIntentStore.default_root(front_door_root: front_door_root), clock: @clock
+        root: LocalExecutionIntentStore.default_root(front_door_root: front_door_root, env:), clock: @clock
       )
     end
 

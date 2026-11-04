@@ -14,7 +14,16 @@ small versioned store record. Revision zero is published by directory rename; la
 revisions are fsynced and atomically renamed while holding an operation lock. There is
 no mutable “current” pointer: the last complete consecutive revision is current.
 
-Absolute filesystem roots are runtime configuration and are never durable identity.
+With `AF_STATE_ROOT` selected, public commands and the default-root helper use
+`$AF_STATE_ROOT/output/ingest-operations/v0.1`. The directory must already exist;
+invalid selection refuses without a fallback store. An explicit library `root:`
+continues to select that caller's store directly. The
+[front-door state contract](CATALOG_INGEST_FRONT_DOOR_V0.1.md#external-adventurefinder-coordination-state)
+defines ownership, refusal rules, the complete backup set and same-path replacement.
+
+Absolute roots are runtime configuration, not operation-document identity.
+External context v0.3 separately retains a physical state-directory binding;
+it adds no fields to operation v0.1 and changes no portable locator semantics.
 The caller supplies a mapping for the contract roots it uses (`input`, `front_door`,
 `pipeline`, `converter`, `source`, and `catalog`). This preserves the existing
 `AF_PROJECT_ROOT`, `AF_ADVENTURE_FINDER_ROOT`, `AF_DATA_PIPELINE_ROOT`, and
