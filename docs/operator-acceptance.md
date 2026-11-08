@@ -145,7 +145,41 @@ catalog-owned oracle. Omit `--dual-root` for the ordinary-layout regression.
 These focused proofs do not replace checkpoint registration or required default,
 operator, restart/staleness and affected owner gates.
 
+Add `--frontier` to the explicit `--dual-root` command to extend that same adopted catalog
+through the unchanged FP `build`, `doctor`, source locator and metadata-bundle
+commands. `AF_QUERY_MATCHER_ROOT` may explicitly select the read-only matcher
+source for the existing three-consumer conformance check when it is outside the
+component directory. All selected owner runtime is copied into the disposable
+fixture; no model, provider or private corpus is used. FP resolves `catalog_head`
+from the resulting project state, with the original fixture registry/corpus and
+an unchanged copy of the scorer's named AFAO 1.6.1 file supplied explicitly.
+An existing accepted export survives withheld/tampered intake handoffs; refusal
+must precede both promotion and downstream export of the proposed candidate.
+Exact restoration permits explicit fixture approval and deliberate export.
+Fresh public processes verify retained decisions/work without regeneration;
+FP also refuses changed bound source bytes before exact restoration and doctor.
+The retained `evidence/os-int-01-report.json` and `OS_INT_01_RESULT` stdout row
+include the five-increment evidence map, owner heads, frozen case bindings,
+fake inventory and process provenance. This synthetic proof does not establish
+empty initialization, real source/method quality, useful source-bearing frontier
+review, second-source recovery, public availability or host checkpoint/gate
+acceptance. Those independent owner gates and David's acceptance remain required.
+`--frontier` requires explicit `--dual-root` and refuses `--coexistence` or
+`--switch-only`; those existing modes retain their original fixture and behavior.
+
 ### Coexisting checkouts and reversible selection
+
+The historical pipeline inventory remains the default. To exercise the reviewed
+AFDP `b1390ec1` runtime, explicitly set `AF_PIPELINE_RUNTIME_INVENTORY` to its
+separate `public-journey/current-runtime-inventory.json` candidate (SHA256
+`a909b3e77a262f4bc8af0fc6803257caf10cd39e53b8823704723c0eb0554200`)
+and `AF_EVIDENCE_ROOT` to the verified EV `4be62c5baa491e42c2d9b65dc72f5bf2e0647707`
+runtime. The AFDP inventory remains an independent owner review patch. Fixture
+setup checks its exact inventory digest and selected file bytes/modes, then
+copies the pinned EV inventory from `test/support/af_evidence_runtime_inventory.json`
+beside both AFDP layouts (`code/af-evidence` and `components/af-evidence`).
+Missing or changed inputs stop setup before public execution. These selectors
+grant no installation, Git history creation, owner application or acceptance.
 
 The same synthetic journey accepts `--coexistence`, with an optional
 `--switch-only` stop after the first pause/rollback/recovery proof. This extends
@@ -233,6 +267,25 @@ rewritten to suppress its setup. Default coverage, runtime, benchmark, lint and
 dependency tasks remain unchanged. Logs survive under the printed scratch paths;
 failed scenario roots are retained for diagnosis. This qualification is not the
 final IG-19E journey verdict or re-entry.
+
+For the OS-INT-02 empty-start journey, refusal controls temporarily make only
+the selected disposable regular artifact writable, then restore its original
+mode before invoking the real validator. Cleanup restores exact bytes and mode
+even after a failed control; read-only scored candidates remain read-only during
+validation. `test/fixture_artifact_mutation_test.rb` covers mode `0444`, binary
+bytes, withheld files and failure cleanup independently.
+
+The empty-start path checks missing boundary authority and an explicit held
+boundary before allocation. Source review controls use the existing converter
+readiness and page-review representations (`--source-review-missing` and
+`--source-review-declined`); there is no separate source approval CLI. They stop
+before registration. `--final-review-missing` and `--final-review-declined` run
+separate complete empty-start worlds through release readiness and retain their
+final requests/decisions. A declined approval is never removed to permit the
+positive journey. These flags require `--dual-root --empty-start`; final controls
+also require `--frontier`. All are synthetic fixture decisions at existing owner
+contracts. Full locked-bundle, coverage, operator, runtime and owner gates remain
+required; missing dependencies or unauthorized Git setup block their consumers.
 
 ## IG-19A public entry proof
 
@@ -422,3 +475,34 @@ state untouched, prints only scoped workflow-owned persistence paths, and a
 second invocation reports `ALREADY_PROMOTED` without replacing the durable
 `PROMOTED` result or mutating the catalog again. All repositories and
 workbooks are disposable synthetic fixtures.
+
+### Consumer checks with a qualified integration bundle
+
+The continuous journey defaults to each consumer's owner bundle.
+Set AF_ACCEPTANCE_CONSUMER_BUNDLE=integration to carry the explicitly
+qualified parent BUNDLE_* selectors into the unchanged three-consumer
+project-state oracle. Record the selected Gemfile, lockfile, runtime and
+source hashes. This focused result leaves owner locked-bundle and full-suite
+qualification pending. Other selector values refuse before the oracle runs.
+
+### Bounded empty-start preparation
+
+`--dual-root --empty-start` selects XL-02's content-free constructor and the
+MD-02 `sources: {}` representation. It does not extract the populated catalog
+archive or create a catalog Git baseline. It measures separate initial v0.2
+roles and uses the existing public registration and approved boundary path,
+retaining the existing external synthetic converter/scorer/capacity boundaries.
+It stops after the first public boundary continuation result, retaining raw
+output and initial bytes; a failed continuation returns nonzero. It does not
+approve final adoption or invoke Frontier export. The historical 11-job,
+6-accepted/5-deferred scenario remains the separate populated regression.
+
+This option is prepared but NOT RUN through Ruby in the OS-INT-02 bounded
+handoff: the new execution root's native sandbox launch returned exit 71
+(`sandbox_apply: Operation not permitted`). SourceRegister, construction,
+negative controls, replay, AFW/WLO and adoption therefore have no new PASS.
+Do not bypass the native sandbox to obtain one. The independently constructed
+immutable XLSX/manifest/registry in that handoff have static measurements only;
+actual owner validation remains required. Real adoption separately requires an
+operator-authorized exact empty Git baseline, as enforced by CatalogAdoption.
+Neither this option nor an assistant prompt authorizes Git init/add/commit.

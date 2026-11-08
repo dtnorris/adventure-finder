@@ -31,6 +31,7 @@ module Ig07cSourceAcceptance
     def seal_code
       @legacy = directory("components/af-data-pipeline")
       self.class.copy_runtime(@pipeline_source_root, @legacy)
+      copy_evidence_runtime(File.join(components, "af-evidence"))
       [pipeline, @legacy].each { |path| self.class.copy_git_metadata(@pipeline_source_root, path) }
       @code_inventory = inventory(pipeline)
       @legacy_runtime = %w[bin lib config schemas Gemfile Gemfile.lock .git].to_h do |name|

@@ -1,0 +1,82 @@
+[
+  {
+    "path": "LICENSE",
+    "sha256": "b90876001c57474ed4004a4fa233929fed8b019075d7ac543d854a27e0c71e20",
+    "mode": 420
+  },
+  {
+    "path": "lib/af_evidence.rb",
+    "sha256": "7f6d53cccb4a0bb3b645984dbffbcdca57590cc8bbab683589a0aa43e789b8a5",
+    "mode": 420
+  },
+  {
+    "path": "lib/af_evidence/error.rb",
+    "sha256": "c46c6543195ae3523624793f05b6a74656c0e257e8b956cd08b75065409ddb70",
+    "mode": 420
+  },
+  {
+    "path": "lib/af_evidence/evidence_bundle_builder.rb",
+    "sha256": "3f366ee3bd333d659c4d308409e05a9801e69d6bb8e3b7cc3f3b30df7af223f4",
+    "mode": 420
+  },
+  {
+    "path": "lib/af_evidence/evidence_bundle_verifier.rb",
+    "sha256": "8eb88779729275ff254a1b7afdb4ed5a6800633c09e5fa52cbba4541e51848ec",
+    "mode": 420
+  },
+  {
+    "path": "lib/af_evidence/evidence_equivalence_checker.rb",
+    "sha256": "aad31c04316d70e8eaf3fd9631fc905aa96b918aa29b34db9edbccb0e724e42d",
+    "mode": 420
+  },
+  {
+    "path": "lib/af_evidence/evidence_index_builder.rb",
+    "sha256": "b995ce2f99b1535fd8bf7274d64a73e744845befe4a8d3cbf7e723a8f90f53f1",
+    "mode": 420
+  },
+  {
+    "path": "lib/af_evidence/evidence_index_lookup.rb",
+    "sha256": "3acd0a6ed29214759b70e72b0b57cd4179101cfb5c5e9df091a8b0ecc39e0d7c",
+    "mode": 420
+  },
+  {
+    "path": "lib/af_evidence/evidence_index_verifier.rb",
+    "sha256": "8bd8d02e8969683990f2b095180f8bc81d3f2f2f234b2e6ef64ad447572125ed",
+    "mode": 420
+  },
+  {
+    "path": "lib/af_evidence/evidence_manifest_builder.rb",
+    "sha256": "0500ee19d0c5dd57804afac7912dabbeb5547ecacab8f12387d12d8dd45f8981",
+    "mode": 420
+  },
+  {
+    "path": "lib/af_evidence/evidence_release_proof.rb",
+    "sha256": "bdeb2d6aabf1aae67d269065fb38113eb18a0dcb7016ab7ef04bec78f070d693",
+    "mode": 420
+  },
+  {
+    "path": "lib/af_evidence/evidence_retriever.rb",
+    "sha256": "b5961fcf08b697f083deb77c673d53c4df52646fe4fb1a28e3d6e86e60c5855d",
+    "mode": 420
+  },
+  {
+    "path": "lib/af_evidence/evidence_store.rb",
+    "sha256": "3c5717ca5b3dd179d41b888c4a50d6aa840b7907700367870de57cf490f44f86",
+    "mode": 420
+  },
+  {
+    "path": "lib/af_evidence/output_safety.rb",
+    "sha256": "91bea10903c4401700cfbaed20013b7709316b2bd0bdc4166ff9649d14bb77a2",
+    "mode": 420
+  },
+  {
+    "path": "schemas/af-evidence-index-v0.1.sql",
+    "sha256": "842a01b20bd3d29fedcb0450aa36f51b3ae0109af3011261b00b0030b4e81637",
+    "mode": 420
+  },
+  {
+    "path": "schemas/af-evidence-manifest-v0.1.schema.json",
+    "sha256": "398114aaffe179ea0cac5d4314856f6bad2f28bb1950045401078e1a279de9b2",
+    "mode": 420
+  }
+]
