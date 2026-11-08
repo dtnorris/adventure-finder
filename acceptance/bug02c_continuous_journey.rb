@@ -9,6 +9,8 @@ require "zip"
 require_relative "../test/support/ig07c_source_acceptance_fixture"
 require_relative "../test/support/dual_root_journey_fixture"
 require_relative "../test/support/coexistence_journey_fixture"
+require_relative "../test/support/frontier_journey_fixture"
+require_relative "../test/support/empty_start_journey_fixture"
 
 front = File.expand_path("..", __dir__)
 sources = ENV.fetch("AF_PROJECT_ROOT", File.expand_path("../adventure-finder-components", front))
@@ -16,12 +18,28 @@ components = ENV.fetch("AF_DATA_PIPELINE_ROOT", File.join(sources, "af-data-pipe
 dual_root = ARGV.delete("--dual-root")
 coexistence = ARGV.delete("--coexistence")
 switch_only = ARGV.delete("--switch-only")
-abort "usage: ruby acceptance/bug02c_continuous_journey.rb [--dual-root | --coexistence [--switch-only]]" unless
-  ARGV.empty? && !(dual_root && coexistence) && (!switch_only || coexistence)
+frontier = ARGV.delete("--frontier")
+empty_start = ARGV.delete("--empty-start")
+source_control = ARGV.delete("--source-review-missing") ? "page_review" : nil
+source_control = "blocked" if ARGV.delete("--source-review-declined")
+final_control = ARGV.delete("--final-review-missing") ? "" : nil
+final_control = "DECLINE\n" if ARGV.delete("--final-review-declined")
+abort "usage: ruby acceptance/bug02c_continuous_journey.rb [--dual-root [--frontier] [--empty-start] | --coexistence [--switch-only]]" unless
+  ARGV.empty? && !(dual_root && coexistence) && (!switch_only || coexistence) && (!frontier || (dual_root && !coexistence)) && (!empty_start || (dual_root && !coexistence)) && (!source_control || empty_start) && (final_control.nil? || (empty_start && frontier && !source_control))
 dual_root ||= coexistence
-fixture_class = coexistence ? Ig07cSourceAcceptance::CoexistenceFixture :
-  (dual_root ? Ig07cSourceAcceptance::DualRootFixture : Ig07cSourceAcceptance::Fixture)
+abort "empty Frontier journey requires an explicitly authorized baseline" if
+  empty_start && frontier && !ENV["AF_ACCEPTANCE_EMPTY_BASELINE"]
+fixture_class = if empty_start
+  Ig07cSourceAcceptance::EmptyStartFixture
+elsif frontier
+  Ig07cSourceAcceptance::FrontierJourneyFixture
+else
+  coexistence ? Ig07cSourceAcceptance::CoexistenceFixture :
+    (dual_root ? Ig07cSourceAcceptance::DualRootFixture : Ig07cSourceAcceptance::Fixture)
+end
 fixture = fixture_class.new(repository_root: front, pipeline_source_root: components)
+puts "EMPTY_INPUTS=#{JSON.generate(fixture.measure_empty_inputs)}" if empty_start
+fixture.prepare_frontier(sources) if frontier
 puts "FIXTURE_ROOT=#{fixture.root}"
 pipeline = fixture.pipeline
 %w[af-data af-staged-scoring-authority af-standing-bulk-score-release af-final-release-package af-final-release-adoption af-project-state].each do |command|
@@ -230,6 +248,7 @@ FileUtils.chmod(0o755, git_guard)
 
 # The archive is a fixed synthetic catalog and prebuilt Git history. Extracting
 # it does not stage or commit during this acceptance journey.
+unless empty_start
 archive = File.join(front, "test/fixtures/bug02c-precommitted-catalog.zip")
 abort "catalog fixture identity changed" unless Digest::SHA256.file(archive).hexdigest ==
   "fdb44f13c4103cd6682e632fb54ac6f46e7e683bf3aab993ce9cc26e010303dd"
@@ -247,6 +266,7 @@ head, git_error, observed = Open3.capture3("git", "-C", fixture.catalog, "rev-pa
 abort "prebuilt catalog Git invalid: #{git_error}" unless
   observed.success? && head.strip == "2a6a3da7c3cbbaf58c1e2ff1640042819ff8b04f"
 puts "CATALOG_HEAD=#{head.strip}"
+end
 # Compare literal Git bytes, including cached index metadata. Optional locks
 # disable Git's observational cache write without bypassing its validators.
 git_bytes = Dir.glob(File.join(fixture.catalog, ".git", "**", "*"), File::FNM_DOTMATCH)
@@ -266,9 +286,18 @@ fixture_env = {
   "LOW_STATE_ROOT" => File.join(fixture.root, "low-state")
 }
 fixture.legacy_probe(fixture_env, "88888888-8888-4888-8888-888888888888") if coexistence
+if source_control
+  fixture.verify_source_review_control(fixture_env, args, source_control)
+  exit 0
+end
 stdout, stderr, status = fixture.run_catalog(fixture_env.merge("IG07C_MARKDOWN_MODE" => "synthetic_procedure"), *args)
 abort "start: #{stdout}\n#{stderr}" unless status.success?
 puts "START_OK"
+if empty_start
+  registered = AfDataPipeline::BoundaryFreeze.registry_context(fixture.source, nil).fetch("sources")
+  raise "first registration did not retain exactly one source" unless
+    registered.keys == [Ig07cSourceAcceptance::Fixture::SOURCE_ID]
+end
 fixture.verify_switch(fixture_env) if coexistence
 exit 0 if switch_only
 operation_id = Ig07cSourceAcceptance::Fixture::OPERATION_ID
@@ -291,10 +320,32 @@ ledger.fetch("candidates") << {
   }
 }
 File.binwrite(ledger_path, YAML.dump(ledger))
+fixture.verify_boundary_review_controls(fixture_env, ledger_path) if empty_start
 stdout, stderr, status = fixture.run_catalog(fixture_env, "resume", operation_id, "--approve-boundary-by", "Fixture Operator")
 puts "RESUME_STATUS=#{status.exitstatus}"
 puts stdout.lines.last(25).join
 puts stderr.lines.last(8).join
+if empty_start && !frontier
+  stage_paths = Dir.glob(File.join(fixture.root, "**", "*-verified-staged-successor-from-amc-*.json"))
+  registered = AfDataPipeline::BoundaryFreeze.registry_context(fixture.source, nil).fetch("sources")
+  raise "first registration did not retain exactly one source" unless registered.keys == [Ig07cSourceAcceptance::Fixture::SOURCE_ID]
+  raise "initial roles or workbook changed" unless File.binread(fixture.base) == base_bytes &&
+    File.binread(File.join(fixture.catalog, "PROJECT_STATE.yml")) == before_state
+  if status.success?
+    raise "missing first real staged successor" unless stage_paths.length == 1
+    stage = JSON.parse(File.binread(stage_paths.first))
+    raise "first stage is not verified" unless stage.fetch("status") == "verified_staged_successor"
+  end
+  # The raw public result is retained even when the next owner transition fails.
+  File.binwrite(File.join(fixture.root, "evidence/empty-start-result.json"), JSON.pretty_generate(
+    public_exitstatus: status.exitstatus, catalog_git_present: File.exist?(File.join(fixture.catalog, ".git")),
+    stage_receipts: stage_paths, registered_sources: registered.keys,
+    first_transition_status: status.success? ? "STAGED; downstream review still required" : "FAILED; inspect raw public output",
+    final_acceptance: "INCOMPLETE"
+  ) + "\n")
+  puts "EMPTY_START_BOUNDED_STOP=#{fixture.root}"
+  exit(status.success? ? 0 : 2)
+end
 abort "public journey stopped before final review" unless status.success?
 release_root = File.join(dual_root ? fixture.data_root : fixture.front, "output/ingest-releases/v0.1", operation_id)
 release_inputs = JSON.parse(File.binread(File.join(release_root, "release-inputs.json")))
@@ -321,6 +372,19 @@ jobs = JSON.parse(File.binread(File.join(wlo_output, "jobs.json"))).fetch("jobs"
 receipts = Dir.glob(File.join(fixture.components, "af-workloads/output/workloads", workload_id, "evidence", "*.json"))
 abort "WLO attempt or AFW receipt denominator differs" unless
   jobs.length == 11 && jobs.all? { |job| job["status"] == "complete" && job["attempt"] == 1 } && receipts.length == 11
+frozen_cases = Dir.glob(File.join(fixture.components, "af-workloads/build/workloads", workload_id, "cases/*.yml")).sort
+case_bindings = frozen_cases.to_h do |path|
+  [YAML.safe_load_file(path).fetch("case_id"), Digest::SHA256.file(path).hexdigest]
+end
+receipt_rows = receipts.map { |path| JSON.parse(File.binread(path)) }
+abort "jobs or receipts do not match exact frozen case intent" unless
+  case_bindings.length == frozen_cases.length && case_bindings.length == counts.fetch("intended_cases") &&
+  jobs.map { |job| job.fetch("job_id") }.sort == case_bindings.keys.sort &&
+  receipt_rows.map { |row| row.dig("scoring_intent", "case_id") }.sort == case_bindings.keys.sort &&
+  receipt_rows.all? { |row|
+    row.dig("attempt", "attempt") == 1 &&
+      row.dig("scoring_intent", "case_sha256") == case_bindings.fetch(row.dig("scoring_intent", "case_id"))
+  }
 puts "WLO_JOBS=#{jobs.length} AFW_RECEIPTS=#{receipts.length} ATTEMPTS=#{jobs.map { |job| job['attempt'] }.tally}"
 selection_path = File.join(fixture.components, "af-workloads/workloads/.selections", workload_id, "selection.json")
 selection = JSON.parse(File.binread(selection_path))
@@ -329,11 +393,20 @@ staged_path = File.join(fixture.catalog, staged.fetch("filename"))
 abort "staged filename was reconstructed as a publication path" unless
   staged.fetch("filename") == "staged-5e_Adventure_Master_Catalog_#{package.dig('candidate', 'version')}.xlsx"
 abort "staged receipt bytes differ" unless Digest::SHA256.file(staged_path).hexdigest == staged.fetch("sha256")
+if empty_start
+  first_workbook = AfDataPipeline::BoundaryFreezeApply::Workbook.new(staged_path)
+  ordinary = first_workbook.sheet_by_name!("Adventure Catalog").catalog_records
+  large = first_workbook.sheet_by_name!("AMC >100pg").catalog_records
+  raise "first allocation is not one ordinary ADV-0001" unless
+    ordinary.length == 1 && ordinary.first.fetch("adventure_id") == "ADV-0001" && large.empty?
+  puts "FIRST_REGISTRATION=1 FIRST_ALLOCATION=ADV-0001"
+end
 candidate = package.dig("candidate", "selected")
 abort "staged and scored successors must have distinct paths and bytes" unless
   staged_path != candidate.fetch("path") && staged.fetch("sha256") != candidate.fetch("sha256")
-protected = [fixture.base, staged_path, File.join(release_root, "package.json"),
+protected = [fixture.base, fixture.registry, fixture.canonical, staged_path, File.join(release_root, "package.json"),
   *(dual_root ? [selection_path, *receipts,
+    *frozen_cases,
     *Dir.glob(File.join(fixture.data_root, "output/staged-scoring-authority", "**", "*")).select { |path| File.file?(path) },
     *Dir.glob(File.join(fixture.front, "output/ingest-operations", "**", "*")).select { |path| File.file?(path) }] : []),
   *Dir.glob(File.join(release_root, "release", "**", "*")).select { |path| File.file?(path) }]
@@ -361,10 +434,15 @@ abort "public replay did not retain the exact release: #{replay_err}" unless
 abort "preapproval replay changed operation, authority or Git inventory" unless
   replay_inventories.all? { |path, inventory| fixture.inventory(path) == inventory }
 puts "PREAPPROVAL_REPLAY=verified"
+unless final_control.nil?
+  fixture.verify_final_review_control(fixture_env, final_control)
+  exit 0
+end
 fixture.verify_refusals(fixture_env, candidate.fetch("path")) if dual_root
 fixture.rollback_selection(fixture_env) if coexistence
 before_approval = File.binread(File.join(fixture.catalog, "PROJECT_STATE.yml"))
-approval_stdout, approval_stderr, approval_status = fixture.run_catalog(
+approval_entry = frontier ? :approve_and_export : :run_catalog
+approval_stdout, approval_stderr, approval_status = fixture.public_send(approval_entry,
   fixture_env,
   "resume", operation_id, "--approve-final-by", "Fixture Operator",
   stdin_data: "APPROVE\n", chdir: fixture.root
@@ -426,8 +504,9 @@ abort "post-promotion replay changed operation, authority, Git or adoption inven
 abort "forbidden child call observed" unless fixture.forbidden_calls.empty?
 if dual_root
   fixture.verify_consumers(%w[af-xlsx-data-sources af-cli-query-matcher af-frontier-pack].to_h do |name|
-    [name, File.join(sources, name)]
+    [name, name == "af-cli-query-matcher" ? ENV.fetch("AF_QUERY_MATCHER_ROOT", File.join(sources, name)) : File.join(sources, name)]
   end)
   fixture.verify_code
 end
+fixture.verify_frontier_replay(fixture_env) if frontier
 puts "POSTPROMOTION_REPLAY=verified DECISIONS=3 MANUAL_INTERMEDIATE_COMMANDS=0 PAID_COST=0"

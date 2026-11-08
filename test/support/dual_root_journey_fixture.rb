@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "ig07c_source_acceptance_fixture"
+require_relative "fixture_artifact_mutation"
 require_relative "../../lib/adventure_finder_operator_acceptance"
 
 module Ig07cSourceAcceptance
@@ -8,6 +9,7 @@ module Ig07cSourceAcceptance
   # commands in an independent code tree. Git metadata, when required by AFW,
   # is copied independently; no worktree pointers or alternate stores are used.
   class DualRootFixture < Fixture
+    include FixtureArtifactMutation
     attr_reader :data_root
 
     # Captures exact public child output, invocation and outcome under the
@@ -95,19 +97,14 @@ module Ig07cSourceAcceptance
       ]
       controls.each do |name, path, suffix, diagnostic|
         original = File.binread(path)
-        mode = File.stat(path).mode & 0o777
-        begin
-          suffix ? File.binwrite(path, original + suffix) : File.unlink(path)
-          before = [inventory(catalog), inventory(data_root), inventory(pipeline)]
+        with_changed_artifact(path, suffix && original + suffix) do
+          before = [inventory(catalog), inventory(data_root), inventory(pipeline), inventory(source)]
           stdout, stderr, status = run_catalog(extra_env, "resume", operation_id,
             "--approve-final-by", "Fixture Operator", stdin_data: "APPROVE\n")
           raise "#{name} did not refuse for its invariant: #{stdout}\n#{stderr}" unless
             !status.success? && diagnostic.match?(stdout + stderr)
-          raise "#{name} performed unauthorized writes" unless before == [inventory(catalog), inventory(data_root), inventory(pipeline)]
+          raise "#{name} performed unauthorized writes" unless before == [inventory(catalog), inventory(data_root), inventory(pipeline), inventory(source)]
           puts "NEGATIVE_CONTROL=#{name} verified"
-        ensure
-          File.binwrite(path, original)
-          File.chmod(mode, path)
         end
       end
       escaped = directory("escaped-output")
@@ -119,13 +116,13 @@ module Ig07cSourceAcceptance
         ["escaped-destination", {}]
       ]
       unsafe_roots.each do |name, selectors|
-        before = [inventory(catalog), inventory(pipeline), inventory(escaped),
+        before = [inventory(catalog), inventory(pipeline), inventory(escaped), inventory(source),
           inventory(File.join(data_root, "output")), inventory(File.join(data_root, "audits"))]
         stdout, stderr, status = run_catalog(extra_env.merge(selectors), "resume", operation_id,
           "--approve-final-by", "Fixture Operator", stdin_data: "APPROVE\n")
         raise "#{name} did not reject its destination: #{stdout}\n#{stderr}" unless
           !status.success? && /pipeline|symlink|destination/i.match?(stdout + stderr)
-        raise "#{name} wrote outside its destination" unless before == [inventory(catalog), inventory(pipeline), inventory(escaped),
+        raise "#{name} wrote outside its destination" unless before == [inventory(catalog), inventory(pipeline), inventory(escaped), inventory(source),
           inventory(File.join(data_root, "output")), inventory(File.join(data_root, "audits"))] && File.symlink?(link)
         puts "NEGATIVE_CONTROL=#{name} verified"
       end
@@ -133,7 +130,7 @@ module Ig07cSourceAcceptance
       # Empty input may prepare a request; DECLINE is durable fixture authority.
       # Preserve each branch's bytes, then restore the absent promotion stores
       # so the independent positive can make its one explicit approval.
-      ["", "DECLINE\n"].each_with_index do |answer, index|
+      (final_approval_controls? ? ["", "DECLINE\n"] : []).each_with_index do |answer, index|
         before = inventory(catalog)
         stdout, stderr, status = run_catalog(extra_env, "resume", operation_id,
           "--approve-final-by", "Fixture Operator", stdin_data: answer)
@@ -158,6 +155,12 @@ module Ig07cSourceAcceptance
       nil
     end
 
+    # Legacy populated controls retain their established independent branches;
+    # empty-start uses separate worlds so a declined durable decision survives.
+    def final_approval_controls?
+      true
+    end
+
     # Runs the unchanged catalog-owned oracle against all three real consumers
     # in the selected layout. Missing consumers/dependencies or any refusal fail.
     def verify_consumers(source_roots)
@@ -170,6 +173,13 @@ module Ig07cSourceAcceptance
       FileUtils.cp(File.join(catalog, "PROJECT_STATE.yml"), File.join(catalog_tools, "PROJECT_STATE.yml"))
       cleared = ENV.keys.grep(/\A(?:BUNDLE_|BUNDLER_)/).to_h { |key| [key, nil] }
       consumer_env = cleared.merge(environment).merge("AF_WORKSPACE_ROOT" => tools)
+      case ENV.fetch("AF_ACCEPTANCE_CONSUMER_BUNDLE", "owner")
+      when "owner"
+      when "integration"
+        consumer_env.merge!(ENV.select { |key, _| key.start_with?("BUNDLE_") })
+      else
+        raise "invalid acceptance consumer bundle selection"
+      end
       command = File.join(catalog_tools, "bin/check-project-state-consumers")
       started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       output, error, status = Open3.capture3(consumer_env, command, chdir: root)
@@ -244,21 +254,51 @@ module Ig07cSourceAcceptance
       FileUtils.rmdir(@pipeline)
       @pipeline = directory("code/af-pipeline")
       @data_root = directory("af-pipeline-data")
-      allowlist = JSON.parse(File.binread(File.join(@pipeline_source_root, "public-journey/allowlist.json")))
+      inventory_path = ENV.fetch("AF_PIPELINE_RUNTIME_INVENTORY",
+        File.join(@pipeline_source_root, "public-journey/allowlist.json"))
+      if ENV.key?("AF_PIPELINE_RUNTIME_INVENTORY")
+        raise "current pipeline inventory mismatch" unless !File.symlink?(inventory_path) &&
+          Digest::SHA256.file(inventory_path).hexdigest == "a909b3e77a262f4bc8af0fc6803257caf10cd39e53b8823704723c0eb0554200"
+      end
+      allowlist = JSON.parse(File.binread(inventory_path))
       allowlist.each do |entry|
         relative = entry.fetch("path")
         next unless %w[bin lib config schemas Gemfile Gemfile.lock].include?(relative.split("/").first)
 
         original = File.join(@pipeline_source_root, relative)
         raise "pipeline allowlist mismatch: #{relative}" unless
-          !File.symlink?(original) && Digest::SHA256.file(original).hexdigest == entry.fetch("sha256")
+          !File.symlink?(original) && Digest::SHA256.file(original).hexdigest == entry.fetch("sha256") &&
+          File.stat(original).mode & 0o777 == entry.fetch("mode")
 
         target = File.join(pipeline, relative)
         FileUtils.mkdir_p(File.dirname(target))
         FileUtils.cp(original, target, preserve: true)
       end
+      copy_evidence_runtime(File.join(root, "code/af-evidence"))
       self.class.copy_runtime(@pipeline_source_root, pipeline, names: %w[bin/check-project-state-contract])
       self.class.copy_runtime(@repository_root, front, names: %w[bin lib], include_candidate: true)
+    end
+
+    # Copies the pinned EV runtime beside a selected AFDP copy. Explicit current
+    # inventory selection requires an EV root; absent/changed bytes or modes
+    # raise before public execution. Historical setup without selectors is unchanged.
+    def copy_evidence_runtime(destination)
+      return unless ENV.key?("AF_PIPELINE_RUNTIME_INVENTORY") || ENV.key?("AF_EVIDENCE_ROOT")
+
+      source = File.realpath(ENV.fetch("AF_EVIDENCE_ROOT"))
+      entries = JSON.parse(File.binread(File.join(@repository_root, "test/support/af_evidence_runtime_inventory.json")))
+      entries.each do |entry|
+        relative = entry.fetch("path")
+        original = File.join(source, relative)
+        raise "evidence runtime mismatch: #{relative}" unless
+          !File.symlink?(original) && Digest::SHA256.file(original).hexdigest == entry.fetch("sha256") &&
+          File.stat(original).mode & 0o777 == entry.fetch("mode")
+
+        target = File.join(destination, relative)
+        FileUtils.mkdir_p(File.dirname(target))
+        FileUtils.cp(original, target, preserve: true)
+      end
+      nil
     end
 
     # Selects independent private state; inherited source/catalog/converter
