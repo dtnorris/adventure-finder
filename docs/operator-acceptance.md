@@ -506,3 +506,42 @@ immutable XLSX/manifest/registry in that handoff have static measurements only;
 actual owner validation remains required. Real adoption separately requires an
 operator-authorized exact empty Git baseline, as enforced by CatalogAdoption.
 Neither this option nor an assistant prompt authorizes Git init/add/commit.
+
+### Second-input preservation and recovery
+
+`--second-input` extends the same synthetic journey from the exact INT-02 first
+accepted catalog. It selects dual-root and Frontier mode, uses a distinct ready
+converter operation (`99999999-9999-4999-8999-999999999999`) and source, and
+retains the existing converter, scorer/endpoint and local-capacity fakes. Real
+registration, boundary allocation/approval, AFW/WLO evidence, exact reviewed
+adoption and Frontier readers remain in the path. Counts come from frozen cases
+and the explicitly activated synthetic standing policy.
+
+The native handoff batch supplies `AF_ACCEPTANCE_FIRST_ROOT` (the verified
+retained synthetic first world), `AF_ACCEPTANCE_NATIVE_ROOT` (the reviewed
+e85eeb2f activated facade and inventory delta), and the pinned `AF_EVIDENCE_ROOT`.
+It verifies absolute bindings before copying. The accepted workbook, registry,
+first evidence and approved catalog successor `ee0b382aee2d34e3b62b6f8e311e566dc00c0131`
+are copied independently; no Git history, staging or approval is manufactured.
+Historical receipts keep their original paths and are never resumed under the
+copied roots. The retained first pack is read at its exact original tuple.
+
+The source-review operation `a670f6dc-efdc-4d3d-8514-c9456d6c4db0` and its frozen
+page-review receipt remain unchanged as the negative control. The positive
+checks missing second approval, changed second source, exact restoration,
+durable final review in a fresh process, exact adoption, two-source build/doctor/
+read, first-record/value/evidence preservation and idempotent accepted replay.
+The batch also runs the first-input control with the same reviewed facade;
+without the new native selector, the original INT-02 mode is unchanged.
+
+Run the handoff's `native_batch.py --host` from the host terminal. It launches
+`sandbox-exec` itself, denies network and real private-library reads, writes only
+its new execution/evidence directory, bounds each child and the whole batch,
+and stops at the first failure. The only lock adaptation is the Darwin platform
+line in that native execution copy. Raw receipts and `native-evidence.zip` retain
+the actual result; preparing this command establishes no native PASS.
+
+The ordinary AF `bundle exec rake` default (`test:coverage`), required owner
+defaults and full offline operator/CI obligations retain their existing floors.
+The bounded recovery proof does not imply public initialization, real conversion
+fidelity, qualified inference, useful frontier review or human acceptance.
