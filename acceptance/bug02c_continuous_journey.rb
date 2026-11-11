@@ -11,6 +11,7 @@ require_relative "../test/support/dual_root_journey_fixture"
 require_relative "../test/support/coexistence_journey_fixture"
 require_relative "../test/support/frontier_journey_fixture"
 require_relative "../test/support/empty_start_journey_fixture"
+require_relative "../test/support/second_input_journey_fixture"
 
 front = File.expand_path("..", __dir__)
 sources = ENV.fetch("AF_PROJECT_ROOT", File.expand_path("../adventure-finder-components", front))
@@ -20,17 +21,21 @@ coexistence = ARGV.delete("--coexistence")
 switch_only = ARGV.delete("--switch-only")
 frontier = ARGV.delete("--frontier")
 empty_start = ARGV.delete("--empty-start")
+second_input = ARGV.delete("--second-input")
+dual_root = frontier = true if second_input
 source_control = ARGV.delete("--source-review-missing") ? "page_review" : nil
 source_control = "blocked" if ARGV.delete("--source-review-declined")
 final_control = ARGV.delete("--final-review-missing") ? "" : nil
 final_control = "DECLINE\n" if ARGV.delete("--final-review-declined")
-abort "usage: ruby acceptance/bug02c_continuous_journey.rb [--dual-root [--frontier] [--empty-start] | --coexistence [--switch-only]]" unless
-  ARGV.empty? && !(dual_root && coexistence) && (!switch_only || coexistence) && (!frontier || (dual_root && !coexistence)) && (!empty_start || (dual_root && !coexistence)) && (!source_control || empty_start) && (final_control.nil? || (empty_start && frontier && !source_control))
+abort "usage: ruby acceptance/bug02c_continuous_journey.rb [--second-input | --dual-root [--frontier] [--empty-start] | --coexistence [--switch-only]]" unless
+  ARGV.empty? && !(second_input && empty_start) && !(dual_root && coexistence) && (!switch_only || coexistence) && (!frontier || (dual_root && !coexistence)) && (!empty_start || (dual_root && !coexistence)) && (!source_control || empty_start) && (final_control.nil? || (empty_start && frontier && !source_control))
 dual_root ||= coexistence
 abort "empty Frontier journey requires an explicitly authorized baseline" if
   empty_start && frontier && !ENV["AF_ACCEPTANCE_EMPTY_BASELINE"]
-fixture_class = if empty_start
-  Ig07cSourceAcceptance::EmptyStartFixture
+fixture_class = if second_input
+  Ig07cSourceAcceptance::SecondInputFixture
+elsif empty_start
+  ENV["AF_ACCEPTANCE_NATIVE_ROOT"] ? Ig07cSourceAcceptance::ReviewedEmptyStartFixture : Ig07cSourceAcceptance::EmptyStartFixture
 elsif frontier
   Ig07cSourceAcceptance::FrontierJourneyFixture
 else
@@ -171,6 +176,7 @@ script = <<~'SCORER'
     File.binwrite(File.join(raw, 'fixture.json'), "{}\n")
   end
 SCORER
+script = script.gsub("'Fixture Source'", "'Fixture Second Source'") if second_input
 File.binwrite(File.join(scorer, "bin/af-score"), script)
 FileUtils.chmod(0o755, File.join(scorer, "bin/af-score"))
 FileUtils.chmod(0o755, File.join(fixture.components, "af-workloads/bin/afw-bind-scoring-evidence"))
@@ -248,7 +254,7 @@ FileUtils.chmod(0o755, git_guard)
 
 # The archive is a fixed synthetic catalog and prebuilt Git history. Extracting
 # it does not stage or commit during this acceptance journey.
-unless empty_start
+unless empty_start || second_input
 archive = File.join(front, "test/fixtures/bug02c-precommitted-catalog.zip")
 abort "catalog fixture identity changed" unless Digest::SHA256.file(archive).hexdigest ==
   "fdb44f13c4103cd6682e632fb54ac6f46e7e683bf3aab993ce9cc26e010303dd"
@@ -275,7 +281,7 @@ args = fixture.send(:start_arguments)
 %w[--policy-definition --policy-id --policy-version --policy-values].each do |flag|
   args.slice!(args.index(flag), 2)
 end
-args.concat(["--prepare-staged-scoring", "--successor-version", "0.0.2"])
+args.concat(["--prepare-staged-scoring", "--successor-version", second_input ? "0.0.3" : "0.0.2"])
 fixture.seal_code if dual_root
 fixture_env = {
   "GIT_OPTIONAL_LOCKS" => "0",
@@ -300,7 +306,7 @@ if empty_start
 end
 fixture.verify_switch(fixture_env) if coexistence
 exit 0 if switch_only
-operation_id = Ig07cSourceAcceptance::Fixture::OPERATION_ID
+operation_id = second_input ? Ig07cSourceAcceptance::SecondInputFixture::SECOND_OPERATION : Ig07cSourceAcceptance::Fixture::OPERATION_ID
 base_bytes = File.binread(fixture.base)
 before_state = File.binread(File.join(fixture.catalog, "PROJECT_STATE.yml"))
 bundle = File.join(fixture.front, "output", "ingest-editorial-workspaces", "v0.1", operation_id)
@@ -359,10 +365,11 @@ abort "standing release did not bind the AFW v0.2 selection" unless
   release_inputs.dig("staged_scoring", "selection_path") &&
   release_inputs.dig("staged_scoring", "workload_paths", "generated")
 counts = accounting.fetch("counts")
+expected_counts = second_input ? fixture.expected_accounting(operation_id) : [11, 11, 6, 5, 0, 0]
 abort "eligible denominator or standing authority changed" unless
   counts.values_at("intended_cases", "execution_evidence_ready_cases", "standing_directive_accepted",
                    "deferred_or_unsupported", "individual_human_accepted", "ig16b_machine_accepted") ==
-    [11, 11, 6, 5, 0, 0]
+    expected_counts
 abort "final package is not ready" unless package.dig("readiness", "ready") == true
 abort "catalog changed before final approval" unless
   File.binread(File.join(fixture.catalog, "PROJECT_STATE.yml")) == before_state && File.binread(fixture.base) == base_bytes
@@ -371,7 +378,7 @@ wlo_output = File.join(fixture.front, "output/local-ingest-executions/v0.1", ope
 jobs = JSON.parse(File.binread(File.join(wlo_output, "jobs.json"))).fetch("jobs")
 receipts = Dir.glob(File.join(fixture.components, "af-workloads/output/workloads", workload_id, "evidence", "*.json"))
 abort "WLO attempt or AFW receipt denominator differs" unless
-  jobs.length == 11 && jobs.all? { |job| job["status"] == "complete" && job["attempt"] == 1 } && receipts.length == 11
+  jobs.length == expected_counts.first && jobs.all? { |job| job["status"] == "complete" && job["attempt"] == 1 } && receipts.length == expected_counts.first
 frozen_cases = Dir.glob(File.join(fixture.components, "af-workloads/build/workloads", workload_id, "cases/*.yml")).sort
 case_bindings = frozen_cases.to_h do |path|
   [YAML.safe_load_file(path).fetch("case_id"), Digest::SHA256.file(path).hexdigest]
