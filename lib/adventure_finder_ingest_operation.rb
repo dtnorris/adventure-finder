@@ -47,8 +47,9 @@ module AdventureFinderWorkspace
     end
 
     def validate!(doc)
+      selected = doc.is_a?(Hash) && doc.key?("editorial_specifications")
       keys!(doc, %w[contract_version operation_id created_at revision previous_revision_sha256
-                    input source_declaration base_catalog policy artifacts future_choices coordination])
+                    input source_declaration base_catalog policy artifacts future_choices coordination] + (selected ? ["editorial_specifications"] : []))
       check!(doc["contract_version"] == VERSION, "unsupported operation contract_version")
       check!(doc["operation_id"].is_a?(String) && doc["operation_id"].match?(
         /\A[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/
@@ -70,6 +71,22 @@ module AdventureFinderWorkspace
       keys!(doc["future_choices"], FUTURE_CHOICES)
       check!(doc["future_choices"].values.all?(&:nil?), "future choices belong to owner artifacts")
       artifacts!(doc["artifacts"])
+      if doc.key?("editorial_specifications")
+        binding = doc["editorial_specifications"]
+        keys!(binding, %w[repository revision inventory_sha256 root files])
+        text!(binding["repository"])
+        check!(binding["revision"].is_a?(String) && /\A[0-9a-f]{40}\z/.match?(binding["revision"]), "invalid public revision")
+        sha!(binding["inventory_sha256"])
+        text!(binding["root"])
+        check!(binding["root"].start_with?("/"), "public root must be absolute")
+        check!(binding["files"].is_a?(Array) && binding["files"].length == 2, "expected two public definitions")
+        binding["files"].each do |file|
+          keys!(file, %w[filename version status sha256 path bytes])
+          %w[filename version status path].each { |key| text!(file[key]) }
+          sha!(file["sha256"])
+          check!(file["bytes"].is_a?(Integer) && file["bytes"] > 0, "invalid public definition size")
+        end
+      end
       coordination!(doc)
       if doc["revision"].zero?
         check!(doc["artifacts"].empty? && doc["coordination"]["status"] == "created",
@@ -95,6 +112,13 @@ module AdventureFinderWorkspace
       end
       check!(previous["policy"].nil? || self.class.digest(previous["policy"]) ==
              self.class.digest(current["policy"]), "bound policy changed")
+      if previous.key?("editorial_specifications")
+        check!(previous["editorial_specifications"] == current["editorial_specifications"],
+               "bound editorial specifications changed")
+      elsif current.key?("editorial_specifications")
+        check!(previous["artifacts"].none? { |artifact| %w[editorial_context editorial_decisions boundary_freeze].include?(artifact["kind"]) },
+               "historical editorial selection cannot be replaced; create a new operation")
+      end
       old_refs = previous["artifacts"]
       check!(current["artifacts"].length >= old_refs.length, "bound artifact removed")
       old_refs.each_with_index do |ref, index|
@@ -113,6 +137,7 @@ module AdventureFinderWorkspace
 
     def observation_basis(doc)
       basis = identity(doc.slice("operation_id", "input", "source_declaration", "base_catalog", "artifacts"))
+      basis["editorial_specifications"] = doc["editorial_specifications"] if doc.key?("editorial_specifications")
       self.class.digest(basis.merge("policy" => doc["policy"]))
     end
 

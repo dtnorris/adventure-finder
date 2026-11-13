@@ -9,6 +9,7 @@ require "pathname"
 require "securerandom"
 require "time"
 require_relative "adventure_finder_ingest_operation_store"
+require_relative "adventure_finder_editorial_specification_selection"
 require_relative "adventure_finder_ingest_routing"
 require_relative "adventure_finder_ingest_source_driver"
 require_relative "adventure_finder_ingest_boundary_continuation"
@@ -60,12 +61,13 @@ module AdventureFinderWorkspace
 
     def start(pdf:, base_catalog:, source_declaration:, policy_definition: nil, policy_id: nil,
               policy_version: nil, policy_values: nil, selected_by:, operation_id: SecureRandom.uuid,
-              canonical_destination: nil, scoring_choice: nil, successor_version: nil)
+              canonical_destination: nil, scoring_choice: nil, successor_version: nil, spec_root: nil)
       input = required_file(pdf, "input PDF")
       fail_with("UNSUPPORTED_INPUT", "input must be a .pdf file") unless input.extname.casecmp?(".pdf")
       catalog = required_file(base_catalog, "base catalog")
       selected_at = utc_now
       context = build_context(operation_id, input:, catalog:, canonical_destination:)
+      specifications = EditorialSpecificationSelection.bind!(spec_root, pipeline_root: context.fetch("pipeline_root")) if spec_root
       policy = start_policy(context, policy_definition:, policy_id:, policy_version:,
                             policy_values:, scoring_choice:, selected_by:, selected_at:)
       if successor_version && (!canonical_destination ||
@@ -89,6 +91,7 @@ module AdventureFinderWorkspace
         catalog_selected_by: selected_by,
         catalog_selected_at: selected_at,
         source_declaration: choices,
+        editorial_specifications: specifications,
         policy:
       )
       write_context!(context)
@@ -126,9 +129,10 @@ module AdventureFinderWorkspace
       fail_with(e.code, e.message.sub(/\A[^:]+: /, ""))
     end
 
-    def resume(operation_id, scoring_choice: nil, selected_by: nil, approved_by: nil, final_approver: nil)
+    def resume(operation_id, scoring_choice: nil, selected_by: nil, approved_by: nil, final_approver: nil, spec_root: nil)
       context = load_context(operation_id)
       store = store_for(context)
+      select_editorial_specifications!(store, context, operation_id, spec_root) if spec_root
       routing = routing_for(store, context)
       inspection = routing.source_continuation_input(operation_id)
       if inspection.is_a?(Hash) && inspection["status"] == "REJECTED"
@@ -366,6 +370,26 @@ module AdventureFinderWorkspace
     end
 
     private
+
+    # Add selection before bundle creation through the normal append-only revision
+    # chain. Exact replay is a no-op; incompatible or historical reselection fails.
+    def select_editorial_specifications!(store, context, operation_id, spec_root)
+      selected = EditorialSpecificationSelection.bind!(spec_root, pipeline_root: context.fetch("pipeline_root"))
+      previous = store.validate!(operation_id)
+      return if previous["editorial_specifications"] == selected
+
+      if previous.key?("editorial_specifications") || previous.fetch("artifacts").any? do |artifact|
+           %w[editorial_context editorial_decisions boundary_freeze].include?(artifact.fetch("kind"))
+         end
+        fail_with("EDITORIAL_SPECIFICATIONS_REFUSED", "selection is already frozen; create a new operation for different specifications")
+      end
+      updated = JSON.parse(JSON.generate(previous))
+      updated["editorial_specifications"] = selected
+      updated["revision"] += 1
+      updated["previous_revision_sha256"] = IngestOperation.digest(previous)
+      updated["coordination"]["route_observation"] = nil
+      store.persist!(updated, expected_revision: previous.fetch("revision"), expected_sha256: IngestOperation.digest(previous))
+    end
 
     def local_capability_plan(context, operation_id)
       LocalCapabilityPlan.new(
@@ -837,6 +861,7 @@ module AdventureFinderWorkspace
       when "start"
         options = {}
         parser = OptionParser.new do |opts|
+          opts.on("--spec-root DIR", "Explicit absolute pinned public specification root") { |value| options[:spec_root] = value }
           opts.on("--source-id VALUE") { |value| options[:source_id] = value }
           opts.on("--edition VALUE") { |value| options[:edition] = value }
           opts.on("--pagination-authority VALUE") { |value| options[:pagination_authority] = value }
@@ -865,7 +890,7 @@ module AdventureFinderWorkspace
         source = IngestOperation::SOURCE_CHOICES.to_h { |key| [key, options.fetch(key.to_sym)] }
         service.start(pdf:, source_declaration: source, **options.slice(
           :base_catalog, :policy_definition, :policy_id, :policy_version, :policy_values,
-          :selected_by, :operation_id, :canonical_destination, :scoring_choice, :successor_version
+          :selected_by, :operation_id, :canonical_destination, :scoring_choice, :successor_version, :spec_root
         ))
       when "resume"
         options = {}
@@ -873,6 +898,7 @@ module AdventureFinderWorkspace
           opts.on("--prepare-staged-scoring") { select_scoring_choice!(options, "prepare") }
           opts.on("--decline-staged-scoring") { select_scoring_choice!(options, "decline") }
           opts.on("--selected-by VALUE") { |value| options[:selected_by] = value }
+          opts.on("--spec-root DIR", "Select pinned public specifications before bundle creation") { |value| options[:spec_root] = value }
           opts.on("--approve-boundary-by NAME") { |value| options[:approved_by] = value }
           opts.on("--approve-final-by NAME") { |value| options[:final_approver] = value }
         end

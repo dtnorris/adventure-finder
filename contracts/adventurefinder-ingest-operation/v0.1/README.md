@@ -49,9 +49,19 @@ control-free. Digests are lowercase SHA-256. Timestamps use valid UTC
 | `source_declaration` | Required keys `source_id`, `edition`, `pagination_authority`, `publisher`; each null or CHOICE |
 | `base_catalog` | Required exact catalog bytes plus selection provenance, frozen at creation; never a symbolic live head |
 | `policy` | Required null or POLICY; null means not selected, not a default policy |
+| `editorial_specifications` | Optional exact pipeline `EditorialSpecifications.bind!` identity: `repository`, `revision`, `inventory_sha256`, absolute `root`, and two `files` with `filename`, `version`, `status`, `path`, `sha256`, `bytes`. Bound once, before any editorial context/decisions/freeze; immutable thereafter. Historical absence stays absent. |
 | `artifacts` | Required ordered array, initially empty; append-only references, never embedded component facts |
 | `future_choices` | Required keys `boundaries`, `parentage`, `adventure_ids`, `approval`, all null in this version |
 | `coordination` | Required `{status, route_observation}`; initially `created` and null |
+
+The optional selection is a deliberate additive extension to this operation
+contract; every other unknown field still refuses. It participates in the
+canonical revision digest and observation basis. The selected pipeline validator
+rechecks exact metadata and live bytes before routing, continuation and approval.
+The strict `af-ingest-routing-input/v0.1` projection is unchanged: its operation
+digest commits to selection, while `--spec-root` carries the retained root as
+runtime input to `af-ingest-next` and `af-source-progress`. No environment default,
+numeric version search, historical backfill or approval migration is permitted.
 
 `CONTENT` has exactly `sha256`, `bytes` (positive integer), and `locator`.
 `locator` has exactly `root` and `path`. The input PDF and base catalog must
