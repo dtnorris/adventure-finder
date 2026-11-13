@@ -25,7 +25,7 @@ module AdventureFinderWorkspace
     ALLOWED_ROUTES = {
       "conversion_receipt" => %w[NEEDS_CANONICAL_MARKDOWN_PLACEMENT],
       "source_intake" => %w[READY_FOR_SOURCE_REGISTRATION READY_FOR_BOUNDARY_DOSSIER],
-      "boundary_dossier" => %w[READY_FOR_EDITORIAL_HANDOFF]
+      "boundary_dossier" => %w[READY_FOR_EDITORIAL_HANDOFF NEEDS_EDITORIAL_SPECIFICATIONS]
     }.freeze
     EXPECTED_PASS = {
       "conversion_receipt" => {
@@ -83,6 +83,7 @@ module AdventureFinderWorkspace
     def drive(operation_id, canonical_destination:)
       MAX_TRANSITIONS.times do
         operation = store.validate!(operation_id)
+        routing.validate_editorial_specifications!(operation)
         return boundary_handoff(operation) if editorial_handoff?(operation)
 
         route = routing.compose(operation_id)
@@ -143,6 +144,8 @@ module AdventureFinderWorkspace
           "--pipeline-root", store.roots.fetch("pipeline").to_s
         ]
         argv.concat(["--canonical-destination", canonical_destination.to_s]) if canonical_destination
+        specifications = prepared.operation["editorial_specifications"]
+        argv.concat(["--spec-root", specifications.fetch("root")]) if specifications
         argv << "--json"
         response = runner.capture(
           {"AF_PROJECT_ROOT" => project_root.to_s, "AF_ADVENTURE_FINDER_ROOT" => front_door_root.to_s},
@@ -340,6 +343,10 @@ module AdventureFinderWorkspace
                         "editorial review artifacts are not in one authoritative workspace") unless
         context_path.dirname == decisions_path.dirname
 
+      selected = operation["editorial_specifications"]
+      if selected && JSON.parse(File.binread(context_path))["public_specifications"] != selected
+        return diagnostic(operation, "EDITORIAL_SPECIFICATIONS_REFUSED", "editorial bundle differs from operation-bound specifications")
+      end
       review_workspace = editable_review_workspace(operation, context_path.dirname)
       return review_workspace if review_workspace.is_a?(Hash)
 

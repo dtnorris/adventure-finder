@@ -266,7 +266,13 @@ the WLO and RPOF sibling checkouts and their already-installed Bundler dependenc
 digital-book PDF and returns its stable UUID handle. `bin/af-catalog resume HANDLE`
 revalidates that operation in a fresh process and reports its current meaningful gate.
 The source-only driver using `--canonical-destination` validates deterministic
-source progression up to the boundary-editorial review workspace; that scope is
+source progression up to the boundary-editorial review workspace. For new editorial
+work, pass `--spec-root /absolute/path/to/af-specification-md` on `start` or
+`resume HANDLE`. This freezes the pinned public inventory, Editorial 2.0 Draft
+and ABDS 1.4 identities in the operation before bundle creation. Without selection,
+the journey pauses and prints a resume command. Resume rechecks those exact bytes;
+changed selection or historical editorial rebinding requires a new operation.
+That scope is
 documented in [`docs/INGEST_SOURCE_DRIVER_V0.1.md`](docs/INGEST_SOURCE_DRIVER_V0.1.md).
 For an approved boundary and authorized staged-scoring intent, the ordinary
 `resume` continuation proceeds through pipeline staging, AFW-qualified workload

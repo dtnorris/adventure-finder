@@ -47,7 +47,7 @@ module AdventureFinderWorkspace
     def create(operation_id: SecureRandom.uuid, created_at: utc_now,
                input_locator:, base_catalog_locator:, catalog_selected_by:,
                catalog_selected_at: created_at, catalog_selection_method: "explicit",
-               project_state_locator: nil, source_declaration: nil, policy: nil)
+               project_state_locator: nil, source_declaration: nil, policy: nil, editorial_specifications: nil)
       selection = {
         "method" => catalog_selection_method,
         "selected_by" => catalog_selected_by,
@@ -85,6 +85,7 @@ module AdventureFinderWorkspace
         "future_choices" => IngestOperation::FUTURE_CHOICES.to_h { |choice| [choice, nil] },
         "coordination" => {"status" => "created", "route_observation" => nil}
       }
+      document["editorial_specifications"] = editorial_specifications if editorial_specifications
       IngestOperation.validate!(document)
       persist_initial!(document)
     rescue Failure

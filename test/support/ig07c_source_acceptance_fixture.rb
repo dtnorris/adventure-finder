@@ -27,12 +27,19 @@ module Ig07cSourceAcceptance
 
     attr_reader :root, :front, :components, :pipeline, :source, :catalog,
                 :converter, :pdf, :base, :policy, :canonical, :registry,
-                :progress_log, :forbidden_log
+                :progress_log, :forbidden_log, :spec_root
 
     def initialize(repository_root:, pipeline_source_root:)
       @repository_root = File.expand_path(repository_root)
       @pipeline_source_root = File.realpath(pipeline_source_root)
-      @root = Dir.mktmpdir("ig07c-source-acceptance")
+      @root = File.realpath(Dir.mktmpdir("ig07c-source-acceptance"))
+      @spec_root = directory("public-specifications")
+      require File.join(@pipeline_source_root, "lib/af_data_pipeline/editorial_specifications")
+      public_root = ENV.fetch("AF_PUBLIC_SPEC_ROOT", File.expand_path("../af-specification-md", repository_root))
+      selected = AfDataPipeline::EditorialSpecifications.bind!(public_root)
+      ["documents.json", *selected.fetch("files").map { |file| file.fetch("filename") }].each do |filename|
+        FileUtils.cp(File.join(public_root, filename), spec_root)
+      end
       @front = directory("front-door")
       @components = directory("components")
       @pipeline = directory("components/af-data-pipeline")
@@ -197,7 +204,8 @@ module Ig07cSourceAcceptance
         "--policy-version", "v0.1",
         "--policy-values", JSON.generate("execution" => "deferred"),
         "--selected-by", "Fixture Operator",
-        "--canonical-destination", canonical
+        "--canonical-destination", canonical,
+        "--spec-root", spec_root
       ]
     end
 

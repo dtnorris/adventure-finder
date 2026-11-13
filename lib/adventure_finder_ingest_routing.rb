@@ -6,6 +6,7 @@ require "open3"
 require "pathname"
 require "tempfile"
 require_relative "adventure_finder_ingest_operation_store"
+require_relative "adventure_finder_editorial_specification_selection"
 
 module AdventureFinderWorkspace
   # Read-only composition of one durable ingest operation with the pipeline's
@@ -91,7 +92,7 @@ module AdventureFinderWorkspace
 
       operation = prepared.operation
       operation_sha = IngestOperation.digest(operation)
-      result = invoke_pipeline(prepared.projection, prepared.target.fetch("path"))
+      result = invoke_pipeline(prepared.projection, prepared.target.fetch("path"), operation["editorial_specifications"])
       current = store.validate!(operation_id)
       unless IngestOperation.digest(current) == operation_sha
         return diagnostic(operation, "OPERATION_CHANGED",
@@ -115,6 +116,7 @@ module AdventureFinderWorkspace
       return operation_diagnostic(stored) unless stored["operation_status"] == "VALID"
 
       operation = stored.fetch("operation")
+      validate_editorial_specifications!(operation)
       return waiting_for_artifact(operation) if operation.fetch("artifacts").empty?
 
       target = target_for(operation)
@@ -138,6 +140,7 @@ module AdventureFinderWorkspace
       return operation_diagnostic(stored) unless stored["operation_status"] == "VALID"
 
       operation = stored.fetch("operation")
+      validate_editorial_specifications!(operation)
       path = Pathname(freeze_path).expand_path
       return diagnostic(operation, "MISSING_BOUND_ARTIFACT", "boundary freeze does not exist: #{path}") unless path.file?
 
@@ -158,6 +161,12 @@ module AdventureFinderWorkspace
       diagnostic(operation, "MISSING_BOUND_ARTIFACT", "boundary freeze could not be read: #{e.class}", operation_id:)
     end
 
+    # Check selected bytes against the durable identity before routing or replay.
+    # Historical operations omit the field. Invalid selections raise Store::Failure.
+    def validate_editorial_specifications!(operation)
+      EditorialSpecificationSelection.validate!(operation["editorial_specifications"], pipeline_root: pipeline_root.to_s)
+    end
+
     def render(result, out: $stdout)
       operation = result.fetch("operation")
       out.puts "Ingest operation: #{operation.fetch('operation_id')}"
@@ -170,6 +179,9 @@ module AdventureFinderWorkspace
         return result
       end
 
+      if result.dig("gate", "state") == "NEEDS_EDITORIAL_SPECIFICATIONS"
+        out.puts "Resume with pinned public definitions: bin/af-catalog resume #{operation.fetch('operation_id')} --spec-root ABSOLUTE_PUBLIC_DIR"
+      end
       route = result["route"]
       return result unless route
 
@@ -289,7 +301,7 @@ module AdventureFinderWorkspace
       }
     end
 
-    def invoke_pipeline(projection, artifact_path)
+    def invoke_pipeline(projection, artifact_path, specifications = nil)
       executable = pipeline_root.join("bin", "af-ingest-next")
       unless executable.file? && executable.executable?
         return diagnostic_from_projection(projection, "PIPELINE_UNAVAILABLE",
@@ -309,6 +321,7 @@ module AdventureFinderWorkspace
           "--operation-input", file.path,
           "--json"
         ]
+        argv.concat(["--spec-root", specifications.fetch("root")]) if specifications
         response = runner.capture(
           {"AF_PROJECT_ROOT" => project_root.to_s, "AF_ADVENTURE_FINDER_ROOT" => front_door_root.to_s},
           *argv
