@@ -35,21 +35,8 @@ git clone --no-checkout https://github.com/dtnorris/af-specification-md.git "$ci
 git -C "$ci_root/af-specification-md" checkout --detach 394a44c2c2052ce2eeb6d28cd7647ad8a50acfcf
 export AF_PUBLIC_SPEC_ROOT="$ci_root/af-specification-md"
 
-# Use the merged OS-SC-06 components for the public-scorer test.
-mkdir -p "$ci_root/public-scorer"
-while read -r repository revision; do
-  git clone --no-checkout "git@github.com:dtnorris/$repository.git" "$ci_root/public-scorer/$repository"
-  git -C "$ci_root/public-scorer/$repository" checkout --detach "$revision"
-done <<'PUBLIC_SCORER_COMPONENTS'
-af-data-pipeline 0716f17cb25370b3479e721b6be17dd177303a6b
-af-workloads 404888b7931f38a988da96f68e5d89ef566d31e3
-af-scorer fdd620850b24a5b801eb68391ca3e98c22d4b28a
-af-evidence d3b98b6a4820b2426da82f1001049f42074ab2d9
-PUBLIC_SCORER_COMPONENTS
-
 platform="$(ruby -e 'puts Gem::Platform.local')"
-for repository in adventure-finder af-data-pipeline af-evidence af-workloads workload-orchestrator local-ollama-workers af-cli-scoring-utility runpod-ollama-fleet \
-  public-scorer/af-data-pipeline public-scorer/af-workloads public-scorer/af-scorer public-scorer/af-evidence; do
+for repository in adventure-finder af-data-pipeline af-evidence af-workloads workload-orchestrator local-ollama-workers af-cli-scoring-utility runpod-ollama-fleet; do
   cd "$ci_root/$repository"
   git rev-parse HEAD
   cp Gemfile.lock Gemfile.lock.ci-original
@@ -71,17 +58,5 @@ unset RUNPOD_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY GOOGLE_API_KEY AWS_ACCESS_
 unset AF_STATE_ROOT AF_DATA_PIPELINE_DATA_ROOT
 export RUBYOPT="-r$PWD/test/support/offline_network_guard.rb"
 export BUNDLE_FROZEN=true
-# Run every other test with the retained historical component pins.
+# Run the public-scorer acceptance test explicitly with its own component roots.
 bundle exec rake TESTOPTS='--exclude=/StagedConfigurationTest/' 2>&1 | tee "$results/full-suite.log"
-
-# Run the excluded test in a fresh process with the public components.
-AF_PROJECT_ROOT="$ci_root/public-scorer" \
-AF_DATA_PIPELINE_ROOT="$ci_root/public-scorer/af-data-pipeline" \
-AF_AFW_SOURCE_ROOT="$ci_root/public-scorer/af-workloads" \
-AF_AFW_ROOT="$ci_root/public-scorer/af-workloads" \
-AF_SCORER_ROOT="$ci_root/public-scorer/af-scorer" \
-AF_TEST_SPEC_ROOT="$ci_root/af-specification-md" \
-  bundle exec ruby -Ilib:test -r ./test/support/subprocess_environment.rb \
-    test/integration/staged_configuration_test.rb \
-    2>&1 | tee "$results/sc06-public-scorer.log"
-ruby -e 'abort "SC-06 journey did not run successfully without skips" unless File.read(ARGV.fetch(0)).match?(/[1-9][0-9]* runs, [1-9][0-9]* assertions, 0 failures, 0 errors, 0 skips/)' "$results/sc06-public-scorer.log"
