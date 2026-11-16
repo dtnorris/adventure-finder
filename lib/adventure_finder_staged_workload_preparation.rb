@@ -29,9 +29,10 @@ module AdventureFinderWorkspace
     class Failure < Error; end
 
     def initialize(afw_root:, scorer_root:, pipeline_root:, authority_inputs_path:,
-                   authority_store:, current_project_state_path:, mode: "production", contracts: nil)
+                   authority_store:, current_project_state_path:, scorer_config: nil, mode: "production", contracts: nil)
       @afw_root = Pathname(afw_root).expand_path
       @scorer_root = Pathname(scorer_root).expand_path
+      @scorer_config = scorer_config && Pathname(scorer_config).expand_path
       @pipeline_root = Pathname(pipeline_root).expand_path
       @authority_inputs_path = Pathname(authority_inputs_path).expand_path
       @authority_store = Pathname(authority_store).expand_path
@@ -47,14 +48,14 @@ module AdventureFinderWorkspace
       authority = staged.authority!(catalog_path: catalog_path.to_s)
       raise Failure, "pipeline returned zero allocation after issuing nonzero authority" unless authority
 
-      selector = contract(:selection).new(root: @afw_root.to_s, scorer_repo: @scorer_root.to_s)
+      selector = contract(:selection).new(root: @afw_root.to_s, scorer_repo: @scorer_root.to_s, **scorer_config_options)
       selection, selection_path = selector.select!(authority:, catalog_path: catalog_path.to_s)
       validate_selection_identity!(selection, operation_id, workload_id, authority)
       result = {"status" => selection.fetch("status"), "selection" => selection,
                 "inspection" => nil, "manifest" => nil, "refusal" => nil}
       return result unless selection["status"] == "SELECTED"
 
-      staged.use_selection!(path: selection_path, scorer_repo: @scorer_root.to_s)
+      staged.use_selection!(path: selection_path, scorer_repo: @scorer_root.to_s, **scorer_config_options)
       inspection = inspect_workload(staged, selection, catalog_path)
       result["inspection"] = inspection
       case inspection.fetch("action")
@@ -115,6 +116,12 @@ module AdventureFinderWorkspace
       end
     end
 
+    # Forward one optional explicit config to selection, compilation and inspection.
+    # AFW validates the roots-only contract and binds the selected bytes.
+    def scorer_config_options
+      @scorer_config ? {scorer_config: @scorer_config.to_s} : {}
+    end
+
     def staged_input(operation_id)
       contract(:staged_input).new(
         root: @afw_root.to_s,
@@ -132,7 +139,7 @@ module AdventureFinderWorkspace
       validator = contract(:validator).new(
         root: @afw_root.to_s, workload_id: selection.fetch("workload_id"),
         catalog_path: catalog_path.to_s, ids: selection.fetch("selected_ids"),
-        scorer_repo: @scorer_root.to_s,
+        scorer_repo: @scorer_root.to_s, **scorer_config_options,
         required_context_length: StagedWorkloadPreparation::REQUIRED_CONTEXT_LENGTH,
         require_fully_gpu_resident: true, staged_scoring: staged
       )
@@ -145,7 +152,7 @@ module AdventureFinderWorkspace
       contract(:compiler).new(
         root: @afw_root.to_s, workload_id: selection.fetch("workload_id"),
         catalog_path: catalog_path.to_s, ids: selection.fetch("selected_ids"),
-        scorer_repo: @scorer_root.to_s,
+        scorer_repo: @scorer_root.to_s, **scorer_config_options,
         required_context_length: StagedWorkloadPreparation::REQUIRED_CONTEXT_LENGTH,
         require_fully_gpu_resident: true, staged_scoring: staged, out: StringIO.new
       ).build
@@ -231,6 +238,7 @@ module AdventureFinderWorkspace
       @routing = routing
       @runner = runner
       @afw_coordinator = afw_coordinator
+      @scorer_config = env["AF_SCORER_CONFIG"] && File.expand_path(env.fetch("AF_SCORER_CONFIG"))
       @env = env
     end
 
@@ -421,7 +429,7 @@ module AdventureFinderWorkspace
 
     def default_afw_coordinator(operation_id, paths)
       AFWStagedWorkloadCoordinator.new(
-        afw_root:, scorer_root:, pipeline_root:,
+        afw_root:, scorer_root:, pipeline_root:, scorer_config: @scorer_config,
         authority_inputs_path: preparation_dir(operation_id).join("authority-inputs.json"),
         authority_store: authority_root,
         current_project_state_path: paths.fetch(:current_project_state_path)
@@ -520,6 +528,7 @@ module AdventureFinderWorkspace
         "--staged-selection", afw_root.join("workloads", ".selections", intent.fetch("workload_id"), "selection.json"),
         "--staged-pipeline-root", pipeline_root
       ]
+      argv += ["--scorer-config", @scorer_config] if @scorer_config
       Shellwords.join(argv.map(&:to_s))
     end
 

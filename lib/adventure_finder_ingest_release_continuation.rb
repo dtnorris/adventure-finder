@@ -108,6 +108,7 @@ module AdventureFinderWorkspace
           "generated" => @afw.join("build", "workloads", workload_id).to_s
         }
       }
+      staged["selection_scorer_config"] = File.expand_path(@env.fetch("AF_SCORER_CONFIG")) if @env["AF_SCORER_CONFIG"]
       input = {
         "schema_version" => "af-standing-bulk-score-release-inputs/v0.2", "mode" => "production",
         "staged_scoring" => staged,

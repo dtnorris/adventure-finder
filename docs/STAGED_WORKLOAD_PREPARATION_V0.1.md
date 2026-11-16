@@ -45,6 +45,17 @@ bin/af-catalog prepare-workload OPERATION_UUID \
   --historical-project-state RETAINED_PROJECT_STATE.yml
 ```
 
+When selecting the public scorer with `AF_SCORER_ROOT`, also explicitly select
+`AF_SCORER_CONFIG=/absolute/path/to/input-selection.yml`. Use AFW's roots-only
+configuration: `paths.xlsx_root`, `specification_root`, `source_root`,
+`output_root`, and optional `files.source_registry`. The coordinator passes the
+same file through staged selection, compilation, inspection and the rendered
+inspection command. Keep this selector set for release continuation: its v0.2
+release inputs carry `selection_scorer_config` to pipeline's AFW owner verifier.
+The immutable selection binds the file path and exact bytes. Missing or changed
+configuration refuses continuation; exact restoration permits revalidation.
+This does not rebind stored operations, approve inputs or qualify execution.
+
 The command derives a stable workload ID from the operation and asks pipeline to
 issue exact staged authority for the complete new-ID allocation. It then consumes
 AFW's public `afw-staged-selection/v0.1` owner result. AFW, not the front door,

@@ -1,0 +1,9 @@
+steps:
+  - label: "AF — full suite and coverage"
+    key: "af-tests"
+    agents:
+      queue: "act-macos"
+    timeout_in_minutes: 20
+    artifact_paths:
+      - ".ci-results/**/*"
+    command: "bash .buildkite/test.sh"
