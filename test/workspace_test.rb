@@ -842,10 +842,14 @@ class AdventureFinderWorkspaceTest < Minitest::Test
   end
 
   def test_afw_and_wlo_setup_is_current_without_stale_timing_hints
-    %w[af-workloads workload-orchestrator].each do |name|
+    expected_github_repositories = {
+      "af-workloads" => "dtnorris/af-workloads-data",
+      "workload-orchestrator" => "dtnorris/workload-orchestrator",
+    }
+    expected_github_repositories.each do |name, github_repository|
       repo = manifest.repositories.find { |entry| entry.fetch("name") == name }
 
-      assert_equal "dtnorris/#{name}", repo.fetch("github")
+      assert_equal github_repository, repo.fetch("github")
       assert_equal "current", repo.fetch("lifecycle")
       assert_equal "bundle install", repo.fetch("setup")
       assert_equal %w[ruby bundle git], repo.fetch("requires")

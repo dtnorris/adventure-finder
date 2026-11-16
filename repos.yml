@@ -57,11 +57,11 @@ repositories:
     requires: [ruby, bundle, git]
 
   - name: af-workloads
-    github: dtnorris/af-workloads
+    github: dtnorris/af-workloads-data
     role: AdventureFinder scoring workloads, qualification semantics, and result interpretation.
     groups: [core, code, scoring, workloads]
     lifecycle: current
-    visibility: public
+    visibility: private
     default: true
     setup: bundle install
     test: bundle exec rake
