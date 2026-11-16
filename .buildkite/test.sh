@@ -19,7 +19,9 @@ git -C "$ci_root/adventure-finder" checkout --detach "$source_commit"
 git -C "$ci_root/adventure-finder" remote set-url origin git@github.com:dtnorris/adventure-finder.git
 
 while read -r repository revision; do
-  git clone --no-checkout "git@github.com:dtnorris/$repository.git" "$ci_root/$repository"
+  remote_repository="$repository"
+  if [ "$repository" = af-workloads ]; then remote_repository=af-workloads-data; fi
+  git clone --no-checkout "git@github.com:dtnorris/$remote_repository.git" "$ci_root/$repository"
   git -C "$ci_root/$repository" checkout --detach "$revision"
 done <<'COMPONENTS'
 af-data-pipeline 2e23b56b82e214abc50c40d0cfda2fc1600907bb
