@@ -487,11 +487,13 @@ qualification pending. Other selector values refuse before the oracle runs.
 
 ### Bounded empty-start preparation
 
-`--dual-root --empty-start` selects XL-02's content-free constructor and the
+`--dual-root --empty-start` selects the public XLSX owner's finite constructor and the
 MD-02 `sources: {}` representation. It does not extract the populated catalog
 archive or create a catalog Git baseline. It measures separate initial v0.2
 roles and uses the existing public registration and approved boundary path,
 retaining the existing external synthetic converter/scorer/capacity boundaries.
+Select the owner with `AF_XLSX_FILES_ROOT` or the Ruby load path as for
+[`bin/af-doctor`](../README.md#binaf-doctor).
 It stops after the first public boundary continuation result, retaining raw
 output and initial bytes; a failed continuation returns nonzero. It does not
 approve final adoption or invoke Frontier export. The historical 11-job,

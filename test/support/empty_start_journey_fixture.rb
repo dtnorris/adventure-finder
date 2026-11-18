@@ -1,9 +1,10 @@
 # frozen_string_literal: true
 
 require_relative "frontier_journey_fixture"
+require_relative "../../lib/adventure_finder_xlsx_files"
 
 module Ig07cSourceAcceptance
-  # Uses the accepted XL-02 constructor and MD-02 registry representation.
+  # Uses the public XLSX constructor and MD-02 registry representation.
   # Catalog history is copied only from the explicit operator-approved empty baseline.
   class EmptyStartFixture < FrontierJourneyFixture
     # Empty final controls are separate public-entry worlds, never erased to
@@ -225,9 +226,12 @@ module Ig07cSourceAcceptance
         require File.join(pipeline, "lib/af_data_pipeline/amc_finalize")
         return
       end
+      owner = AdventureFinderWorkspace::XlsxFiles.load!
+      owner::EmptyCatalog.create!(
+        path: base, version: "0.0.1",
+        ordinary_capacity: 4, large_capacity: 4, source_capacity: 2, publisher_capacity: 2
+      )
       require File.join(pipeline, "lib/af_data_pipeline/ingest_next")
-      require File.join(@pipeline_source_root, "test/support/empty_catalog_fixture")
-      Object.new.extend(EmptyCatalogFixture).write_empty_catalog(base)
       require File.join(pipeline, "lib/af_data_pipeline/amc_finalize")
       self.class.add_release_fills(base)
     end
