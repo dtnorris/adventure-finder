@@ -123,6 +123,8 @@ module AdventureFinderWorkspace
       ) ? 0 : 1
     end
 
+    # Parse workspace diagnostics and return a process status. Invalid options
+    # raise OptionParser::ParseError for the command's shared error handler.
     def doctor(manifest)
       return diagnostic_doctor(manifest) if Diagnostics::SUBJECT_TYPES.include?(@argv.first)
 
@@ -130,12 +132,13 @@ module AdventureFinderWorkspace
       parser = OptionParser.new do |p|
         p.banner = "Usage: bin/af-workspace doctor [options]"
         add_selection_options(p, options)
+        p.on("--catalog-root PATH", "Directory containing PROJECT_STATE.yml and its workbooks") { |v| options[:catalog_root] = v }
         p.on("--strict", "Treat warnings (including missing optional runtime tools) as failure") { options[:strict] = true }
       end
       parser.parse!(@argv)
       Workspace.new(manifest: manifest, root: options[:root], adjacent_root: options[:adjacent_root]).doctor(
         repos: selected(manifest, options),
-        strict: options[:strict]
+        strict: options[:strict], catalog_root: options[:catalog_root]
       ) ? 0 : 1
     end
 

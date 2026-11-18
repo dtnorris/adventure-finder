@@ -562,9 +562,13 @@ bin/af-doctor
 
 It checks required commands (including the resolved executable path and useful runtime
 versions), reports missing runtime-specific commands, checks expected repository
-checkouts, verifies the canonical source registry exists, and—when
-`af-xlsx-data-sources` is present—reads the *live* `PROJECT_STATE.yml`, resolves
-`catalog_head`, and verifies that workbook's byte size and SHA-256.
+checkouts and verifies the canonical source registry exists. For catalog diagnostics,
+it reads `PROJECT_STATE.yml` under `af-xlsx-data-sources` in the workspace. Pass
+`--catalog-root PATH` to select a separate catalog directory.
+The [public XLSX owner](https://github.com/dtnorris/af-xlsx-files) validates all
+three workbook bindings and their version ceilings before doctor reports
+`catalog_head`. Set `AF_XLSX_FILES_ROOT` to the absolute path of the owner's API
+0.1 source checkout or make the library available on the Ruby load path.
 
 That last behavior is intentional: **never infer "the current AMC" from the numerically
 largest filename or from a version copied into this README.**

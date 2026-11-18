@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 
-require "digest"
 require "fileutils"
 require "open3"
 require "pathname"
@@ -9,6 +8,7 @@ require "thread"
 require "time"
 require "yaml"
 require_relative "adventure_finder_test_result"
+require_relative "adventure_finder_xlsx_files"
 
 module AdventureFinderWorkspace
   SCHEMA_VERSION = "adventurefinder-workspace/v0.1"
@@ -331,7 +331,9 @@ module AdventureFinderWorkspace
       acceptance_ok && unexecuted.empty? && results.all? { |result| result.result == :pass }
     end
 
-    def doctor(repos:, strict: false)
+    # Diagnose the selected checkouts and catalog. Returns false on errors or
+    # strict warnings. A catalog root replaces the conventional workspace path.
+    def doctor(repos:, strict: false, catalog_root: nil)
       errors = []
       warnings = []
 
@@ -375,7 +377,7 @@ module AdventureFinderWorkspace
         end
       end
 
-      validate_project_state(errors, warnings)
+      validate_project_state(errors, warnings, catalog_root)
       validate_source_registry(warnings)
 
       out.puts
@@ -890,49 +892,30 @@ module AdventureFinderWorkspace
       "'" + value.to_s.gsub("'", %q('"'"')) + "'"
     end
 
-    def validate_project_state(errors, warnings)
-      state_path = root / "af-xlsx-data-sources" / "PROJECT_STATE.yml"
+    # Report catalog_head only after validating all three manifest bindings.
+    # Adds validation errors or an absent default-manifest warning to the lists.
+    def validate_project_state(errors, warnings, catalog_root)
+      if catalog_root && catalog_root.strip.empty?
+        errors << "--catalog-root requires a nonblank path"
+        return
+      end
+      catalog = catalog_root.nil? ? root / "af-xlsx-data-sources" : Pathname.new(catalog_root).expand_path
+      state_path = catalog / "PROJECT_STATE.yml"
       out.puts
       out.puts "Canonical project state:"
 
-      unless state_path.file?
+      if catalog_root.nil? && !state_path.file?
         out.puts "  WARN #{state_path} not found"
         warnings << "PROJECT_STATE.yml unavailable"
         return
       end
 
-      state = YAML.safe_load(state_path.read, permitted_classes: [], aliases: false)
-      head = state["catalog_head"]
-      unless state["schema_version"].to_s.start_with?("adventurefinder-project-state/")
-        out.puts "  FAIL unsupported PROJECT_STATE.yml schema"
-        errors << "unsupported PROJECT_STATE.yml schema"
-        return
-      end
-      unless head.is_a?(Hash) && head["filename"] && head["sha256"] && head["bytes"]
-        out.puts "  FAIL catalog_head is incomplete"
-        errors << "catalog_head is incomplete"
-        return
-      end
-
-      workbook = state_path.dirname / head["filename"]
-      out.puts "  INFO catalog_head #{head['version']} -> #{head['filename']}"
-      unless workbook.file?
-        out.puts "  FAIL catalog_head workbook missing"
-        errors << "catalog_head workbook missing: #{workbook}"
-        return
-      end
-
-      actual_bytes = workbook.size
-      actual_sha = Digest::SHA256.file(workbook).hexdigest
-      if actual_bytes == Integer(head["bytes"]) && actual_sha == head["sha256"]
-        out.puts "  PASS catalog_head byte size and SHA-256 match PROJECT_STATE.yml"
-      else
-        out.puts "  FAIL catalog_head integrity mismatch"
-        errors << "catalog_head integrity mismatch"
-      end
-    rescue Psych::SyntaxError, ArgumentError => e
-      out.puts "  FAIL unable to validate PROJECT_STATE.yml: #{e.message}"
-      errors << "invalid PROJECT_STATE.yml"
+      owner = XlsxFiles.load!
+      head = owner::ProjectState.new(manifest_path: state_path).resolve("catalog_head")
+      out.puts "  INFO catalog_head #{head.version} -> #{head.path}"
+      out.puts "  PASS #{head.bytes} bytes, SHA-256 #{head.sha256} (#{state_path})"
+    rescue LoadError, SystemCallError, ArgumentError, AfXlsxFiles::Error => error
+      errors << "unable to validate #{state_path}: #{error.message}"
     end
 
     def validate_source_registry(warnings)
