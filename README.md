@@ -94,10 +94,19 @@ component routing. Catalog ingestion passes the selected front door through
 `AF_ADVENTURE_FINDER_ROOT`. The PDF converter already supports that override;
 Frontier must receive `AF_PROJECT_ROOT` explicitly.
 
-For new production ingestion, deliberately set both `AF_AFW_ROOT` and
-`AF_SCORER_ROOT` to their retained production checkouts. Their defaults select
-normal `af-workloads` and `af-cli-scoring-utility`, never legacy AFIO. This does not
-upgrade frozen production commits/configuration or migrate retained execution state.
+For split workload preparation, set `AF_AFW_ROOT` to the reviewed public
+`dtnorris/af-workloads` checkout and `AF_AFW_DATA_ROOT` to an existing separate
+workload store. Select the scorer with `AF_SCORER_ROOT` and a roots-only
+`AF_SCORER_CONFIG` whose output directory is inside the workload store. The
+front door retains the code identity and store binding with the preparation.
+Use the same selections on resume. `bin/af-catalog prepare-workload` stops after
+preparation. Offline case replay uses the public checkout's
+`bin/afw-score-job --data-root DIR --verify-only CASE.yml`.
+
+Recover a retained combined workload with its original `AF_AFW_ROOT` and
+scorer selections and with `AF_AFW_DATA_ROOT` unset. Frozen production batches
+continue to use the paths in their production context. Keep the original
+checkout and state available for this recovery.
 
 The three archived/experimental entries remain opt-in with `--all` and live outside
 the component container, beside the front door. `--adjacent-root` or
@@ -359,7 +368,11 @@ a pull request.
 Clone missing repositories into the workspace root.
 
 Normal bootstrap includes current repositories marked `default: true` in `repos.yml`.
-It does not modify repositories that are already present.
+It clones the public `dtnorris/af-workloads` into the `af-workloads` slot and
+checks the origin when that checkout already exists. If the slot holds the
+private donor, retain it separately and select it explicitly for recovery.
+Bootstrap leaves existing repositories in place. Review the installed AFW
+revision before selecting it for split preparation.
 
 Because checkout paths derive from manifest names, the current topology expects
 `af-workloads`, `workload-orchestrator`, and `runpod-ollama-fleet` as sibling checkout

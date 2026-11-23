@@ -229,7 +229,7 @@ module AdventureFinderWorkspace
         front_door_root: context.fetch("front_door_root"),
         project_root: context.fetch("project_root"),
         pipeline_root: context.fetch("pipeline_root"),
-        afw_root: env["AF_AFW_ROOT"] || Pathname(context.fetch("project_root")).join("af-workloads"),
+        afw_root: env["AF_AFW_ROOT"],
         scorer_root: env["AF_SCORER_ROOT"] || Pathname(context.fetch("project_root")).join("af-cli-scoring-utility"),
         source_root: context.fetch("source_root"),
         catalog_root: context.fetch("catalog_root"),

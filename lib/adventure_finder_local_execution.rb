@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "adventure_finder_state_paths"
+require_relative "adventure_finder_workload_paths"
 
 require "digest"
 require "fileutils"
@@ -663,22 +664,26 @@ module AdventureFinderWorkspace
     end
 
     def execution_paths(operation_id)
-      afw = Pathname(env.fetch("AF_AFW_ROOT", project_root.join("af-workloads").to_s)).expand_path
+      roots = WorkloadPaths.new(code: env.fetch("AF_AFW_ROOT", project_root.join("af-workloads").to_s),
+                                data: env["AF_AFW_DATA_ROOT"], explicit_code: env.key?("AF_AFW_ROOT"))
+      afw = roots.code
       low = Pathname(env.fetch("LOW_REPO_ROOT", project_root.join("local-ollama-workers").to_s)).expand_path
       wlo = Pathname(env.fetch("WLO_REPO_ROOT", project_root.join("workload-orchestrator").to_s)).expand_path
       coordination = intent_store.operation_dir(operation_id)
       # WLO owns this retained execution locator, independently of AF storage.
       output = front_door_root.join("output", "local-ingest-executions", "v0.1", operation_id, "wlo")
-      preparation = read_json(
-        StatePaths.root(front_door_root:, project_root:, env:).join("output", "staged-workload-preparations", "v0.1", operation_id, "result.json"),
-        "staged workload preparation"
-      )
+      preparation_dir = StatePaths.root(front_door_root:, project_root:, env:).join("output", "staged-workload-preparations", "v0.1", operation_id)
+      roots.verify_binding!(preparation_dir.join("afw-roots.json"))
+      preparation = read_json(preparation_dir.join("result.json"), "staged workload preparation")
       plan = Pathname(preparation.dig("plan", "path").to_s).expand_path
+      if roots.data && plan != roots.data.join("workloads", preparation.fetch("workload_id"), "execution-plan.json")
+        fail_with("STALE_LOCAL_EXECUTION", "prepared plan is outside the bound AFW workload location")
+      end
       plan_sha = Digest::SHA256.file(plan).hexdigest
       fail_with("STALE_LOCAL_EXECUTION", "prepared plan bytes changed") unless plan_sha == preparation.dig("plan", "sha256")
       consumer = Digest::SHA256.hexdigest(JSON.generate([plan_sha, afw.to_s, output.to_s]))
       {
-        afw:, low:, wlo:, coordination:, output:, plan:, plan_sha256: plan_sha,
+        afw:, afw_data: roots.data, low:, wlo:, coordination:, output:, plan:, plan_sha256: plan_sha,
         plan_id: preparation.fetch("workload_id"), consumer_id: consumer,
         operation_binding: preparation.slice("operation_id", "intent_id", "authority_id"),
         worker_sources: coordination.join("worker-sources.yml"),
@@ -689,6 +694,10 @@ module AdventureFinderWorkspace
       }
     rescue Errno::ENOENT => e
       fail_with("MISSING_LOCAL_EXECUTION_INPUT", e.message)
+    rescue Failure
+      raise
+    rescue Error => e
+      fail_with("STALE_LOCAL_EXECUTION", e.message)
     end
 
     # Read this intent's retained phase/token. Legacy missing tokens remain
@@ -825,7 +834,7 @@ module AdventureFinderWorkspace
 
     def child_environment(paths)
       {"AF_PROJECT_ROOT" => project_root.to_s, "AF_ADVENTURE_FINDER_ROOT" => front_door_root.to_s,
-       "AFW_ROOT" => paths.fetch(:afw).to_s}
+       "AFW_ROOT" => paths.fetch(:afw).to_s, "AFW_DATA_ROOT" => paths[:afw_data]&.to_s}
     end
 
     def capture(chdir, environment, *argv)

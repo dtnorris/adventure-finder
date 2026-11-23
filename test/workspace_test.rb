@@ -843,7 +843,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
 
   def test_afw_and_wlo_setup_is_current_without_stale_timing_hints
     expected_github_repositories = {
-      "af-workloads" => "dtnorris/af-workloads-data",
+      "af-workloads" => "dtnorris/af-workloads",
       "workload-orchestrator" => "dtnorris/workload-orchestrator",
     }
     expected_github_repositories.each do |name, github_repository|
@@ -962,6 +962,32 @@ class AdventureFinderWorkspaceTest < Minitest::Test
           assert_equal({"AF_PROJECT_ROOT" => File.expand_path(dir)}, call[:env])
         end
       end
+    end
+  end
+
+  # Check manifest-driven clone selection and mismatch handling without network.
+  def test_bootstrap_selects_public_workloads_and_refuses_the_donor_in_that_slot
+    repo = manifest.repositories.find { |entry| entry.fetch("name") == "af-workloads" }
+    Dir.mktmpdir do |directory|
+      path = File.join(directory, "af-workloads")
+      runner = AdventureFinderWorkspace::CommandRunner.new
+      commands = []
+      runner.define_singleton_method(:system) do |*argv, **|
+        commands << argv
+        true
+      end
+      error = StringIO.new
+      workspace = AdventureFinderWorkspace::Workspace.new(manifest:, root: directory, runner:,
+                                                           out: StringIO.new, err: error)
+      assert workspace.bootstrap(repos: [repo], protocol: "https")
+      assert_equal [["git", "clone", "https://github.com/dtnorris/af-workloads.git", path]], commands
+      FileUtils.mkdir_p(path)
+      assert system("git", "init", "--quiet", path)
+      assert system("git", "-C", path, "remote", "add", "origin", "git@github.com:dtnorris/af-workloads-data.git")
+      refute workspace.bootstrap(repos: [repo], setup: true)
+      assert_includes error.string, "expected dtnorris/af-workloads"
+      assert_equal "git@github.com:dtnorris/af-workloads-data.git",
+                   runner.capture("git", "remote", "get-url", "origin", chdir: path).stdout.strip
     end
   end
 

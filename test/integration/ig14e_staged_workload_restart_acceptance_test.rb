@@ -19,7 +19,7 @@ class IG14EStagedWorkloadRestartAcceptanceTest < Minitest::Test
     front = File.expand_path("../..", __dir__)
     components = ENV["AF_PROJECT_ROOT"] || File.expand_path("../adventure-finder-components", front)
     @pipeline = ENV["AF_DATA_PIPELINE_ROOT"] || File.join(components, "af-data-pipeline")
-    @afw_source = ENV["AF_AFW_ROOT"] || ENV["AF_WORKLOADS_ROOT"] || File.join(components, "af-workloads")
+    @afw_source = ENV["AF_TEST_HISTORICAL_AFW_ROOT"] || ENV["AF_AFW_ROOT"] || ENV["AF_WORKLOADS_ROOT"] || File.join(components, "af-workloads")
     @scorer_source = ENV["AF_SCORER_ROOT"] || File.join(components, "af-cli-scoring-utility")
     @pipeline = File.expand_path(@pipeline)
     @afw_source = File.expand_path(@afw_source)
