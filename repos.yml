@@ -22,7 +22,7 @@ repositories:
     default: true
 
   - name: md-for-llm-book-content
-    github: dtnorris/md-for-llm-book-content
+    github: dtnorris/af-source-md-data
     role: Private canonical page-addressable Markdown corpus and source registry.
     groups: [core, authority, library]
     lifecycle: current
