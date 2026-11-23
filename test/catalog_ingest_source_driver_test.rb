@@ -21,7 +21,7 @@ class CatalogIngestSourceDriverTest < Minitest::Test
     @components = directory("adventure-finder-components")
     @converter = directory("adventure-finder-components/pdf-to-llm-md-converter")
     @pipeline = directory("adventure-finder-components/af-data-pipeline")
-    @source = directory("adventure-finder-components/md-for-llm-book-content")
+    @source = directory("adventure-finder-components/af-source-md-data")
     @input = directory("owned-inputs")
     @catalog = directory("catalog-data")
     @pdf = write(File.join(@input, "owned.pdf"), "%PDF synthetic fixture\n")
@@ -51,7 +51,7 @@ class CatalogIngestSourceDriverTest < Minitest::Test
   # bound pipeline artifacts and source/catalog locators retain their owners.
   def test_external_state_source_review_replays_without_checkout_output
     state = File.realpath(directory("external-state"))
-    selected = {"AF_STATE_ROOT" => state}
+    selected = {"AF_STATE_ROOT" => state, "AF_SOURCE_ROOT" => nil}
     stdout, stderr, status = run_catalog(selected, *start_arguments)
     assert status.success?, stderr + stdout
     review = File.join(state, "output/ingest-editorial-workspaces/v0.1", ID)
