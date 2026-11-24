@@ -57,7 +57,7 @@ class ReviewFrontDoorTest < Minitest::Test
   # Minitest restores the caller's exact values after every test, including errors.
   def before_setup
     super
-    @pipeline_environment = %w[AF_DATA_PIPELINE_ROOT AF_DATA_PIPELINE_DATA_ROOT].to_h do |key|
+    @pipeline_environment = %w[AF_DATA_PIPELINE_ROOT AF_DATA_PIPELINE_DATA_ROOT AF_PIPELINE_EXPECTED_DATA_ROOT].to_h do |key|
       [key, ENV.delete(key)]
     end
   end
@@ -74,7 +74,7 @@ class ReviewFrontDoorTest < Minitest::Test
     Dir.mktmpdir do |temporary|
       root = File.realpath(temporary)
       paths = build_workspace(root)
-      selected = File.join(root, "development-components", "af-pipeline")
+      selected = File.join(root, "development-components", "split-pipeline-fixture")
       FileUtils.mkdir_p(File.dirname(selected))
       FileUtils.cp_r(paths.fetch(:pipeline), selected)
       data = File.join(root, "private-data")

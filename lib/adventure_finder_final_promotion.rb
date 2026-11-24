@@ -54,6 +54,7 @@ module AdventureFinderWorkspace
       approver = approver.to_s.strip
       raise Error, "--approver must identify the human decision owner" if approver.empty?
 
+      PipelineDataPaths.admit!(code_root: @pipeline_root, legacy_root: @pipeline_root, env: @env)
       inputs_path = File.expand_path(inputs_path)
       package_path = File.expand_path(package_path)
       # Locate retained authority before live validation: successful promotion

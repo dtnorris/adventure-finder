@@ -216,44 +216,27 @@ V2 path, ordinary `af-catalog resume` after an approved boundary coordinates
 complete AFW evidence binding and pipeline standing release; eligible proposed
 scores do not require individual ACCEPT/HOLD/REJECT just to finalize a candidate.
 See [the front-door V2 resume contract](CATALOG_INGEST_FRONT_DOOR_V0.1.md)
-and [the pipeline's current runbook](https://github.com/dtnorris/af-data-pipeline/blob/main/docs/operator-runbook.md).
+and [the pipeline's current runbook](https://github.com/dtnorris/af-pipeline/blob/main/docs/operator-runbook.md).
 
 ```bash
 bin/af-review prepare 39 0946-openness
 ```
 
-Set `AF_DATA_PIPELINE_DATA_ROOT` to an existing absolute private directory to
-place manual review packages under `output/adventure-finder-review/PLAN/JOB`
-and durable ledgers under `audits/adventure-finder-review/PLAN/JOB` there.
-This consumes the pipeline's DPS-05 storage contract: invalid, overlapping,
-unwritable or symlinked destinations fail closed without fallback. Unset keeps
-the compatibility destinations in the pipeline checkout. `AF_DATA_PIPELINE_ROOT`
-selects the executable checkout explicitly, including a logical `af-pipeline`
-directory outside `--root`; when unset, the manifest and `--root` select the
-conventional `af-data-pipeline` checkout. An explicit code root must be an existing
-absolute directory without traversal or symlink ancestors and contain executable
-`bin/af-data`. An invalid override refuses before evidence binding, without
-falling back to another development or production checkout. AFDP runs from the
-selected code checkout. For a disposable dual-root layout, set both selectors:
-
-```bash
-AF_DATA_PIPELINE_ROOT="$world/development-components/af-pipeline" \
-AF_DATA_PIPELINE_DATA_ROOT="$world/af-pipeline-data" \
-bin/af-review prepare 39 0946-openness --root "$world/production-components" \
-  --registry "$world/contexts.yml"
-```
-
-The registry must identify the intended AFW/WLO context; root configuration does
-not verify Git provenance or authorize editorial decisions. The code/data names
-above are examples, not repository renames or discovery conventions.
-AFW retains ownership of evidence receipts. Selecting a root does not migrate
-existing packages or ledgers; retain the same selection when replaying review.
+The installed review launcher selects the public checkout and private store
+using the [catalog front-door selectors](CATALOG_INGEST_FRONT_DOOR_V0.1.md#start-behavior).
+With `AF_DATA_PIPELINE_ROOT` unset, review resolves the public `af-pipeline`
+checkout from `repos.yml` and `--root`. It verifies the pinned code and expected
+store before asking AFW to bind evidence. Review packages use
+`output/adventure-finder-review/PLAN/JOB` and ledgers use
+`audits/adventure-finder-review/PLAN/JOB` under the selected store.
+The registry must identify the intended AFW/WLO context. Preserve its paths
+and the original selectors when recovering historical review packages.
 
 AdventureFinder resolves the job and composes AFW evidence binding with pipeline
 review preparation. AFW validates the scoring receipt; pipeline creates/reuses
 the package and reports the existing ledger, counts and next human decision.
 For this *manual review* route, follow the printed paths and pipeline's
-[runbook](https://github.com/dtnorris/af-data-pipeline/blob/main/docs/operator-runbook.md)
+[runbook](https://github.com/dtnorris/af-pipeline/blob/main/docs/operator-runbook.md)
 to inspect evidence and choose ACCEPT/HOLD/REJECT. Command success is not an
 accepted assessment. Preparation changes no canonical/AMC data; human editorial
 mutation and canonical apply/finalize are separate pipeline-owned gates.

@@ -221,6 +221,24 @@ class OperatorAcceptanceTest < Minitest::Test
     assert_includes call.dig(:env, "RUBYOPT"), "offline_network_guard.rb"
   end
 
+  # Use the manifest's public checkout directory when no pipeline override is set.
+  def test_pipeline_acceptance_defaults_to_the_manifest_checkout
+    previous = ENV.delete("AF_DATA_PIPELINE_ROOT")
+    public_pipeline = File.join(@tmp, "af-pipeline")
+    build_component(public_pipeline, ["bin/af-ingest-next"])
+    runner = Runner.new
+    harness = AdventureFinderWorkspace::OperatorAcceptance.new(
+      workspace_root: @tmp, runner:, out: StringIO.new, err: StringIO.new
+    )
+
+    assert harness.run(only: ["ig19a-entry-contract"])
+    env = runner.calls.fetch(0).fetch(:env)
+    assert_equal public_pipeline, env.fetch("AF_DATA_PIPELINE_ROOT")
+    assert_equal File.join(public_pipeline, "Gemfile"), env.fetch("BUNDLE_GEMFILE")
+  ensure
+    ENV["AF_DATA_PIPELINE_ROOT"] = previous
+  end
+
   def test_ig19c_exception_matrices_are_unbundled_front_door_scenarios
     expected = {
       "ig19c-execution-exceptions" => "acceptance/ig19c_execution_exception_matrix.rb",

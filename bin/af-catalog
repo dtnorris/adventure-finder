@@ -110,19 +110,27 @@ abort_with("input must be a .pdf file: #{pdf}") unless pdf.extname.casecmp?(".pd
 
 converter = PDF_CONVERTER_ROOT.join("bin", "convert-cached")
 router = DATA_PIPELINE_ROOT.join("bin", "af-ingest-next")
-executable!(converter, "cached PDF converter")
-executable!(router, "ingestion next-action router")
-
-# Admit explicit AF state before the converter can publish owner artifacts.
+# Admit code, store and AF state before the converter can publish owner artifacts.
 # The legacy one-shot command itself creates no AF coordination records.
 require_relative "../lib/adventure_finder_state_paths"
 begin
+  AdventureFinderWorkspace::PipelineDataPaths.admit!(code_root: DATA_PIPELINE_ROOT, legacy_root: DATA_PIPELINE_ROOT)
   AdventureFinderWorkspace::StatePaths.root(
     front_door_root: ENV.fetch("AF_ADVENTURE_FINDER_ROOT", ROOT.to_s),
     project_root: CODE_ROOT, owner_roots: [PDF_CONVERTER_ROOT, DATA_PIPELINE_ROOT]
   )
 rescue AdventureFinderWorkspace::Error => error
   abort_with(error.message)
+end
+
+executable!(converter, "cached PDF converter")
+executable!(router, "ingestion next-action router")
+router_arguments = ["--pdf-converter-root", PDF_CONVERTER_ROOT.to_s]
+if AdventureFinderWorkspace::PipelineDataPaths.public_selection?(DATA_PIPELINE_ROOT)
+  router_arguments += [
+    "--source-root", ENV.fetch("AF_SOURCE_ROOT") { ENV.fetch("AF_SOURCE_DATA_ROOT", CODE_ROOT.join("af-source-md-data").to_s) },
+    "--catalog-root", ENV.fetch("AF_CATALOG_DATA_ROOT", CODE_ROOT.join(AdventureFinderWorkspace::CATALOG_REPOSITORY).to_s)
+  ]
 end
 
 build_dir = PDF_CONVERTER_ROOT.join("build")
@@ -162,7 +170,7 @@ puts
 puts "Routing durable conversion state..."
 puts
 
-router_ok = system(env, router.to_s, receipt.to_s, "--pdf-converter-root", PDF_CONVERTER_ROOT.to_s)
+router_ok = system(env, router.to_s, receipt.to_s, *router_arguments)
 router_status = $?
 
 unless router_ok
