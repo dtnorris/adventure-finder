@@ -22,7 +22,7 @@ while read -r repository revision; do
   git clone --no-checkout "git@github.com:dtnorris/$repository.git" "$ci_root/$repository"
   git -C "$ci_root/$repository" checkout --detach "$revision"
 done <<'COMPONENTS'
-af-data-pipeline 7fa228c5b85b1a4a3e578a0be90c54e65e27c1e2
+af-data-pipeline 9d5e37c44cace433346e25668f7e1f06604fb262
 af-evidence d3b98b6a4820b2426da82f1001049f42074ab2d9
 af-workloads-data 136f47d059351b7532acd953745328da8da8d0fc
 workload-orchestrator fb069208e8f46ff2bf99e980c906aed5c0962be6
