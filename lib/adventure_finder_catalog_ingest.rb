@@ -411,7 +411,7 @@ module AdventureFinderWorkspace
       converter_root = Pathname(
         env.fetch("AF_PDF_CONVERTER_ROOT", project_root.join("pdf-to-llm-md-converter").to_s)
       ).expand_path
-      source_root = Pathname(env.fetch("AF_SOURCE_ROOT", project_root.join("md-for-llm-book-content").to_s)).expand_path
+      source_root = Pathname(env.fetch("AF_SOURCE_ROOT", project_root.join("af-source-md-data").to_s)).expand_path
       roots = {
         "input" => input.dirname.to_s,
         "front_door" => front_door_root.to_s,

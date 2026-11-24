@@ -34,7 +34,7 @@ Authority remains:
 
 - `md-specification-files` — accepted AdventureFinder semantic specifications;
 - `af-xlsx-data-sources/PROJECT_STATE.yml` — moving canonical AMC role state;
-- `md-for-llm-book-content` — canonical private source corpus and source registry;
+- `af-source-md-data` — canonical private source corpus and source registry;
 - each implementation repository — its code and repository-local tests.
 
 ### Freeze rule

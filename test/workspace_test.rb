@@ -831,7 +831,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
 
     assert_includes names, "md-specification-files"
     assert_includes names, "af-xlsx-data-sources"
-    assert_includes names, "md-for-llm-book-content"
+    assert_includes names, "af-source-md-data"
     assert_includes names, "af-data-pipeline"
     assert_includes names, "af-cli-scoring-utility"
     assert_includes names, "af-workloads"

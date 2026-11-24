@@ -603,7 +603,7 @@ The machine-readable source of truth for this table is [`repos.yml`](repos.yml).
 | --- | --- | --- |
 | `md-specification-files` | current | Normative AdventureFinder specifications and semantic contracts |
 | `af-xlsx-data-sources` | current | Canonical AMC workbooks plus `PROJECT_STATE.yml` |
-| `md-for-llm-book-content` | current/private | Canonical page-addressable source corpus plus `source_registry.yml` |
+| `af-source-md-data` | current/private | Canonical page-addressable source corpus plus `source_registry.yml` |
 | `af-data-pipeline` | current | Deterministic ingestion handoffs, AMC mutation, review, and finalization |
 | `af-cli-scoring-utility` | current | Source-grounded AFAO assessment/scoring evidence |
 | `af-workloads` | current/core | AdventureFinder scoring workload construction, qualification semantics, and result interpretation |
@@ -625,7 +625,7 @@ flowchart TD
     sources["Owned published sources"] -->|"PDF / born-digital"| pdf["pdf-to-llm-md-converter"]
     sources -->|"Photographed pages"| photos["image-to-pdf-converter"]
     photos --> pdf
-    pdf --> corpus["md-for-llm-book-content / source registry"]
+    pdf --> corpus["af-source-md-data / source registry"]
     corpus --> pipeline["af-data-pipeline: intake, review, AMC promotion"]
     review["David + frontier-model adjudication"] --> pipeline
     pipeline --> catalog["af-xlsx-data-sources: canonical AMC / PROJECT_STATE.yml"]
@@ -670,7 +670,7 @@ roles such as `catalog_head`, `matcher_authorized_baseline`, and
 `production_dependency_floor`. A frozen operation may intentionally retain an older
 exact artifact.
 
-**Source corpus.** `md-for-llm-book-content` is the private canonical Markdown corpus
+**Source corpus.** `af-source-md-data` is the private canonical Markdown corpus
 and source-resolution authority. It contains copyrighted owned source material and must
 remain private.
 

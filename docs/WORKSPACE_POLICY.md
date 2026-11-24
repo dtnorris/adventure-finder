@@ -23,7 +23,7 @@ In particular:
 
 - `af-xlsx-data-sources/PROJECT_STATE.yml` owns moving AMC role state.
 - `md-specification-files` owns accepted semantic specifications.
-- `md-for-llm-book-content` owns the private canonical Markdown corpus and source registry.
+- `af-source-md-data` owns the private canonical Markdown corpus and source registry.
 - Individual implementation repositories own their code and local test suites.
 
 Generated workspace snapshots are reproducibility aids only. They do not advance or

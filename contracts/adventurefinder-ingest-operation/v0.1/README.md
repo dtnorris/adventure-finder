@@ -136,7 +136,7 @@ Locators are root-relative, not identities. Allowed roots are:
 | `front_door` | Detached `AF_ADVENTURE_FINDER_ROOT`; not the component root |
 | `pipeline` | Explicit supported `AF_DATA_PIPELINE_ROOT`, else `AF_PROJECT_ROOT/af-data-pipeline` |
 | `converter` | Explicit supported `AF_PDF_CONVERTER_ROOT` / router `--pdf-converter-root`, else component default |
-| `source` | Explicit router `--source-root`, else `AF_PROJECT_ROOT/md-for-llm-book-content` |
+| `source` | Explicit router `--source-root`, else `AF_PROJECT_ROOT/af-source-md-data` |
 | `catalog` | Explicit router `--catalog-root`, else `AF_PROJECT_ROOT/af-xlsx-data-sources` |
 
 `AF_PROJECT_ROOT` remains the component parent. Preserve supported AFW/scorer

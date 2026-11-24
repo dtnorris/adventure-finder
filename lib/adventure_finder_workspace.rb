@@ -919,7 +919,7 @@ module AdventureFinderWorkspace
     end
 
     def validate_source_registry(warnings)
-      registry = root / "md-for-llm-book-content" / "source_registry.yml"
+      registry = root / "af-source-md-data" / "source_registry.yml"
       out.puts
       out.puts "Canonical source registry:"
       if registry.file?

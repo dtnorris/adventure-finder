@@ -27,7 +27,7 @@ See [the composed operator runbook](docs/operator-runbook.md) for public command
 │  Physical books / legitimate digital purchases                                           │
 │                         │                                                                │
 │                         ▼                                                                │
-│              md-for-llm-book-content                                                     │
+│              af-source-md-data                                                           │
 │              ├─ canonical LLM-edition Markdown                                           │
 │              └─ source_registry.yml                                                      │
 │                         │                                                                │

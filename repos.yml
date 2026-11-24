@@ -21,7 +21,7 @@ repositories:
     visibility: private
     default: true
 
-  - name: md-for-llm-book-content
+  - name: af-source-md-data
     github: dtnorris/af-source-md-data
     role: Private canonical page-addressable Markdown corpus and source registry.
     groups: [core, authority, library]

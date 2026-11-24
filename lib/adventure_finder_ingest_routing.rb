@@ -81,7 +81,7 @@ module AdventureFinderWorkspace
       @pipeline_root = Pathname(
         pipeline_root || ENV["AF_DATA_PIPELINE_ROOT"] || @project_root.join("af-data-pipeline")
       ).expand_path
-      @source_root = Pathname(source_root || @project_root.join("md-for-llm-book-content")).expand_path
+      @source_root = Pathname(source_root || @project_root.join("af-source-md-data")).expand_path
       @catalog_root = Pathname(catalog_root || @project_root.join("af-xlsx-data-sources")).expand_path
       @runner = runner
     end

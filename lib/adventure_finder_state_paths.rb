@@ -30,7 +30,7 @@ module AdventureFinderWorkspace
       {
         "AF_DATA_PIPELINE_ROOT" => "af-data-pipeline",
         "AF_PDF_CONVERTER_ROOT" => "pdf-to-llm-md-converter",
-        "AF_SOURCE_ROOT" => "md-for-llm-book-content",
+        "AF_SOURCE_ROOT" => "af-source-md-data",
         "AF_AFW_ROOT" => "af-workloads", "LOW_REPO_ROOT" => "local-ollama-workers",
         "AF_SCORER_ROOT" => "af-cli-scoring-utility",
         "WLO_REPO_ROOT" => "workload-orchestrator"
