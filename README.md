@@ -1,15 +1,105 @@
 # AdventureFinder
 
-The **workspace/front-door repository** for the AdventureFinder polyrepo project.
+David Norris built AdventureFinder to answer a question he faces when preparing a
+tabletop RPG session. Which adventure from the books I already own fits my group,
+and which pages should I read to prepare it?
 
-AdventureFinder's north star is to build the best possible artifact for David +
-frontier ChatGPT to reason about and explore David's TTRPG adventure library. This
-repository does not own that artifact's canonical truth. It makes the repositories
-that *do* own it easier to understand, clone, inspect, synchronize, test, and reproduce.
+AdventureFinder uses a scored adventure catalog and a registry that points to
+page-marked Markdown from your library. You can filter the catalog to a shortlist
+and open the matching source pages locally. In that workflow, your private catalog,
+books, and extracted passages stay on your machine.
+
+**Sample question.** What can I run with little prep that still gives players
+choices that matter? The public sample has three adventures across two sources.
+Filtering for low GM Preparation Burden and high Consequential Player Agency
+shortlists **ADV-0001 · Adventure One**. The source lookup retrieves **Book One,
+printed pages 10–11**, where Adventure One begins and continues.
+
+[Try the public sample](#try-the-public-sample) ·
+[Use your private library](docs/private-frontier-pack.md) with an accepted catalog,
+source registry, and corresponding library ·
+[Operate the workspace](#quick-start)
+
+## Try the public sample
+
+You’ll need Bash, Git, Ruby 3.2 or later with RubyGems, `unzip`, and HTTPS access
+to GitHub and RubyGems. Run the block from an empty directory you can write to.
+It clones the public repositories at fixed revisions, installs REXML 3.4.4 in
+that directory, and builds a fresh pack from the synthetic workbook, registry,
+and Markdown. The sample runs locally and requires no account, private library,
+or model. [Frontier Pack fixture](https://github.com/dtnorris/af-frontier-pack/tree/e6af8ed5695e50a91c6878a03a20461222f2b0b4/test/fixtures)
+
+```bash
+env -i PATH="$PATH" bash <<'BASH'
+set -euo pipefail
+mkdir home gems
+export HOME="$PWD/home" GEM_HOME="$PWD/gems" GEM_PATH="$PWD/gems"
+export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
+
+checkout() {
+  local repo=$1 revision=$2
+  git -c credential.helper= clone --no-checkout "https://github.com/dtnorris/$repo.git" "$repo"
+  git -C "$repo" -c advice.detachedHead=false checkout --detach "$revision"
+  test "$(git -C "$repo" rev-parse HEAD)" = "$revision"
+}
+checkout af-frontier-pack e6af8ed5695e50a91c6878a03a20461222f2b0b4
+checkout af-source-md a44019961e822b19a727e3562c2ecda4cfe0a7bd
+checkout af-specification-md 394a44c2c2052ce2eeb6d28cd7647ad8a50acfcf
+ruby -S gem install rexml --version 3.4.4 --no-document --clear-sources --source https://rubygems.org
+
+export AF_SOURCE_MD_ROOT="$PWD/af-source-md"
+export AF_FRONTIER_OUTPUT="$PWD/pack"
+frontier=./af-frontier-pack/bin/af-frontier
+fixture=af-frontier-pack/test/fixtures
+"$frontier" build --amc "$fixture/5e_Adventure_Master_Catalog_9.9.9.xlsx" \
+  --source-registry "$fixture/source_registry.yml" --corpus-root "$fixture/corpus" \
+  --public-afao af-specification-md/AdventureFinder_Analysis_Ontology_AFAO_v1.6.1.md
+"$frontier" doctor
+
+"$frontier" select --where 'GMPB<=2' --where 'CPA>=4' | tee shortlist.tsv
+"$frontier" source ADV-0001 | tee source.json
+"$frontier" source ADV-0001 --emit | tee source.md
+
+"$frontier" select --where 'GMPB<=2' --where 'CPA>=5' | tee tighter-shortlist.tsv
+BASH
+```
+
+The build reports `Built 3 adventures across 2 sources` and `doctor` reports
+that the pack passed its integrity checks. `select` applies both score thresholds
+and writes one row to `shortlist.tsv`, `ADV-0001` followed by `Adventure One`.
+`source.json` gives the source and range. In `source.md`, the printed-page
+markers are 10 and 11 and the text reads “Adventure One begins.” and “Adventure
+One continues.” Compare those markers to the fixture. The page 9 prelude and page
+12 text fall outside the excerpt. Raising the agency threshold from 4 to 5 gives
+`Matched 0 adventures.` and an empty `tighter-shortlist.tsv`.
+[Book One source fixture](https://github.com/dtnorris/af-frontier-pack/blob/e6af8ed5695e50a91c6878a03a20461222f2b0b4/test/fixtures/corpus/Book_One_LLM_Edition.md)
+
+The CLI filters recorded scores and retrieves the matching pages. You can ask
+ChatGPT to compare alternatives using public sample material or notes you have
+permission to share. Keep private source material local, check the trade-offs
+against the pages, and make the final choice for your group.
+
+## From owned books to a shortlist
+
+1. Convert owned PDFs to page-addressable Markdown and register the source files
+   so a catalog entry can point back to its edition and pages.
+   [pdf-to-llm-md-converter](https://github.com/dtnorris/pdf-to-llm-md-converter) ·
+   [af-source-md](https://github.com/dtnorris/af-source-md)
+2. Review adventure boundaries and score the catalog entries using dimensions
+   defined by the AdventureFinder Analysis Ontology. The scorer proposes
+   assessments, and the pipeline handles review and catalog adoption.
+   [af-pipeline](https://github.com/dtnorris/af-pipeline) ·
+   [af-xlsx-files](https://github.com/dtnorris/af-xlsx-files) ·
+   [af-specification-md](https://github.com/dtnorris/af-specification-md) ·
+   [af-scorer](https://github.com/dtnorris/af-scorer)
+3. Build a disposable pack from the scored catalog, registry, and ontology.
+   Filter it for your session and pull up the relevant pages to compare the
+   candidates. [af-frontier-pack](https://github.com/dtnorris/af-frontier-pack)
 
 ## What this repository owns
 
-Only cross-repository concerns:
+This repository coordinates the component checkouts and maintains the
+cross-repository reference.
 
 - the map of AdventureFinder repositories and their responsibilities;
 - safe multi-repo bootstrap/status/sync/test commands;
@@ -35,18 +125,20 @@ This is historical context only. Live catalog roles remain authoritative in
 To build a private Frontier pack from an existing accepted catalog and a selected
 source library, follow [Build and use a private Frontier pack](docs/private-frontier-pack.md).
 
-For production operation, start with the
+For maintainers with access to the private repositories in [`repos.yml`](repos.yml),
+the commands below set up the full workspace. For production operation, use the
 [composed operator runbook](docs/operator-runbook.md). It resolves short handles
 and calls component-owned public interfaces for execution, capacity and review.
+A map of the components and their responsibilities is under [Architecture](#architecture).
 
-The front door stays outside the non-Git component container. For a new installation:
+Run the setup commands from the parent directory that will hold both the front
+door checkout and the separate non-Git component container.
 
 ```bash
-export AF_PROJECT_ROOT=/Users/davidnorris/code/adventure-finder-components
-export AF_ADVENTURE_FINDER_ROOT=/Users/davidnorris/code/adventure-finder
-cd /Users/davidnorris/code
 git clone git@github.com:dtnorris/adventure-finder.git
-cd "$AF_ADVENTURE_FINDER_ROOT"
+export AF_PROJECT_ROOT="$PWD/adventure-finder-components"
+cd adventure-finder
+export AF_ADVENTURE_FINDER_ROOT="$PWD"
 
 bin/af-doctor
 bin/af-bootstrap
