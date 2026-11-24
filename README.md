@@ -768,6 +768,18 @@ per-file line and branch deltas, then run `rake test:coverage:baseline` explicit
 review the `.simplecov_baseline.yml` diff. Ordinary test commands never rewrite the
 baseline. Keep the baseline change in the same review as its justification.
 
+Routine Buildkite CI runs the coverage suite, including the historical front-door
+case. From the repository root, run both offline public workload journeys on demand
+with the same pinned CI setup:
+
+```bash
+AF_CI_PUBLIC_WORKLOAD=1 bash .buildkite/test.sh
+```
+
+The script tests a fresh checkout of the current Git `HEAD`. In public workload
+mode it runs the front-door and staged-configuration journeys and writes their logs
+and evidence under `.ci-results/`.
+
 `rake test:operator_acceptance` remains a separate cross-repository command.
 The GitHub workflow tests only this repository's own orchestration code and manifest.
 It does not attempt to clone private sibling repositories in CI.
