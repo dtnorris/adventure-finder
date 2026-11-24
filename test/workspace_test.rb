@@ -983,11 +983,15 @@ class AdventureFinderWorkspaceTest < Minitest::Test
       assert_equal [["git", "clone", "https://github.com/dtnorris/af-workloads.git", path]], commands
       FileUtils.mkdir_p(path)
       assert system("git", "init", "--quiet", path)
-      assert system("git", "-C", path, "remote", "add", "origin", "git@github.com:dtnorris/af-workloads-data.git")
+      donor = "git@github.com:dtnorris/af-workloads-data.git"
+      rewritten_donor = "https://github.com/dtnorris/af-workloads-data.git"
+      assert system("git", "-C", path, "remote", "add", "origin", donor)
+      assert system("git", "-C", path, "config", "--local", "url.#{rewritten_donor}.insteadOf", donor)
+      assert_equal rewritten_donor, runner.capture("git", "remote", "get-url", "origin", chdir: path).stdout.strip
       refute workspace.bootstrap(repos: [repo], setup: true)
       assert_includes error.string, "expected dtnorris/af-workloads"
-      assert_equal "git@github.com:dtnorris/af-workloads-data.git",
-                   runner.capture("git", "remote", "get-url", "origin", chdir: path).stdout.strip
+      assert_equal donor, runner.capture("git", "config", "--local", "--get-all", "remote.origin.url",
+                                        chdir: path).stdout.strip
     end
   end
 

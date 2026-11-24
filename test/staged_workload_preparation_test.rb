@@ -256,6 +256,23 @@ class StagedWorkloadPreparationTest < Minitest::Test
     assert_equal calls, runner.calls.length
   end
 
+  # Historical results keep the original combined checkout as their plan owner.
+  def test_legacy_restart_refuses_a_different_afw_checkout_before_validation
+    ids = ["ADV-0003"]
+    runner = Runner.new(authority: authority_projection(ids), afw_root: @afw, ids:)
+    first = prepare(service(runner))
+    other_afw = directory("components/other-afw")
+    write(File.join(other_afw, "lib/af_workloads.rb"), "# Fixture library marker\n")
+    calls = runner.calls.dup
+
+    error = assert_raises(AdventureFinderWorkspace::StagedWorkloadPreparation::Failure) do
+      prepare(service(runner, owner: nil, afw_root: other_afw))
+    end
+    assert_equal "PREPARATION_CONFLICT", error.code
+    assert_includes error.message, "historical preparation requires the original AFW checkout: #{first.dig('plan', 'path')}"
+    assert_equal calls, runner.calls
+  end
+
   def test_successful_scoring_output_does_not_change_frozen_preparation_on_resume
     ids = ["ADV-0003"]
     runner = Runner.new(authority: authority_projection(ids), afw_root: @afw, ids:)
@@ -395,10 +412,10 @@ class StagedWorkloadPreparationTest < Minitest::Test
 
   private
 
-  def service(runner, owner: Owner.new(runner:), env: {})
+  def service(runner, owner: Owner.new(runner:), env: {}, afw_root: @afw)
     AdventureFinderWorkspace::StagedWorkloadPreparation.new(
       front_door_root: @front, project_root: @components, pipeline_root: @pipeline,
-      afw_root: @afw, scorer_root: @scorer, source_root: @source,
+      afw_root:, scorer_root: @scorer, source_root: @source,
       catalog_root: @catalog_root, operation_store: @operations, intent_store: @intents,
       authorization_store: @authorizations, routing: @routing, runner:, afw_coordinator: owner, env:
     )

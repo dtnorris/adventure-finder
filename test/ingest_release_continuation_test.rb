@@ -165,7 +165,8 @@ class PrivateStagedScoringAuthoritySeamTest < Minitest::Test
         "authority-inputs.json" => {"schema_version" => "af-staged-scoring-evidence-locators/v0.1", "evidence" => @evidence.transform_keys(&:to_s)},
         "authority-store.json" => {"operation_id" => ID, "store_root" => store}
       }
-      action = service.send(:persist_preparation_inputs!, ID, documents)
+      workload_id = JSON.parse(File.binread(@evidence.fetch(:intent_path))).fetch("workload_id")
+      action = service.send(:persist_preparation_inputs!, ID, documents, workload_id)
       assert_equal "issue", action
       issued = service.send(:issue_authority!, ID, @state, action:)
       assert_equal ID, issued.dig("authority", "operation", "operation_id")
@@ -179,10 +180,26 @@ class PrivateStagedScoringAuthoritySeamTest < Minitest::Test
       authority_path = File.join(store, ID, "authority.json")
       publication_path = File.join(store, ID, "publication.json")
       retained = authority_inventory(store)
-      replay = service.send(:persist_preparation_inputs!, ID, documents)
+      binding_path = directory.join("authority-store.json")
+      binding_bytes = File.binread(binding_path)
+      File.unlink(binding_path)
+      if environment.empty?
+        assert_equal store, continuation.send(:authority_store, directory, ID)
+      else
+        observed_calls = calls.dup
+        error = assert_raises(AdventureFinderWorkspace::StagedWorkloadPreparation::Failure) do
+          service.send(:persist_preparation_inputs!, ID, documents, workload_id)
+        end
+        assert_equal "PREPARATION_CONFLICT", error.code
+        assert_includes error.message, "historical authority has no private store binding"
+        assert_equal observed_calls, calls
+        File.binwrite(binding_path, binding_bytes)
+      end
+      replay = service.send(:persist_preparation_inputs!, ID, documents, workload_id)
       assert_equal "validate", replay
       assert_equal issued, service.send(:issue_authority!, ID, @state, action: replay)
       assert_equal retained, authority_inventory(store)
+      refute_path_exists binding_path if environment.empty?
       damaged_paths = environment.empty? ? [authority_path] :
         [authority_path, publication_path, @evidence.fetch(:approval_path), @state]
       damaged_paths.each do |path|
