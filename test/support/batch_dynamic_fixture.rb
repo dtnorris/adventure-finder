@@ -38,7 +38,9 @@ class BatchDynamicFixture
     @children_mutex, @watchdogs = Mutex.new, {}
     @exitstatuses = {}
     @publication_start = Time.now.utc - 1000
-    afw = ENV.fetch("AF_AFW_SOURCE_ROOT", File.join(File.dirname(WLO_ROOT), "af-workloads"))
+    afw = ENV.fetch("AF_TEST_HISTORICAL_AFW_ROOT") do
+      ENV.fetch("AF_AFW_SOURCE_ROOT", File.join(File.dirname(WLO_ROOT), "af-workloads"))
+    end
     production = File.binread(File.join(afw, PLAN_RELATIVE))
     raise "production plan drift" unless Digest::SHA256.hexdigest(production) == PRODUCTION_SHA && production.bytesize == 209_279
     frozen = JSON.parse(production)

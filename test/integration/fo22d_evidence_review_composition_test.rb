@@ -33,7 +33,7 @@ class Fo22dEvidenceReviewCompositionTest < Minitest::Test
     @source_workspace = ENV["AF_FO22_WORKSPACE_ROOT"]
     skip "set AF_FO22_WORKSPACE_ROOT to the sibling-repository workspace" if @source_workspace.to_s.empty?
 
-    @afw_source = File.join(@source_workspace, "af-workloads")
+    @afw_source = ENV.fetch("AF_TEST_HISTORICAL_AFW_ROOT", File.join(@source_workspace, "af-workloads"))
     @pipeline_source = File.join(@source_workspace, "af-data-pipeline")
     @adventure_finder_source = File.expand_path("../..", __dir__)
     require_source!(File.join(@afw_source, "bin", "afw-bind-scoring-evidence"))

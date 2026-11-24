@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "adventure_finder_state_paths"
+require_relative "adventure_finder_workload_paths"
 
 require "digest"
 require "fileutils"
@@ -47,7 +48,9 @@ module AdventureFinderWorkspace
         preparation["qualified_cases"].is_a?(Integer) && preparation["qualified_cases"].positive?
       workload_id = preparation.fetch("workload_id")
       store_root = authority_store(preparation_dir, operation_id)
-      workload = @afw.join("workloads", workload_id)
+      roots = WorkloadPaths.new(code: @afw.to_s, data: @env["AF_AFW_DATA_ROOT"], explicit_code: @env.key?("AF_AFW_ROOT"))
+      roots.verify_binding!(preparation_dir.join("afw-roots.json"))
+      workload = roots.store.join("workloads", workload_id)
       plan = workload.join("execution-plan.json")
       fail_with("STALE_WORKLOAD_BINDING", "frozen execution plan changed") unless
         plan.to_s == preparation.dig("plan", "path") &&
@@ -59,17 +62,17 @@ module AdventureFinderWorkspace
         report["plan_id"] == workload_id && report["plan_sha256"] == preparation.dig("plan", "sha256") &&
         report["status"] == "completed" && report["executor_active"] == false
 
-      binding = parse_json(invoke(@afw, "afw-bind-scoring-evidence", workload_id, output))
+      binding = parse_json(invoke(roots.code, "afw-bind-scoring-evidence", *roots.data_arguments, workload_id, output))
       fail_with("INCOMPLETE_AFW_EVIDENCE", "AFW has not bound the complete workload denominator") unless
         binding["fully_evidenced"] == true
-      publication = parse_json(invoke(@afw, "afw-workload-evidence", "publish", workload_id, output))
-      manifest = @afw.join(publication.fetch("manifest_path")).cleanpath
+      publication = parse_json(invoke(roots.code, "afw-workload-evidence", *roots.data_arguments, "publish", workload_id, output))
+      manifest = roots.store.join(publication.fetch("manifest_path")).cleanpath
       fail_with("INVALID_AFW_MANIFEST", "AFW returned an unexpected evidence manifest") unless
-        manifest.dirname == @afw.join("output", "workloads", workload_id, "evidence", "manifests") &&
+        manifest.dirname == roots.store.join("output", "workloads", workload_id, "evidence", "manifests") &&
         publication["evidence_complete"] == true &&
         publication["intended_cases"] == preparation.fetch("qualified_cases") &&
         publication["receipt_count"] == preparation.fetch("qualified_cases")
-      validated = parse_json(invoke(@afw, "afw-workload-evidence", "validate", manifest))
+      validated = parse_json(invoke(roots.code, "afw-workload-evidence", *roots.data_arguments, "validate", manifest))
       fail_with("INVALID_AFW_MANIFEST", "AFW validation changed the evidence identity or denominator") unless
         validated["manifest_id"] == publication["manifest_id"] &&
         validated["evidence_complete"] == true &&
@@ -88,7 +91,7 @@ module AdventureFinderWorkspace
         fail_with("UNSAFE_RELEASE_PATH", "release output is symlinked: #{path}") if path.symlink?
       end
       invoke(@pipeline, "af-data", "prepare-workload-review", manifest,
-             "--afw-root", @afw, "--review-dir", review, "--audit-dir", audit)
+             "--afw-root", roots.store, "--review-dir", review, "--audit-dir", audit)
       FileUtils.mkdir_p(coordination)
       release_inputs = coordination.join("release-inputs.json")
       authority_inputs = read_json(preparation_dir.join("authority-inputs.json"))
@@ -96,23 +99,23 @@ module AdventureFinderWorkspace
         "evidence" => authority_inputs.fetch("evidence"),
         "store_root" => store_root,
         "current_project_state_path" => @catalog.join("PROJECT_STATE.yml").to_s,
-        "workload_binding_path" => @afw.join("workloads", ".selections", workload_id, "frozen-workload.json").to_s,
-        "selection_path" => @afw.join("workloads", ".selections", workload_id, "selection.json").to_s,
-        "selection_afw_root" => @afw.to_s,
-        "selection_project_root" => @afw.to_s,
+        "workload_binding_path" => roots.store.join("workloads", ".selections", workload_id, "frozen-workload.json").to_s,
+        "selection_path" => roots.store.join("workloads", ".selections", workload_id, "selection.json").to_s,
+        "selection_afw_root" => roots.code.to_s,
+        "selection_project_root" => roots.store.to_s,
         "selection_scorer_root" => @scorer.to_s,
         "workload_paths" => {
           "plan" => plan.to_s,
           "snapshot" => workload.join("snapshot.yml").to_s,
           "index" => workload.join("case_index.csv").to_s,
-          "generated" => @afw.join("build", "workloads", workload_id).to_s
+          "generated" => roots.store.join("build", "workloads", workload_id).to_s
         }
       }
       staged["selection_scorer_config"] = File.expand_path(@env.fetch("AF_SCORER_CONFIG")) if @env["AF_SCORER_CONFIG"]
       input = {
         "schema_version" => "af-standing-bulk-score-release-inputs/v0.2", "mode" => "production",
         "staged_scoring" => staged,
-        "workload_review" => {"manifest_path" => manifest.to_s, "afw_root" => @afw.to_s,
+        "workload_review" => {"manifest_path" => manifest.to_s, "afw_root" => roots.store.to_s,
                               "review_dir" => review.to_s, "audit_dir" => audit.to_s},
         "standing_policy_path" => @pipeline.join("config", "standing_bulk_score_ingestion_policy_v0.1.json").to_s,
         "owner_selection_path" => @pipeline.join("config", "standing_bulk_score_owner_selection_v0.1.json").to_s,
@@ -145,6 +148,10 @@ module AdventureFinderWorkspace
       {inputs_path: package_inputs.to_s, package_path: package.to_s}
     rescue KeyError, JSON::ParserError, Errno::ENOENT, TypeError => e
       fail_with("INVALID_RELEASE_INPUT", e.message)
+    rescue Failure
+      raise
+    rescue Error => e
+      fail_with("STALE_WORKLOAD_BINDING", e.message)
     end
 
     private

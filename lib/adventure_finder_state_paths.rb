@@ -35,7 +35,7 @@ module AdventureFinderWorkspace
         "AF_SCORER_ROOT" => "af-cli-scoring-utility",
         "WLO_REPO_ROOT" => "workload-orchestrator"
       }.each { |selector, name| roles << env.fetch(selector, project.join(name).to_s) }
-      %w[AF_DATA_PIPELINE_DATA_ROOT LOW_STATE_ROOT].each do |selector|
+      %w[AF_DATA_PIPELINE_DATA_ROOT AF_AFW_DATA_ROOT LOW_STATE_ROOT].each do |selector|
         roles << env.fetch(selector) if env.key?(selector)
       end
       roles << Pathname(Dir.home).join(".local/state/local-ollama-workers") unless env.key?("LOW_STATE_ROOT")

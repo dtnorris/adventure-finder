@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "adventure_finder_state_paths"
+require_relative "adventure_finder_workload_paths"
 
 require "csv"
 require "digest"
@@ -28,9 +29,13 @@ module AdventureFinderWorkspace
 
     class Failure < Error; end
 
+    # Bind producer code, optional split storage and pipeline authority inputs.
+    # Invalid modes raise ArgumentError. Injected contracts support unit tests.
     def initialize(afw_root:, scorer_root:, pipeline_root:, authority_inputs_path:,
-                   authority_store:, current_project_state_path:, scorer_config: nil, mode: "production", contracts: nil)
+                   authority_store:, current_project_state_path:, scorer_config: nil, mode: "production", contracts: nil,
+                   afw_data_root: nil)
       @afw_root = Pathname(afw_root).expand_path
+      @afw_data_root = afw_data_root && Pathname(afw_data_root).expand_path
       @scorer_root = Pathname(scorer_root).expand_path
       @scorer_config = scorer_config && Pathname(scorer_config).expand_path
       @pipeline_root = Pathname(pipeline_root).expand_path
@@ -48,7 +53,8 @@ module AdventureFinderWorkspace
       authority = staged.authority!(catalog_path: catalog_path.to_s)
       raise Failure, "pipeline returned zero allocation after issuing nonzero authority" unless authority
 
-      selector = contract(:selection).new(root: @afw_root.to_s, scorer_repo: @scorer_root.to_s, **scorer_config_options)
+      selector = contract(:selection).new(root: @afw_root.to_s, scorer_repo: @scorer_root.to_s,
+                                           **data_options, **scorer_config_options)
       selection, selection_path = selector.select!(authority:, catalog_path: catalog_path.to_s)
       validate_selection_identity!(selection, operation_id, workload_id, authority)
       result = {"status" => selection.fetch("status"), "selection" => selection,
@@ -84,7 +90,7 @@ module AdventureFinderWorkspace
       end
       result.merge(
         "status" => "PREPARED", "inspection" => final,
-        "manifest" => @afw_root.join("workloads", workload_id).to_s
+        "manifest" => (@afw_data_root || @afw_root).join("workloads", workload_id).to_s
       )
     rescue Failure
       raise
@@ -122,9 +128,14 @@ module AdventureFinderWorkspace
       @scorer_config ? {scorer_config: @scorer_config.to_s} : {}
     end
 
+    # Returns the split owner argument when the selected producer supports it.
+    def data_options
+      @afw_data_root ? {data_root: @afw_data_root.to_s} : {}
+    end
+
     def staged_input(operation_id)
       contract(:staged_input).new(
-        root: @afw_root.to_s,
+        root: (@afw_data_root || @afw_root).to_s,
         config: {
           pipeline_root: @pipeline_root.to_s,
           inputs_path: @authority_inputs_path.to_s,
@@ -139,12 +150,12 @@ module AdventureFinderWorkspace
       validator = contract(:validator).new(
         root: @afw_root.to_s, workload_id: selection.fetch("workload_id"),
         catalog_path: catalog_path.to_s, ids: selection.fetch("selected_ids"),
-        scorer_repo: @scorer_root.to_s, **scorer_config_options,
+        scorer_repo: @scorer_root.to_s, **data_options, **scorer_config_options,
         required_context_length: StagedWorkloadPreparation::REQUIRED_CONTEXT_LENGTH,
         require_fully_gpu_resident: true, staged_scoring: staged
       )
       contract(:inspector).new(
-        root: @afw_root.to_s, workload_id: selection.fetch("workload_id"), validator:
+        root: (@afw_data_root || @afw_root).to_s, workload_id: selection.fetch("workload_id"), validator:
       ).inspect
     end
 
@@ -152,7 +163,7 @@ module AdventureFinderWorkspace
       contract(:compiler).new(
         root: @afw_root.to_s, workload_id: selection.fetch("workload_id"),
         catalog_path: catalog_path.to_s, ids: selection.fetch("selected_ids"),
-        scorer_repo: @scorer_root.to_s, **scorer_config_options,
+        scorer_repo: @scorer_root.to_s, **data_options, **scorer_config_options,
         required_context_length: StagedWorkloadPreparation::REQUIRED_CONTEXT_LENGTH,
         require_fully_gpu_resident: true, staged_scoring: staged, out: StringIO.new
       ).build
@@ -228,7 +239,7 @@ module AdventureFinderWorkspace
       @front_door_root = Pathname(front_door_root).expand_path
       @project_root = Pathname(project_root).expand_path
       @pipeline_root = Pathname(pipeline_root).expand_path
-      @afw_root = Pathname(afw_root).expand_path
+      @afw_root = afw_root
       @scorer_root = Pathname(scorer_root).expand_path
       @source_root = Pathname(source_root).expand_path
       @catalog_root = Pathname(catalog_root).expand_path
@@ -247,13 +258,14 @@ module AdventureFinderWorkspace
       operation = operation_store.validate!(operation_id)
       require_editorial_lineage!(operation)
       intent = intent_store.intent!(operation_id)
+      select_workload_paths! unless @afw_coordinator
       paths = evidence_paths(
         operation_id:, freeze_path:, approval_path:, bundle_dir:,
         historical_project_state_path:,
         current_project_state_path: current_project_state_path || catalog_root.join("PROJECT_STATE.yml")
       )
       documents = preparation_documents(operation_id, paths, intent)
-      action = persist_preparation_inputs!(operation_id, documents)
+      action = persist_preparation_inputs!(operation_id, documents, intent.fetch("workload_id"))
       projection = issue_authority!(operation_id, paths.fetch(:current_project_state_path), action:)
       if projection["status"] == "NO_SUCCESSOR_NEEDED"
         result = zero_result(operation_id, intent, projection)
@@ -288,6 +300,30 @@ module AdventureFinderWorkspace
     end
 
     private
+
+    # Admit the configured producer and output stores before persisting inputs.
+    # Invalid splits raise the front door's AFW refusal.
+    def select_workload_paths!
+      @workload_paths = WorkloadPaths.new(code: afw_root.to_s, data: @env["AF_AFW_DATA_ROOT"],
+                                         explicit_code: @env.key?("AF_AFW_ROOT"))
+      @afw_root = @workload_paths.code
+      library = afw_root.join("lib", "af_workloads.rb")
+      raise Error, "AFW public library is unavailable: #{library}" unless library.file?
+      return unless @workload_paths.data
+
+      @workload_paths.check_scorer!(@env["AF_SCORER_ROOT"], @scorer_config)
+      owners = [front_door_root, pipeline_root, source_root, catalog_root, scorer_root]
+      owners << Pathname(@env.fetch("AF_DATA_PIPELINE_DATA_ROOT")) if @env.key?("AF_DATA_PIPELINE_DATA_ROOT")
+      owners.each do |owner|
+        path = owner.realpath
+        data = @workload_paths.data
+        if PipelineDataPaths.contained?(data, path) || PipelineDataPaths.contained?(path, data)
+          raise Error, "AF_AFW_DATA_ROOT overlaps a selected owner root: #{path}"
+        end
+      end
+    rescue Error, SystemCallError => error
+      fail_with("AFW_PREPARATION_REFUSED", error.message)
+    end
 
     def evidence_paths(operation_id:, freeze_path:, approval_path:, bundle_dir:,
                        historical_project_state_path:, current_project_state_path:)
@@ -337,18 +373,32 @@ module AdventureFinderWorkspace
        "successor-authorization.json" => successor,
        "authority-inputs.json" => envelope,
        "authority-store.json" => {"operation_id" => operation_id, "store_root" => authority_root.to_s},
+       "afw-roots.json" => @workload_paths&.binding,
        "intent_id" => intent.fetch("intent_id")}
     end
 
     # Retains exact preparation inputs and the selected owner store. Returns
     # "issue" only for a new preparation, otherwise "validate"; missing or
     # changed retained bindings raise Failure rather than regenerating authority.
-    def persist_preparation_inputs!(operation_id, documents)
+    def persist_preparation_inputs!(operation_id, documents, workload_id)
       destination = preparation_dir(operation_id)
       FileUtils.mkdir_p(preparation_root)
       File.open(preparation_lock(operation_id), File::RDWR | File::CREAT, 0o600) do |lock|
         lock.flock(File::LOCK_EX)
         if destination.directory?
+          begin
+            @workload_paths&.verify_binding!(destination.join("afw-roots.json"))
+            result_path = destination.join("result.json")
+            if @workload_paths && !@workload_paths.data && result_path.file?
+              recorded_plan = read_json(result_path).dig("plan", "path")
+              expected_plan = @workload_paths.store.join("workloads", workload_id, "execution-plan.json")
+              if recorded_plan && File.expand_path(recorded_plan) != expected_plan.to_s
+                raise Error, "historical preparation requires the original AFW checkout: #{recorded_plan}"
+              end
+            end
+          rescue Error => error
+            fail_with("PREPARATION_CONFLICT", error.message)
+          end
           documents.slice("operation-input.json", "successor-authorization.json", "authority-inputs.json").each do |name, document|
             path = destination.join(name)
             fail_with("PREPARATION_CONFLICT", "preparation input is missing: #{path}") unless path.file?
@@ -370,6 +420,7 @@ module AdventureFinderWorkspace
           documents.slice("operation-input.json", "successor-authorization.json", "authority-inputs.json", "authority-store.json").each do |name, document|
             write_json(stage.join(name), document)
           end
+          write_json(stage.join("afw-roots.json"), documents.fetch("afw-roots.json")) if documents["afw-roots.json"]
           File.rename(stage, destination)
           "issue"
         ensure
@@ -429,7 +480,7 @@ module AdventureFinderWorkspace
 
     def default_afw_coordinator(operation_id, paths)
       AFWStagedWorkloadCoordinator.new(
-        afw_root:, scorer_root:, pipeline_root:, scorer_config: @scorer_config,
+        afw_root:, afw_data_root: @workload_paths&.data, scorer_root:, pipeline_root:, scorer_config: @scorer_config,
         authority_inputs_path: preparation_dir(operation_id).join("authority-inputs.json"),
         authority_store: authority_root,
         current_project_state_path: paths.fetch(:current_project_state_path)
@@ -514,7 +565,8 @@ module AdventureFinderWorkspace
 
     def inspection_command(operation_id, intent, selection, authority, current_state_path)
       argv = [
-        afw_root.join("bin", "afw-inspect-workload"), "--root", afw_root,
+        Pathname(afw_root).join("bin", "afw-inspect-workload"),
+        *(@workload_paths&.data ? @workload_paths.data_arguments : ["--root", afw_root]),
         "--workload", intent.fetch("workload_id"),
         "--catalog", catalog_root.join(authority.dig("staged_amc", "filename")),
         "--ids", selection.fetch("selected_ids").join(","),
@@ -525,7 +577,7 @@ module AdventureFinderWorkspace
         "--staged-authority-store", authority_root,
         "--staged-project-state", current_state_path,
         "--staged-operation", operation_id,
-        "--staged-selection", afw_root.join("workloads", ".selections", intent.fetch("workload_id"), "selection.json"),
+        "--staged-selection", (@workload_paths&.store || Pathname(afw_root)).join("workloads", ".selections", intent.fetch("workload_id"), "selection.json"),
         "--staged-pipeline-root", pipeline_root
       ]
       argv += ["--scorer-config", @scorer_config] if @scorer_config
@@ -604,7 +656,7 @@ module AdventureFinderWorkspace
     end
 
     def preparation_root
-      StatePaths.root(front_door_root:, project_root:, owner_roots: [source_root, catalog_root, afw_root, pipeline_root, scorer_root], env: @env).join("output", "staged-workload-preparations", "v0.1")
+      StatePaths.root(front_door_root:, project_root:, owner_roots: [source_root, catalog_root, afw_root, pipeline_root, scorer_root].compact, env: @env).join("output", "staged-workload-preparations", "v0.1")
     end
 
     def preparation_dir(operation_id)

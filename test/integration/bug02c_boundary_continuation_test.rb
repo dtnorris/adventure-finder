@@ -122,6 +122,7 @@ class Bug02cBoundaryContinuationTest < Minitest::Test
       catalog_root: @fixture.catalog, operation_id:
     ).to_s
     assert_equal original_state, File.binread(historical)
+    verify_public_workload(operation_id, bundle, continuation, historical) if ENV["AF_TEST_PUBLIC_AFW_ROOT"]
     state = File.join(@fixture.catalog, "PROJECT_STATE.yml")
     File.binwrite(state, original_state + "\n")
     options = {
@@ -142,5 +143,111 @@ class Bug02cBoundaryContinuationTest < Minitest::Test
     assert_includes error.message, "existing staged-successor receipt conflicts"
     assert_equal original_state + "\n", File.binread(historical)
     assert_equal base_digest, Digest::SHA256.file(@fixture.base).hexdigest
+  end
+
+  private
+
+  # Continue from the real editorial approval into preparation and fresh-process
+  # EE replay. The existing converter fixture is the external boundary.
+  def verify_public_workload(operation_id, bundle, continuation, historical)
+    afw = File.realpath(ENV.fetch("AF_TEST_PUBLIC_AFW_ROOT"))
+    scorer = File.realpath(ENV.fetch("AF_SCORER_ROOT"))
+    specs = File.realpath(ENV.fetch("AF_PUBLIC_SPEC_ROOT"))
+    data = File.join(@fixture.root, "workload-data")
+    decoy = File.join(@fixture.root, "wrong-workload-data")
+    FileUtils.mkdir(data)
+    FileUtils.mkdir(decoy)
+    File.symlink(afw, File.join(@fixture.components, "af-workloads"))
+    config = File.join(@fixture.root, "scorer-selection.yml")
+    config_bytes = YAML.dump("paths" => {"xlsx_root" => @fixture.catalog,
+      "source_root" => @fixture.source, "specification_root" => specs,
+      "output_root" => File.join(data, "output")})
+    File.binwrite(config, config_bytes)
+    env = {"AF_AFW_ROOT" => afw, "AF_AFW_DATA_ROOT" => data, "AF_SCORER_ROOT" => scorer,
+           "AF_SCORER_CONFIG" => config}
+    real_git = ENV.fetch("PATH").split(File::PATH_SEPARATOR).map { |dir| File.join(dir, "git") }
+      .find { |path| File.executable?(path) }
+    git_guard = File.join(@fixture.root, "sentinel-bin", "git")
+    sentinel = File.binread(git_guard)
+    File.binwrite(git_guard, sentinel.sub("require \"json\"\n", <<~RUBY))
+      require "json"
+      if ARGV.take(2) == ["-C", #{scorer.inspect}] &&
+         (ARGV.drop(2) == ["rev-parse", "HEAD"] ||
+          [%w[diff --quiet --], %w[diff --cached --quiet --]].any? { |prefix| ARGV.drop(2).take(prefix.length) == prefix })
+        exec({"GIT_OPTIONAL_LOCKS" => "0"}, #{real_git.inspect}, *ARGV)
+      end
+    RUBY
+    approval = File.join(continuation, "approval.json")
+    approval_bytes = File.binread(approval)
+    command = ["prepare-workload", operation_id, "--freeze", File.join(continuation, "boundary-freeze.yml"),
+               "--approval", approval, "--editorial-bundle", bundle, "--historical-project-state", historical]
+    preparation = File.join(@fixture.front, "output/staged-workload-preparations/v0.1", operation_id)
+    records = []
+    [{ "AF_AFW_ROOT" => nil }, { "AF_AFW_ROOT" => @fixture.pipeline },
+     { "AF_AFW_DATA_ROOT" => nil }, { "AF_AFW_DATA_ROOT" => decoy }].each do |override|
+      _, error, status = @fixture.run_catalog(env.merge(override), *command)
+      refute status.success?
+      assert_includes error, "AFW_PREPARATION_REFUSED"
+      refute File.exist?(preparation)
+      assert Dir.empty?(data)
+      assert Dir.empty?(decoy)
+      records << {"overrides" => override, "status" => status.exitstatus, "stderr" => error}
+    end
+
+    output, error, status = @fixture.run_catalog(env, *command)
+    assert status.success?, "#{output}\n#{error}"
+    result = JSON.parse(File.binread(File.join(preparation, "result.json")))
+    assert_equal "PREPARED", result.fetch("status"), result.inspect
+    assert_equal "reuse", result.dig("inspection", "action")
+    plan_path = result.fetch("plan").fetch("path")
+    assert plan_path.start_with?(data + "/")
+    plan = JSON.parse(File.binread(plan_path))
+    job = plan.fetch("jobs").find { |entry| entry.fetch("job_id").end_with?("-ee") }
+    argv = job.fetch("argv")
+    assert_equal ["bin/afw-score-job", "build/workloads/#{result.fetch('workload_id')}/cases/#{job.fetch('job_id')}.yml"], argv
+    case_path = argv.fetch(1)
+    replay = [File.join(afw, argv.fetch(0)), "--data-root", data, "--verify-only", case_path]
+    files = workload_hashes(data)
+
+    _, error, status = @fixture.run_catalog(env, *command)
+    assert status.success?, error
+    assert_equal files, workload_hashes(data)
+    wrong_config = File.join(@fixture.root, "wrong-scorer-selection.yml")
+    File.binwrite(wrong_config, config_bytes.sub(File.join(data, "output"), File.join(decoy, "output")))
+    _, error, status = @fixture.run_catalog(env.merge("AF_AFW_DATA_ROOT" => decoy, "AF_SCORER_CONFIG" => wrong_config), *command)
+    refute status.success?
+    assert_includes error, "PREPARATION_CONFLICT: AFW code or data binding changed"
+    assert Dir.empty?(decoy)
+
+    guarded_path = [File.dirname(git_guard), ENV.fetch("PATH")].join(File::PATH_SEPARATOR)
+    [data, decoy, data, data].zip([config_bytes, config_bytes, config_bytes + "\n", config_bytes]).each do |root, bytes|
+      File.binwrite(config, bytes)
+      invocation = replay.dup
+      invocation[2] = root
+      stdout, stderr, verified = Open3.capture3(env.merge("PATH" => guarded_path), *invocation, chdir: afw)
+      assert_equal root == data && bytes == config_bytes, verified.success?, "#{stdout}\n#{stderr}"
+      records << {"argv" => invocation, "status" => verified.exitstatus, "stdout" => stdout, "stderr" => stderr}
+    end
+    assert_equal files, workload_hashes(data)
+    assert_equal approval_bytes, File.binread(approval)
+    assert_empty @fixture.forbidden_calls
+
+    if ENV["AF_TEST_EVIDENCE_ROOT"]
+      path = File.join(ENV.fetch("AF_TEST_EVIDENCE_ROOT"), "public-front-door.json")
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, JSON.pretty_generate("code" => afw, "scorer" => scorer, "specification" => specs,
+        "pipeline" => File.realpath(File.join(@fixture.pipeline, "bin", "af-staged-scoring-authority")),
+        "selection_owner" => File.join(afw, "bin", "afw-staged-selection"),
+        "data" => data, "front_door" => [File.join(ROOT, "bin", "af-catalog"), *command], "selections" => env,
+        "preparation" => result, "workdir" => afw, "wlo_argv" => argv, "hashes" => files, "checks" => records))
+    end
+  end
+
+  # Return the frozen and generated workload hashes under the disposable store.
+  def workload_hashes(root)
+    Dir.glob("**/*", File::FNM_DOTMATCH, base: root).sort.filter_map do |name|
+      path = File.join(root, name)
+      [name, Digest::SHA256.file(path).hexdigest] if File.file?(path)
+    end.to_h
   end
 end

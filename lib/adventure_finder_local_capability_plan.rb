@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "adventure_finder_state_paths"
+require_relative "adventure_finder_workload_paths"
 
 require "digest"
 require "json"
@@ -53,9 +54,13 @@ module AdventureFinderWorkspace
     end
 
     def call(operation_id:)
-      result = read_json(preparation_path(operation_id), "staged workload preparation")
+      path = preparation_path(operation_id)
+      result = read_json(path, "staged workload preparation")
       validate_result!(result, operation_id)
-      manifest = afw_root.join("workloads", result.fetch("workload_id"))
+      roots = WorkloadPaths.new(code: env.fetch("AF_AFW_ROOT", project_root.join("af-workloads").to_s),
+                                data: env["AF_AFW_DATA_ROOT"], explicit_code: env.key?("AF_AFW_ROOT"))
+      roots.verify_binding!(path.dirname.join("afw-roots.json"))
+      manifest = roots.store.join("workloads", result.fetch("workload_id"))
       expected_plan_path = manifest.join("execution-plan.json").expand_path
       bound_plan_path = Pathname(result.dig("plan", "path").to_s).expand_path
       fail_with("STALE_WORKLOAD_BINDING", "preparation result does not bind the frozen workload plan") unless
@@ -252,10 +257,6 @@ module AdventureFinderWorkspace
         fail_with("INVALID_OPERATION_HANDLE", "operation handle must be a lowercase UUIDv4")
       end
       StatePaths.root(front_door_root:, project_root:, env:).join("output", "staged-workload-preparations", "v0.1", operation_id, "result.json")
-    end
-
-    def afw_root
-      Pathname(env.fetch("AF_AFW_ROOT", project_root.join("af-workloads").to_s)).expand_path
     end
 
     def read_json(path, label)

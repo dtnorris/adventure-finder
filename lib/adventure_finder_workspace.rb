@@ -142,6 +142,11 @@ module AdventureFinderWorkspace
         path = repo_path(repo)
 
         if path.directory? && (path / ".git").directory?
+          if name == "af-workloads" && !afw_bootstrap_origin?(repo, path)
+            err.puts format("%-30s ERROR: expected %s at %s; retain the existing checkout separately", name, repo.fetch("github"), path)
+            failures << name
+            next
+          end
           out.puts format("%-30s already present", name)
         elsif path.exist?
           err.puts format("%-30s ERROR: path exists but is not a Git checkout: %s", name, path)
@@ -429,6 +434,13 @@ module AdventureFinderWorkspace
     end
 
     private
+
+    # Verify an existing AFW checkout belongs to the bootstrap manifest owner.
+    # Returns false for missing or different origins under either supported protocol.
+    def afw_bootstrap_origin?(repo, path)
+      origin = runner.capture("git", "remote", "get-url", "origin", chdir: path)
+      origin.success? && %w[ssh https].any? { |protocol| clone_url(repo, protocol) == origin.stdout.strip }
+    end
 
     # Runs selected repositories in order and returns every planned suite result.
     # Fail-fast leaves explicit NOT RUN rows; command errors retain runner semantics.

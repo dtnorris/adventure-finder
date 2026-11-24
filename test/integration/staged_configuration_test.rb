@@ -17,14 +17,11 @@ class StagedConfigurationTest < Minitest::Test
     @pipeline = ENV.fetch("AF_DATA_PIPELINE_ROOT", File.join(components, "af-data-pipeline"))
     scorer = ENV["AF_SCORER_ROOT"]
     skip "set AF_SCORER_ROOT to the accepted public scorer for this offline journey" unless scorer
-    @afw_source = ENV.fetch("AF_AFW_ROOT", File.join(components, "af-workloads"))
+    @afw = File.realpath(ENV.fetch("AF_TEST_PUBLIC_AFW_ROOT", File.join(components, "af-workloads")))
     @scorer = ENV.fetch("AF_SCORER_ROOT")
     @temporary = Dir.mktmpdir("staged-config-")
-    @afw = File.join(@temporary, "afw")
-    FileUtils.mkdir_p(@afw)
-    %w[.git lib bin config production_backlog].each do |name|
-      FileUtils.cp_r(File.join(@afw_source, name), @afw)
-    end
+    @data = File.join(@temporary, "workload-store")
+    FileUtils.mkdir(@data)
     $LOAD_PATH.unshift(File.join(@pipeline, "lib"))
     require File.join(@pipeline, "lib/af_data_pipeline")
     require File.join(@pipeline, "test/support/staged_scoring_fixture")
@@ -46,7 +43,7 @@ class StagedConfigurationTest < Minitest::Test
       FileUtils.cp(File.join(ENV.fetch("AF_TEST_SPEC_ROOT", File.join(components, "af-specification-md")), name), @public)
     end
     @selection = {"paths" => {"xlsx_root" => @fixture, "source_root" => File.join(@fixture, "source"),
-      "specification_root" => @public, "output_root" => File.join(@temporary, "output")}}
+      "specification_root" => @public, "output_root" => File.join(@data, "output")}}
     File.write(@config, YAML.dump(@selection))
     @bytes = File.binread(@config)
   end
@@ -56,7 +53,7 @@ class StagedConfigurationTest < Minitest::Test
     if @temporary && ENV["AF_TEST_EVIDENCE_ROOT"]
       evidence = File.join(ENV.fetch("AF_TEST_EVIDENCE_ROOT"), File.basename(@temporary))
       FileUtils.mkdir_p(evidence)
-      %w[inputs inputs.json selection.yml authority afw/workloads afw/build].each do |name|
+      %w[inputs inputs.json selection.yml authority workload-store/workloads workload-store/build].each do |name|
         source = File.join(@temporary, name)
         next unless File.exist?(source)
         destination = File.join(evidence, name)
@@ -103,11 +100,12 @@ class StagedConfigurationTest < Minitest::Test
     File.binwrite(source, saved)
     assert pipeline_validation.fetch("preparation_allowed")
     assert_equal "PREPARED", coordinator.prepare(**arguments).fetch("status")
-    case_path = Dir[File.join(@afw, "build/workloads", arguments.fetch(:workload_id), "cases/*-combat.yml")].fetch(0)
-    _stdout, stderr, status = Open3.capture3(File.join(@afw, "bin/afw-score-job"), "--verify-only", case_path)
+    case_path = Dir[File.join(@data, "build/workloads", arguments.fetch(:workload_id), "cases/*-ee.yml")].fetch(0)
+    verify_command = [File.join(@afw, "bin/afw-score-job"), "--data-root", @data, "--verify-only", case_path]
+    _stdout, stderr, status = Open3.capture3(*verify_command)
     assert status.success?, stderr
     _stdout, stderr, status = Open3.capture3({"WLO_WORKER_ENDPOINT" => "http://127.0.0.1:1"},
-      File.join(@afw, "bin/afw-score-job"), case_path)
+      File.join(@afw, "bin/afw-score-job"), "--data-root", @data, case_path)
     refute status.success?
     assert_match(/public method execution requires separate qualification/, stderr)
   end
@@ -116,7 +114,7 @@ class StagedConfigurationTest < Minitest::Test
 
   # Return the supported AF owner with explicit component selectors.
   def coordinator(config: @config)
-    AdventureFinderWorkspace::AFWStagedWorkloadCoordinator.new(afw_root: @afw, scorer_root: @scorer,
+    AdventureFinderWorkspace::AFWStagedWorkloadCoordinator.new(afw_root: @afw, afw_data_root: @data, scorer_root: @scorer,
       pipeline_root: @pipeline, authority_inputs_path: @inputs, authority_store: @store,
       current_project_state_path: @state, scorer_config: config, mode: "synthetic")
   end
@@ -128,13 +126,13 @@ class StagedConfigurationTest < Minitest::Test
 
   # Exercise the downstream owner API and its real afw-staged-selection verifier.
   def pipeline_validation
-    manifest = File.join(@afw, "workloads", arguments.fetch(:workload_id))
+    manifest = File.join(@data, "workloads", arguments.fetch(:workload_id))
     binding = JSON.parse(File.binread(File.join(manifest, "staged-scoring.json"))).fetch("binding")
     paths = {"plan" => File.join(manifest, "execution-plan.json"), "snapshot" => File.join(manifest, "snapshot.yml"),
-      "index" => File.join(manifest, "case_index.csv"), "generated" => File.join(@afw, "build/workloads", arguments.fetch(:workload_id))}
+      "index" => File.join(manifest, "case_index.csv"), "generated" => File.join(@data, "build/workloads", arguments.fetch(:workload_id))}
     AfDataPipeline::StagedScoringAuthority.new(evidence: @evidence, store_root: @store, mode: "synthetic",
-      selection_afw_root: @afw, selection_project_root: @afw, selection_scorer_root: @scorer, selection_scorer_config: @config)
-      .validate!(current_state_path: @state, selection_path: File.join(@afw, "workloads/.selections", arguments.fetch(:workload_id), "selection.json"),
+      selection_afw_root: @afw, selection_project_root: @data, selection_scorer_root: @scorer, selection_scorer_config: @config)
+      .validate!(current_state_path: @state, selection_path: File.join(@data, "workloads/.selections", arguments.fetch(:workload_id), "selection.json"),
         frozen_workload: binding, workload_paths: paths)
   end
 end
