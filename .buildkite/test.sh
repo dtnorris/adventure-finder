@@ -9,7 +9,8 @@ source_commit="$(git rev-parse HEAD)"
 public_workload="${AF_CI_PUBLIC_WORKLOAD:-0}"
 results="$PWD/.ci-results"
 mkdir -p "$results"
-ci_root="$(mktemp -d /private/tmp/af-ci.XXXXXX)"
+ci_root="$(mktemp -d "${TMPDIR:-/private/tmp}/af-ci.XXXXXX")"
+ci_root="$(cd "$ci_root" && pwd -P)"
 trap 'if [ -d "$ci_root/adventure-finder/coverage" ]; then cp -R "$ci_root/adventure-finder/coverage" "$results/coverage"; fi; rm -rf "$ci_root"' EXIT
 export TMPDIR="$ci_root"
 export GEM_HOME="$ci_root/gems"
@@ -19,11 +20,43 @@ git clone --no-hardlinks --no-checkout . "$ci_root/adventure-finder"
 git -C "$ci_root/adventure-finder" checkout --detach "$source_commit"
 git -C "$ci_root/adventure-finder" remote set-url origin git@github.com:dtnorris/adventure-finder.git
 
+if [ "${AF_CI_PUBLIC_PIPELINE:-0}" = 1 ]; then
+  cd "$ci_root/adventure-finder"
+  revision="$(ruby -ryaml -e 'puts YAML.safe_load_file("repos.yml").fetch("repositories").find { |repo| repo["name"] == "af-data-pipeline" }.fetch("revision")')"
+  export AF_DATA_PIPELINE_ROOT="$ci_root/af-pipeline"
+  git clone --no-checkout https://github.com/dtnorris/af-pipeline.git "$AF_DATA_PIPELINE_ROOT"
+  git -C "$AF_DATA_PIPELINE_ROOT" checkout --detach "$revision"
+  while IFS=$'\t' read -r selector owner owner_revision; do
+    path="$ci_root/$owner"
+    git clone --no-checkout "https://github.com/dtnorris/$owner.git" "$path"
+    git -C "$path" checkout --detach "$owner_revision"
+    export "$selector=$path"
+  done < "$AF_DATA_PIPELINE_ROOT/config/public_owners.tsv"
+
+  export BUNDLE_FROZEN=true
+  for checkout in "$PWD" "$AF_DATA_PIPELINE_ROOT" "$AF_SCORER_ROOT"; do
+    (cd "$checkout" && { bundle check || bundle install; })
+  done
+  (cd "$AF_DATA_PIPELINE_ROOT" && bash bin/setup)
+  unset AF_STATE_ROOT AF_DATA_PIPELINE_DATA_ROOT AF_PIPELINE_EXPECTED_DATA_ROOT AF_AFW_DATA_ROOT AFW_DATA_ROOT AF_TEST_HISTORICAL_AFW_ROOT
+  unset RUNPOD_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY GOOGLE_API_KEY AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+  export RUBYOPT="-r$PWD/test/support/offline_network_guard.rb"
+  export AF_PROJECT_ROOT="$ci_root" AF_TEST_PUBLIC_PIPELINE_ROOT="$AF_DATA_PIPELINE_ROOT"
+  export AF_TEST_PUBLIC_AFW_ROOT="$AF_AFW_ROOT" AF_TEST_SPEC_ROOT="$AF_PUBLIC_SPEC_ROOT"
+  export AF_TEST_EVIDENCE_ROOT="$results/public-pipeline"
+  bundle exec ruby -r "$PWD/test/support/subprocess_environment" -Ilib:test test/integration/bug02c_boundary_continuation_test.rb 2>&1 | tee "$results/public-pipeline-front-door.log"
+  bundle exec ruby -r "$PWD/test/support/subprocess_environment" -Ilib:test test/integration/staged_configuration_test.rb 2>&1 | tee "$results/public-pipeline-workload.log"
+  exit 0
+fi
+
+# The renamed private repository still supplies the pinned historical implementation.
+git clone --no-checkout git@github.com:dtnorris/af-pipeline-data.git "$ci_root/af-data-pipeline"
+git -C "$ci_root/af-data-pipeline" checkout --detach 9d5e37c44cace433346e25668f7e1f06604fb262
+
 while read -r repository revision; do
   git clone --no-checkout "git@github.com:dtnorris/$repository.git" "$ci_root/$repository"
   git -C "$ci_root/$repository" checkout --detach "$revision"
 done <<'COMPONENTS'
-af-data-pipeline 9d5e37c44cace433346e25668f7e1f06604fb262
 af-evidence d3b98b6a4820b2426da82f1001049f42074ab2d9
 af-workloads-data 136f47d059351b7532acd953745328da8da8d0fc
 workload-orchestrator fb069208e8f46ff2bf99e980c906aed5c0962be6
@@ -71,7 +104,7 @@ export LOW_REPO_ROOT="$ci_root/local-ollama-workers"
 export AF_SCORER_ROOT="$ci_root/af-cli-scoring-utility"
 export RPOF_REPO_ROOT="$ci_root/runpod-ollama-fleet"
 unset RUNPOD_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY GOOGLE_API_KEY AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
-unset AF_STATE_ROOT AF_DATA_PIPELINE_DATA_ROOT AF_AFW_DATA_ROOT AFW_DATA_ROOT
+unset AF_STATE_ROOT AF_DATA_PIPELINE_DATA_ROOT AF_PIPELINE_EXPECTED_DATA_ROOT AF_AFW_DATA_ROOT AFW_DATA_ROOT AF_TEST_PUBLIC_PIPELINE_ROOT
 export RUBYOPT="-r$PWD/test/support/offline_network_guard.rb"
 export BUNDLE_FROZEN=true
 # Keep the historical front-door case in the coverage suite with its pinned donor.

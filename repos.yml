@@ -32,17 +32,32 @@ repositories:
       - Copyright-sensitive owned source material; keep private.
 
   - name: af-data-pipeline
-    github: dtnorris/af-data-pipeline
+    # Keep the logical workspace key used by the test dispatcher.
+    checkout: af-pipeline
+    github: dtnorris/af-pipeline
+    clone_protocol: https
+    revision: 54fd38b3ba779275ef2c5fed536439434779d262
     role: Deterministic source intake, boundary handoffs, AMC mutation, review, and finalization.
     groups: [core, code, ingest]
     lifecycle: current
-    visibility: private
+    visibility: public
     default: true
-    setup: bundle install
+    setup: BUNDLE_FROZEN=true bundle install && bin/setup
     test: bundle exec rake
     # One reported 2026-10-14 fast + integration run; priority hint, not a target.
     test_duration_hint_seconds: 104.11
     requires: [ruby, bundle, git]
+
+  - name: af-pipeline-data
+    checkout: af-data-pipeline
+    github: dtnorris/af-pipeline-data
+    role: Private approvals, handoffs, reviews, receipts, and historical pipeline recovery.
+    groups: [core, data, ingest]
+    lifecycle: current
+    visibility: private
+    default: true
+    verify_origin: true
+    requires: [git]
 
   - name: af-cli-scoring-utility
     github: dtnorris/af-cli-scoring-utility

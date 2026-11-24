@@ -415,7 +415,7 @@ module AdventureFinderWorkspace
       roots = {
         "input" => input.dirname.to_s,
         "front_door" => front_door_root.to_s,
-        "pipeline" => PipelineDataPaths.root(code_root: pipeline_root, legacy_root: pipeline_root, env:).to_s,
+        "pipeline" => PipelineDataPaths.admit!(code_root: pipeline_root, legacy_root: pipeline_root, env:).to_s,
         "converter" => converter_root.to_s,
         "source" => source_root.to_s,
         "catalog" => catalog.dirname.to_s
@@ -742,10 +742,13 @@ module AdventureFinderWorkspace
         end
         StatePaths.check_operation!(state_root(context), operation_id)
       end
-      selected_data = PipelineDataPaths.root(code_root: context.fetch("pipeline_root"),
-        legacy_root: context.fetch("pipeline_root"), env:)
+      pipeline = context.fetch("pipeline_root")
+      selected_data = PipelineDataPaths.root(code_root: pipeline, legacy_root: pipeline, env:)
       unless selected_data == Pathname(context.dig("roots", "pipeline"))
         fail_with("PIPELINE_DATA_ROOT_MISMATCH", "pipeline data selector conflicts with retained context; restore the original configuration")
+      end
+      if PipelineDataPaths.public_selection?(pipeline, env:)
+        PipelineDataPaths.admit!(code_root: pipeline, legacy_root: pipeline, env:)
       end
       context
     rescue JSON::ParserError, TypeError

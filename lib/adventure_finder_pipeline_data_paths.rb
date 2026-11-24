@@ -7,6 +7,38 @@ module AdventureFinderWorkspace
   # Locates AFDP-owned handoffs separately from executable code. AFDP retains
   # validation of its contents and all authority; this only bounds delegation.
   module PipelineDataPaths
+    # Recognizes an explicitly configured cutover or a selected public checkout.
+    # The independent expected store selector keeps admission active if code is replaced.
+    def self.public_selection?(code_root, env: ENV)
+      code = Pathname(code_root)
+      env.key?("AF_PIPELINE_EXPECTED_DATA_ROOT") || code.basename.to_s == "af-pipeline" ||
+        code.join("config/public_owners.tsv").file?
+    end
+
+    # Admits the selected code and storage before any owner call or write.
+    # Returns the private root, or the legacy root for a historical selection.
+    # Raises Error for missing selectors, a different store or an unpinned checkout.
+    def self.admit!(code_root:, legacy_root:, env: ENV)
+      return root(code_root:, legacy_root:, env:) unless public_selection?(code_root, env:)
+
+      expected = env["AF_PIPELINE_EXPECTED_DATA_ROOT"]
+      raise Error, "set AF_PIPELINE_EXPECTED_DATA_ROOT to the installed private pipeline store" unless expected
+      raise Error, "set AF_DATA_PIPELINE_DATA_ROOT to the selected private pipeline store" unless env.key?("AF_DATA_PIPELINE_DATA_ROOT")
+
+      data = root(code_root:, legacy_root:, env:)
+      unless data == checked_directory(expected)
+        raise Error, "AF_DATA_PIPELINE_DATA_ROOT differs from the installed private pipeline store"
+      end
+
+      repo = Manifest.new(File.expand_path("../repos.yml", __dir__)).repositories.find do |entry|
+        entry.fetch("name") == "af-data-pipeline"
+      end
+      raise Error, "repos.yml must pin the public pipeline revision" unless repo && repo["revision"]
+
+      CheckoutIdentity.verify!(checked_directory(code_root.to_s), repo)
+      data
+    end
+
     # Returns the selected private root (or the supplied legacy root when unset).
     # Inputs are code/legacy paths and environment; invalid or overlapping roots
     # raise Error before AdventureFinder creates a handoff directory.

@@ -73,6 +73,14 @@ retains only portable root-relative locators plus content digests and byte count
 
 `AF_DATA_PIPELINE_ROOT` selects executable code independently of
 `AF_DATA_PIPELINE_DATA_ROOT`, an existing absolute private state directory.
+For the public cutover, set `AF_PIPELINE_EXPECTED_DATA_ROOT` in the installed
+launcher to the approved absolute private store path. Keep that value fixed
+when changing or testing the data selector. The front door requires that the
+selected store match this path and that the public checkout have the origin
+and clean Git revision pinned in `repos.yml`. It checks these requirements
+before conversion or coordination writes, including during cold resume.
+Historical recovery uses the original code and storage selectors with
+`AF_PIPELINE_EXPECTED_DATA_ROOT` unset.
 With private storage selected, the operation's `pipeline` locator resolves there;
 `af-source-progress --pipeline-root` receives that state directory while executable
 paths still resolve in the selected code checkout. Invalid, overlapping or symlinked

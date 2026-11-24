@@ -46,13 +46,13 @@ module AdventureFinderWorkspace
       safe_path_segment!(plan_id, "registered plan ID")
       safe_path_segment!(job_id, "canonical job ID")
       pipeline_root = pipeline_repository_root
+      storage_root = PipelineDataPaths.admit!(code_root: pipeline_root, legacy_root: pipeline_root)
       StatePaths.root(front_door_root: ENV.fetch("AF_ADVENTURE_FINDER_ROOT", File.expand_path("..", __dir__)),
         project_root: @workspace_root, owner_roots: [pipeline_root, context.dig("afw", "repository_root"), context.dig("wlo", "output_root")])
 
       afw_root = context.dig("afw", "repository_root")
       receipt_path = bind_evidence(context, plan_id, job_id)
       receipt_id = receipt_identity(receipt_path)
-      storage_root = ENV.fetch("AF_DATA_PIPELINE_DATA_ROOT", pipeline_root)
       review_dir = File.join(storage_root, "output", "adventure-finder-review", plan_id, job_id)
       audit_dir = File.join(storage_root, "audits", "adventure-finder-review", plan_id, job_id)
       pipeline_output = prepare_review_package(
@@ -134,7 +134,8 @@ module AdventureFinderWorkspace
         raise Error, "workspace manifest must contain exactly one #{PIPELINE_REPOSITORY} repository"
       end
 
-      root = (@workspace_root / matches.first.fetch("name")).cleanpath
+      repo = matches.first
+      root = (@workspace_root / repo.fetch("checkout", repo.fetch("name"))).cleanpath
       prefix = "#{@workspace_root}#{File::SEPARATOR}"
       raise Error, "pipeline repository resolves outside workspace root" unless root.to_s.start_with?(prefix)
       root

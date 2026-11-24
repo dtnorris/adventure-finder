@@ -8,12 +8,16 @@ class Bug02cBoundaryContinuationTest < Minitest::Test
   parallelize_me!
 
   ROOT = File.expand_path("../..", __dir__)
-  PIPELINE = ENV.fetch("AF_IG07C_PIPELINE_SOURCE_ROOT",
+  SPLIT_PIPELINE = ENV["AF_TEST_PUBLIC_PIPELINE_ROOT"]
+  PIPELINE = SPLIT_PIPELINE || ENV.fetch("AF_IG07C_PIPELINE_SOURCE_ROOT",
                        File.join(ENV.fetch("AF_PROJECT_ROOT", "/Users/davidnorris/code/adventure-finder-components"),
                                  "af-data-pipeline"))
 
   def setup
-    @fixture = Ig07cSourceAcceptance::Fixture.new(repository_root: ROOT, pipeline_source_root: PIPELINE)
+    @fixture = Ig07cSourceAcceptance::Fixture.new(repository_root: ROOT, pipeline_source_root: PIPELINE,
+                                                   split_pipeline: !!SPLIT_PIPELINE)
+    return if SPLIT_PIPELINE
+
     %w[af-data af-staged-scoring-authority].each do |command|
       File.symlink(File.join(PIPELINE, "bin", command), File.join(@fixture.pipeline, "bin", command))
     end
@@ -54,9 +58,22 @@ class Bug02cBoundaryContinuationTest < Minitest::Test
       arguments.slice!(arguments.index(flag), 2)
     end
     arguments.concat(["--prepare-staged-scoring", "--successor-version", "0.0.2"])
-    _, start_error, started = @fixture.run_catalog(
-      missing_afw.merge("IG07C_MARKDOWN_MODE" => "synthetic_procedure"), *arguments
-    )
+    start_env = missing_afw.merge("IG07C_MARKDOWN_MODE" => "synthetic_procedure")
+    if SPLIT_PIPELINE
+      wrong_pipeline_data = File.join(@fixture.root, "wrong-pipeline-data")
+      FileUtils.mkdir(wrong_pipeline_data)
+      before = workload_hashes(@fixture.root)
+      {
+        nil => "set AF_DATA_PIPELINE_DATA_ROOT",
+        wrong_pipeline_data => "differs from the installed private pipeline store"
+      }.each do |selected, expected|
+        _, error, status = @fixture.run_catalog(start_env.merge("AF_DATA_PIPELINE_DATA_ROOT" => selected), *arguments)
+        refute status.success?
+        assert_includes error, expected
+        assert_equal before, workload_hashes(@fixture.root)
+      end
+    end
+    _, start_error, started = @fixture.run_catalog(start_env, *arguments)
     assert started.success?, start_error
 
     operation_id = Ig07cSourceAcceptance::Fixture::OPERATION_ID
@@ -93,7 +110,7 @@ class Bug02cBoundaryContinuationTest < Minitest::Test
     refute status.success?, output
     assert_includes output, "VERIFIED STAGED SUCCESSOR"
     assert_includes error, "AFW_PREPARATION_REFUSED: AFW public library is unavailable"
-    continuation = File.join(@fixture.front, "output", "ingest-boundary-continuations", "v0.1", operation_id)
+    continuation = File.join(@fixture.pipeline_data, "output", "ingest-boundary-continuations", "v0.1", operation_id)
     receipts = Dir.glob(File.join(continuation, "*verified-staged-successor*.json"))
     assert_equal 1, receipts.length
     receipt = JSON.parse(File.binread(receipts.fetch(0)))
@@ -230,6 +247,8 @@ class Bug02cBoundaryContinuationTest < Minitest::Test
     end
     assert_equal files, workload_hashes(data)
     assert_equal approval_bytes, File.binread(approval)
+    assert_equal 1, Dir.glob(File.join(continuation, "*verified-staged-successor*.json")).length
+    assert_equal 1, Dir.glob(File.join(@fixture.front, "output/ingest-operations/v0.1/*")).count { |path| File.directory?(path) }
     assert_empty @fixture.forbidden_calls
 
     if ENV["AF_TEST_EVIDENCE_ROOT"]

@@ -137,10 +137,10 @@ class AdventureFinderWorkspaceTest < Minitest::Test
         @events << [:start, path, command]
       end
       Timeout.timeout(2) do
-        if File.basename(path) == "af-data-pipeline" && command == "bundle exec rake"
+        if File.basename(path) == "af-pipeline" && command == "bundle exec rake"
           @fast_started << true
           @integration_started.pop
-        elsif File.basename(path) == "af-data-pipeline" && command == "bundle exec rake test:integration"
+        elsif File.basename(path) == "af-pipeline" && command == "bundle exec rake test:integration"
           @fast_started.pop
           @integration_started << true
         end
@@ -160,7 +160,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
     Dir.mktmpdir do |directory|
       components = File.join(directory, "components")
       front = File.join(directory, "front")
-      FileUtils.mkdir_p(File.join(components, "af-data-pipeline", ".git")) unless missing
+      FileUtils.mkdir_p(File.join(components, "af-pipeline", ".git")) unless missing
       FileUtils.mkdir_p(File.join(components, "other", ".git"))
       FileUtils.mkdir_p(File.join(front, "lib"))
       FileUtils.mkdir_p(File.join(front, "bin"))
@@ -182,7 +182,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
         # Populate only selected testable fixtures. Archived and production roots
         # deliberately exist as sentinels but must receive no command or write.
         selection.select { |repo| repo["test"] }.each do |repo|
-          FileUtils.mkdir_p(workspace.root / repo.fetch("name") / ".git")
+          FileUtils.mkdir_p(workspace.root / repo.fetch("checkout", repo.fetch("name")) / ".git")
         end
         sentinels = %w[af-data-pipeline-production af-corpus-ingester-basics af-matcher-cli]
         sentinels.each do |name|
@@ -190,7 +190,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
           File.write(workspace.root / name / "sentinel", "unchanged")
         end
         assert workspace.test(repos: selection)
-        calls = runner.calls.select { |_command, path, _env| path == (workspace.root / pipeline["name"]).to_s }
+        calls = runner.calls.select { |_command, path, _env| path == (workspace.root / pipeline.fetch("checkout")).to_s }
         assert_equal ["bundle exec rake", "bundle exec rake test:integration"], calls.map(&:first)
         assert_match(/^af-data-pipeline \/ fast\s+PASS\s+\d+\.\d{2}s$/, out.string)
         assert_match(/^af-data-pipeline \/ integration\s+PASS\s+\d+\.\d{2}s$/, out.string)
@@ -386,7 +386,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
       assert workspace.test(repos: [pipeline, {"name" => "other", "test" => "other-command"}],
         jobs: 2, include_front_door: false)
       assert_equal 2, runner.max_active
-      path = (workspace.root / "af-data-pipeline").to_s
+      path = (workspace.root / "af-pipeline").to_s
       assert_equal [path, path], runner.events.select { |event| event.first == :start }.first(2).map { |event| event[1] }
       assert_includes runner.overlapping_paths, path
       fast_end = runner.events.index([:finish, path, "bundle exec rake"])
@@ -655,7 +655,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
       end
     end
     with_pipeline_workspace(runner: runner_class.new) do |workspace, pipeline, _runner, out|
-      report = workspace.root / "af-data-pipeline" / "coverage" / "full"
+      report = workspace.root / "af-pipeline" / "coverage" / "full"
       FileUtils.mkdir_p(report)
       File.write(report / ".resultset.json", "999 runs, 999 assertions, 0 failures, 0 errors, 0 skips\n")
       assert workspace.test(repos: [pipeline], include_front_door: false)
@@ -703,7 +703,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
       File.write(File.join(front, "bin", "af-operator-acceptance"), "")
       configured = manifest.selected.select { |repo| repo["test"] }
       assert_equal 10, configured.length
-      configured.each { |repo| FileUtils.mkdir_p(File.join(components, repo.fetch("name"), ".git")) }
+      configured.each { |repo| FileUtils.mkdir_p(File.join(components, repo.fetch("checkout", repo.fetch("name")), ".git")) }
       runner = RecordingRunner.new
       out = StringIO.new
       workspace = AdventureFinderWorkspace::Workspace.new(manifest: manifest, root: components,
@@ -718,7 +718,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
       assert_equal front, runner.calls.last[2]["AF_ADVENTURE_FINDER_ROOT"]
       assert_nil runner.calls.last[2]["BUNDLE_GEMFILE"]
       refute File.exist?(File.join(front, "Gemfile"))
-      assert_includes out.string, "Unconfigured selected entries: 4"
+      assert_includes out.string, "Unconfigured selected entries: 5"
       assert_includes out.string, "12/12 suites passed."
       assert_match(/^Total runs:\s+28$/, out.string)
       assert_includes out.string, "Operator acceptance phase: NOT RUN"
@@ -784,7 +784,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
       output, status = Open3.capture2e(environment, cli, chdir: dir)
       refute status.success?, "missing configured components must fail"
       assert_includes output, "Front-door phase: PASS"
-      assert_includes output, "Unconfigured selected entries: 4"
+      assert_includes output, "Unconfigured selected entries: 5"
       output, status = Open3.capture2e(environment, cli, "--front-door-root", File.join(dir, "absent"), chdir: dir)
       refute status.success?
       assert_includes output, "Front-door phase: MISSING"

@@ -46,6 +46,21 @@ It never resets, stashes, commits, merges, rebases, force-updates, or pushes.
 
 Normal bootstrap includes the current/default repositories from `repos.yml`.
 
+Bootstrap clones public `dtnorris/af-pipeline` over HTTPS into `af-pipeline`
+and selects the manifest's exact revision. Its setup uses the public pipeline's
+`bin/setup` with the public owner roots and pins listed in
+`af-pipeline/config/public_owners.tsv`. Prepare those owner checkouts and export
+their selectors before running bootstrap with `--setup`. The workspace suite
+dispatcher retains the logical key `af-data-pipeline` for pipeline code.
+Private `dtnorris/af-pipeline-data` uses the retained local `af-data-pipeline`
+path with no code setup or test role. For a retained checkout, the operator
+updates its fetch and push origins after verifying repository identity.
+
+For historical operator acceptance scenarios that require donor code, set
+`AF_DATA_PIPELINE_ROOT` to the disposable checkout of the historical pin.
+The public split-pipeline test in CI uses the catalog front door and
+independently allocated synthetic stores.
+
 `llm-response-data` is intentionally shallow-cloned (`--depth 1`) because its Git
 history is large and normal AdventureFinder work generally needs the current evidence
 tree, not every historical object. Unshallow it only when the question actually requires

@@ -27,9 +27,9 @@ module Ig07cSourceAcceptance
 
     attr_reader :root, :front, :components, :pipeline, :source, :catalog,
                 :converter, :pdf, :base, :policy, :canonical, :registry,
-                :progress_log, :forbidden_log, :spec_root
+                :progress_log, :forbidden_log, :spec_root, :pipeline_data
 
-    def initialize(repository_root:, pipeline_source_root:)
+    def initialize(repository_root:, pipeline_source_root:, split_pipeline: false)
       @repository_root = File.expand_path(repository_root)
       @pipeline_source_root = File.realpath(pipeline_source_root)
       @root = File.realpath(Dir.mktmpdir("ig07c-source-acceptance"))
@@ -42,7 +42,8 @@ module Ig07cSourceAcceptance
       end
       @front = directory("front-door")
       @components = directory("components")
-      @pipeline = directory("components/af-data-pipeline")
+      @pipeline = split_pipeline ? @pipeline_source_root : directory("components/af-data-pipeline")
+      @pipeline_data = split_pipeline ? directory("pipeline-private") : @front
       @source = directory("components/md-for-llm-book-content")
       @converter = directory("components/pdf-to-llm-md-converter")
       @catalog = directory("catalog")
@@ -56,9 +57,10 @@ module Ig07cSourceAcceptance
       @registry = File.join(@source, "source_registry.yml")
       @progress_log = File.join(@root, "source-progress.jsonl")
       @forbidden_log = File.join(@root, "forbidden.jsonl")
-      build_pipeline_facade
+      build_pipeline_facade unless split_pipeline
       build_converter
       build_sentinels
+      allow_pipeline_identity_reads if split_pipeline
       build_catalog
       write_project_state
       write_registry
@@ -217,7 +219,32 @@ module Ig07cSourceAcceptance
         "AF_DATA_PIPELINE_ROOT" => pipeline,
         "AF_SOURCE_ROOT" => source,
         "PATH" => [@sentinel_bin, ENV.fetch("PATH", "")].join(File::PATH_SEPARATOR)
-      }
+      }.tap do |selection|
+        if pipeline_data != front
+          selection["AF_DATA_PIPELINE_DATA_ROOT"] = pipeline_data
+          selection["AF_PIPELINE_EXPECTED_DATA_ROOT"] = pipeline_data
+        end
+      end
+    end
+
+    # Permit only the caller's read-only Git identity commands in the selected
+    # public checkout. All other calls still reach the offline fixture sentinel.
+    def allow_pipeline_identity_reads
+      real_git = ENV.fetch("PATH").split(File::PATH_SEPARATOR).map { |dir| File.join(dir, "git") }
+        .find { |path| File.executable?(path) }
+      guard = File.join(@sentinel_bin, "git")
+      File.binwrite(guard, File.binread(guard).sub("require \"json\"\n", <<~RUBY))
+        require "json"
+        prefix = %w[--no-optional-locks -c core.fsmonitor=false]
+        commands = [
+          %w[rev-parse --show-toplevel], %w[remote get-url --all origin],
+          %w[remote get-url --push --all origin], %w[rev-parse HEAD],
+          %w[status --porcelain --untracked-files=all], %w[ls-files -v]
+        ]
+        if Dir.pwd == #{@pipeline.inspect} && ARGV.take(3) == prefix && commands.include?(ARGV.drop(3))
+          exec(#{real_git.inspect}, *ARGV)
+        end
+      RUBY
     end
 
     def build_pipeline_facade

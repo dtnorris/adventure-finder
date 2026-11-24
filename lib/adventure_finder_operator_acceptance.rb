@@ -241,6 +241,7 @@ module AdventureFinderWorkspace
       @repository_root = File.expand_path("..", __dir__)
       @manifest_path = File.expand_path(manifest_path || File.join(@repository_root, "repos.yml"))
       @manifest = Manifest.new(@manifest_path)
+      @registered_components = @manifest.repositories.to_h { |repository| [repository.fetch("name"), repository] }
       @workspace_root = File.expand_path(
         workspace_root || ENV["AF_PROJECT_ROOT"] || @manifest.workspace_root_default
       )
@@ -287,9 +288,8 @@ module AdventureFinderWorkspace
     end
 
     def resolve_roots
-      registered = @manifest.repositories.to_h { |repository| [repository.fetch("name"), repository] }
       %w[af-data-pipeline workload-orchestrator runpod-ollama-fleet af-cli-scoring-utility].each do |name|
-        raise Error, "acceptance component is not registered in repos.yml: #{name}" unless registered.key?(name)
+        raise Error, "acceptance component is not registered in repos.yml: #{name}" unless @registered_components.key?(name)
       end
 
       {
@@ -303,8 +303,10 @@ module AdventureFinderWorkspace
       }
     end
 
+    # Returns an absolute component path, honoring explicit and environment selections.
     def component_root(name, environment_name)
-      File.expand_path(@component_roots[name] || ENV[environment_name] || File.join(@workspace_root, name))
+      checkout = @registered_components.fetch(name, {}).fetch("checkout", name)
+      File.expand_path(@component_roots[name] || ENV[environment_name] || File.join(@workspace_root, checkout))
     end
 
     def validate!(selected, roots)
@@ -354,6 +356,8 @@ module AdventureFinderWorkspace
         "BUNDLE_LOCKFILE" => nil,
         "AF_IG19B_PIPELINE_SOURCE_ROOT" => roots.fetch("af-data-pipeline"),
         "AF_DATA_PIPELINE_ROOT" => roots.fetch("af-data-pipeline"),
+        "AF_DATA_PIPELINE_DATA_ROOT" => nil,
+        "AF_PIPELINE_EXPECTED_DATA_ROOT" => nil,
         "AF_SCORER_ROOT" => roots.fetch("af-cli-scoring-utility"),
         "WLO_REPO_ROOT" => roots.fetch("workload-orchestrator"),
         "LOW_REPO_ROOT" => roots.fetch("local-ollama-workers"),

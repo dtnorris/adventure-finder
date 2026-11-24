@@ -62,6 +62,7 @@ module AdventureFinderWorkspace
       raise Error, "repositories must be an array" unless data["repositories"].is_a?(Array)
 
       names = {}
+      checkouts = {}
       data["repositories"].each_with_index do |repo, index|
         raise Error, "repository entry #{index + 1} must be a mapping" unless repo.is_a?(Hash)
         %w[name github role lifecycle default].each do |key|
@@ -74,6 +75,18 @@ module AdventureFinderWorkspace
         raise Error, "duplicate repository #{name}" if names[name]
 
         names[name] = true
+        checkout = repo.fetch("checkout", name)
+        if repo.key?("checkout") && !(checkout.is_a?(String) && checkout.match?(/\A[A-Za-z0-9][A-Za-z0-9._-]*\z/))
+          raise Error, "#{name}: checkout must be a single directory name"
+        end
+        slot = [repo["location"], checkout]
+        raise Error, "duplicate checkout directory #{checkout}" if checkouts[slot]
+
+        checkouts[slot] = true
+        revision = repo["revision"]
+        if repo.key?("revision") && !(revision.is_a?(String) && revision.match?(/\A[0-9a-f]{40}\z/))
+          raise Error, "#{name}: revision must be a full Git commit SHA"
+        end
         unless repo["github"].to_s.match?(%r{\A[^/]+/[^/]+\z})
           raise Error, "#{name}: github must be owner/repo"
         end
@@ -120,6 +133,37 @@ module AdventureFinderWorkspace
     end
   end
 
+  # Verifies a checkout's effective Git identity without refreshing its index.
+  module CheckoutIdentity
+    # Accepts a checkout path and a manifest row. Raises Error for an incorrect
+    # root, origin or pin. Pinned code also requires a clean, complete worktree.
+    def self.verify!(path, repo, runner: CommandRunner.new)
+      run = ->(*argv) { runner.capture("git", "--no-optional-locks", "-c", "core.fsmonitor=false", *argv, chdir: path) }
+      root = run.call("rev-parse", "--show-toplevel")
+      github = repo.fetch("github")
+      urls = ["https://github.com/#{github}.git", "git@github.com:#{github}.git"]
+      origin = run.call("remote", "get-url", "--all", "origin")
+      push = run.call("remote", "get-url", "--push", "--all", "origin")
+      unless root.success? && root.stdout.strip == path.to_s && [origin, push].all? { |result|
+        result.success? && urls.include?(result.stdout.strip)
+      }
+        raise Error, "expected #{github} checkout and origin at #{path}"
+      end
+      return unless (revision = repo["revision"])
+
+      head = run.call("rev-parse", "HEAD")
+      unless head.success? && head.stdout.strip == revision
+        raise Error, "expected #{github} revision #{revision} at #{path}"
+      end
+      status = run.call("status", "--porcelain", "--untracked-files=all")
+      flags = run.call("ls-files", "-v")
+      unless status.success? && status.stdout.empty? && flags.success? &&
+             flags.stdout.each_line.all? { |line| line.start_with?("H ") }
+        raise Error, "expected a clean and complete #{github} checkout at #{path}"
+      end
+    end
+  end
+
   class Workspace
     TestResult = Struct.new(:name, :suite, :command, :result, :elapsed, :output, :accounting, keyword_init: true)
 
@@ -148,30 +192,44 @@ module AdventureFinderWorkspace
           err.puts format("%-30s ERROR: migrate the legacy catalog or resolve the symlink before bootstrapping: %s", name, path)
           failures << name
           next
-        elsif git_checkout?(path)
+        end
+
+        present = git_checkout?(path)
+        if present
           if ["af-workloads", CATALOG_REPOSITORY].include?(name) && !bootstrap_origin?(repo, path)
             err.puts format("%-30s ERROR: expected %s at %s; retain the existing checkout separately", name, repo.fetch("github"), path)
             failures << name
             next
           end
-          out.puts format("%-30s already present", name)
         elsif path.exist?
           err.puts format("%-30s ERROR: path exists but is not a Git checkout: %s", name, path)
           failures << name
           next
         else
           argv = ["git", "clone"]
+          argv << "--no-checkout" if repo["revision"]
           depth = repo["clone_depth"]
           argv.concat(["--depth", depth.to_s]) if depth
-          argv.concat([clone_url(repo, protocol), path.to_s])
+          argv.concat([clone_url(repo, repo.fetch("clone_protocol", protocol)), path.to_s])
 
           out.puts format("%-30s cloning%s", name, depth ? " (depth #{depth})" : "")
-          unless runner.system(*argv, chdir: root)
+          unless runner.system(*argv, chdir: root) &&
+                 (!repo["revision"] || runner.system("git", "checkout", "--detach", repo["revision"], chdir: path))
             failures << name
             next
           end
         end
 
+        if repo["revision"] || repo["verify_origin"]
+          begin
+            CheckoutIdentity.verify!(path, repo, runner:)
+          rescue Error => error
+            err.puts "#{name} ERROR: #{error.message}"
+            failures << name
+            next
+          end
+        end
+        out.puts format("%-30s already present", name) if present
         next unless setup && repo["setup"]
 
         out.puts format("%-30s setup: %s", name, repo["setup"])
@@ -256,6 +314,20 @@ module AdventureFinderWorkspace
 
         unless git_checkout?(path)
           out.puts format("%-30s missing; skipped", name)
+          next
+        end
+
+        if repo["revision"] || repo["verify_origin"]
+          begin
+            CheckoutIdentity.verify!(path, repo, runner:)
+          rescue Error => error
+            err.puts "#{name} ERROR: #{error.message}"
+            failures << name
+            next
+          end
+        end
+        if repo["revision"]
+          out.puts format("%-30s pinned at %s; skipped", name, repo["revision"])
           next
         end
 
@@ -382,7 +454,13 @@ module AdventureFinderWorkspace
       repos.each do |repo|
         path = repo_path(repo)
         if git_checkout?(path)
-          out.puts "  PASS #{repo['name']}"
+          begin
+            CheckoutIdentity.verify!(path, repo, runner:) if repo["revision"] || repo["verify_origin"]
+            out.puts "  PASS #{repo['name']}"
+          rescue Error => error
+            out.puts "  FAIL #{repo['name']} (#{error.message})"
+            errors << error.message
+          end
         else
           out.puts "  WARN #{repo['name']} (missing)"
           warnings << "missing repository: #{repo['name']}"
@@ -877,7 +955,7 @@ module AdventureFinderWorkspace
 
     def repo_path(repo)
       parent = repo["location"] == "adjacent" ? @adjacent_root : root
-      parent / repo.fetch("name")
+      parent / repo.fetch("checkout", repo.fetch("name"))
     end
 
     def repo_path_by_name(name)
@@ -885,7 +963,7 @@ module AdventureFinderWorkspace
     end
 
     def git_checkout?(path)
-      path.directory? && (path / ".git").directory?
+      path.directory? && ((path / ".git").directory? || (path / ".git").file?)
     end
 
     def full_sha(path)
