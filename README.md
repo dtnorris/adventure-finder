@@ -32,6 +32,9 @@ This is historical context only. Live catalog roles remain authoritative in
 
 ## Quick start
 
+To build a private Frontier pack from an existing accepted catalog and a selected
+source library, follow [Build and use a private Frontier pack](docs/private-frontier-pack.md).
+
 For production operation, start with the
 [composed operator runbook](docs/operator-runbook.md). It resolves short handles
 and calls component-owned public interfaces for execution, capacity and review.
@@ -91,8 +94,9 @@ Existing flat installations remain supported by explicitly selecting
 `AF_PROJECT_ROOT=/Users/davidnorris/code`; there is no existence-based fallback to
 old paths. `AF_PDF_CONVERTER_ROOT` and `AF_DATA_PIPELINE_ROOT` override catalog
 component routing. Catalog ingestion passes the selected front door through
-`AF_ADVENTURE_FINDER_ROOT`. The PDF converter already supports that override;
-Frontier must receive `AF_PROJECT_ROOT` explicitly.
+`AF_ADVENTURE_FINDER_ROOT`. The PDF converter already supports that override.
+Frontier uses `AF_PROJECT_ROOT` when resolving relative authority and corpus
+defaults. A build with all authorities selected can leave it unset.
 
 For split workload preparation, set `AF_AFW_ROOT` to the reviewed public
 `dtnorris/af-workloads` checkout and `AF_AFW_DATA_ROOT` to an existing separate
