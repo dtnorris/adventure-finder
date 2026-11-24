@@ -1,13 +1,13 @@
 # Build and use a private Frontier pack
 
 Use this route to read an existing accepted catalog alongside a separately selected
-source library. The [Frontier Pack README](https://github.com/dtnorris/af-frontier-pack/blob/9af7921d2570f79d6f2146d900bedd396f14e5d3/README.md)
+source library. The [Frontier Pack README](https://github.com/dtnorris/af-frontier-pack/blob/60099d5c4217d74c6c1b38e28b836bd5812ff8b3/README.md)
 owns the build and reader contracts. The sequence below pins the public code and
 ontology used together and leaves the workspace bootstrap and installed defaults
 available for other workflows.
 
 On a private host, have Git, Bash, Ruby 3.2 or newer with RubyGems, `unzip`, and
-`shasum` on a trusted `PATH`, with HTTPS access to GitHub and RubyGems. Supply five
+`shasum` on a trusted `PATH`, with HTTPS access to GitHub and RubyGems. Supply five required
 arguments with absolute paths for the first four:
 
 1. An existing private directory in which to create a fresh workspace and pack.
@@ -23,7 +23,11 @@ Keep the catalog and source inputs read-only and stable during the run. The fres
 workspace receives its own pack, receipts and source excerpt. The example uses
 the public AdventureFinder revision shown below. Pass a sixth argument to record a
 different exact published AdventureFinder revision, such as the one containing
-this guide. Reuse the same revision and selected inputs for a repeat run.
+this guide. For a catalog with a reviewed two-volume entry, also pass the absolute
+path to its private JSON declaration as the seventh argument. Use the entry
+identity and file hashes from the original review. The pinned Frontier Pack
+README above documents the format. Choose an adventure with an exact source
+excerpt as the fifth argument. Reuse the same revision and inputs for a repeat run.
 
 Save the following Bash block locally as `private-frontier-pack.sh` and run it
 on the private host with a clean environment:
@@ -34,18 +38,26 @@ env -i PATH="$PATH" /bin/bash /path/to/private-frontier-pack.sh \
   /private/library/source_registry.yml /private/library ADV-XXXX
 ```
 
+For a reviewed two-volume entry, append `"$published_af_sha" "$private_review_json"`
+to this command.
+
 ```bash
 set -euo pipefail
 umask 077
-if [[ $# -lt 5 || $# -gt 6 || $1 != /* || $2 != /* || $3 != /* || $4 != /* ]]; then
-  echo 'Usage: private-frontier-pack.sh /private/runs /catalog/PROJECT_STATE.yml /library/registry.yml /library/corpus ADV-ID [front-door-sha]' >&2
+if [[ $# -lt 5 || $# -gt 7 || $1 != /* || $2 != /* || $3 != /* || $4 != /* ]]; then
+  echo 'Usage: private-frontier-pack.sh /private/runs /catalog/PROJECT_STATE.yml /library/registry.yml /library/corpus ADV-ID [front-door-sha [/private/review.json]]' >&2
   exit 2
 fi
 catalog_state=$2
 registry=$3
 corpus=$4
 adventure_id=$5
-front_door_revision=${6:-d3f83f5692be60307571268d6d553160a1d35fe6}
+front_door_revision=${6:-02e470139e17663f0a9f5c3c57c83daa780715f1}
+reviewed_source=${7-}
+if [[ $# -eq 7 && ( $reviewed_source != /* || ! -f $reviewed_source || ! -r $reviewed_source ) ]]; then
+  echo 'Expected a readable reviewed-source declaration at an absolute path' >&2
+  exit 2
+fi
 [[ $front_door_revision =~ ^[0-9a-f]{40}$ ]]
 [[ -r $catalog_state && -f $catalog_state && -r $registry && -f $registry && -d $corpus ]]
 command -v git ruby unzip shasum >/dev/null
@@ -70,7 +82,7 @@ checkout() {
   printf '%s %s\n' "$url" "$revision"
 }
 checkout adventure-finder "$front_door_revision"
-checkout af-frontier-pack 9af7921d2570f79d6f2146d900bedd396f14e5d3
+checkout af-frontier-pack 60099d5c4217d74c6c1b38e28b836bd5812ff8b3
 checkout af-source-md a44019961e822b19a727e3562c2ecda4cfe0a7bd
 checkout af-specification-md 394a44c2c2052ce2eeb6d28cd7647ad8a50acfcf
 ruby -S gem install rexml --version 3.4.4 --no-document --clear-sources --source https://rubygems.org
@@ -85,8 +97,12 @@ shasum -a 256 "$catalog_state" "$registry" > inputs.before.sha256
 
 # Build with the chosen registry and the fixed catalog, corpus and ontology.
 build() {
-  "$frontier" build --state "$catalog_state" --source-registry "$1" \
+  set -- build --state "$catalog_state" --source-registry "$1" \
     --corpus-root "$corpus" --public-afao "$afao"
+  if [[ -n $reviewed_source ]]; then
+    set -- "$@" --reviewed-source "$reviewed_source"
+  fi
+  "$frontier" "$@"
 }
 build "$registry"
 "$frontier" doctor
