@@ -830,7 +830,7 @@ class AdventureFinderWorkspaceTest < Minitest::Test
     names = manifest.selected(core: true).map { |repo| repo.fetch("name") }
 
     assert_includes names, "md-specification-files"
-    assert_includes names, "af-xlsx-data-sources"
+    assert_includes names, "af-xlsx-files-data"
     assert_includes names, "af-source-md-data"
     assert_includes names, "af-data-pipeline"
     assert_includes names, "af-cli-scoring-utility"
@@ -992,6 +992,48 @@ class AdventureFinderWorkspaceTest < Minitest::Test
       assert_includes error.string, "expected dtnorris/af-workloads"
       assert_equal donor, runner.capture("git", "config", "--local", "--get-all", "remote.origin.url",
                                         chdir: path).stdout.strip
+    end
+  end
+
+  # Exercise both supported private clone URLs and an occupied default slot
+  # without contacting GitHub or opening a catalog workbook.
+  def test_bootstrap_selects_private_catalog_and_requires_its_origin
+    repo = manifest.selected.find { |entry| entry.fetch("name") == "af-xlsx-files-data" }
+    assert_equal "private", repo.fetch("visibility")
+    Dir.mktmpdir do |directory|
+      path = File.join(directory, repo.fetch("name"))
+      runner = AdventureFinderWorkspace::CommandRunner.new
+      commands = []
+      runner.define_singleton_method(:system) do |*argv, **|
+        commands << argv
+        true
+      end
+      error = StringIO.new
+      workspace = AdventureFinderWorkspace::Workspace.new(manifest:, root: directory, runner:,
+                                                           out: StringIO.new, err: error)
+      ssh = "git@github.com:dtnorris/af-xlsx-files-data.git"
+      https = "https://github.com/dtnorris/af-xlsx-files-data.git"
+      assert workspace.bootstrap(repos: [repo])
+      assert workspace.bootstrap(repos: [repo], protocol: "https")
+      assert_equal [["git", "clone", ssh, path], ["git", "clone", https, path]], commands
+
+      legacy = File.join(directory, "af-xlsx-data-sources")
+      File.symlink("missing", legacy)
+      refute workspace.bootstrap(repos: [repo])
+      assert_includes error.string, "migrate the legacy catalog"
+      File.unlink(legacy)
+      assert system("git", "init", "--quiet", path)
+      assert system("git", "-C", path, "remote", "add", "origin", "git@github.com:dtnorris/af-xlsx-files.git")
+      refute workspace.bootstrap(repos: [repo])
+      assert_includes error.string, "expected dtnorris/af-xlsx-files-data"
+      old_origin = "git@github.com:dtnorris/af-xlsx-data-sources.git"
+      assert system("git", "-C", path, "remote", "set-url", "origin", old_origin)
+      assert system("git", "-C", path, "config", "--local", "url.#{https}.insteadOf", old_origin)
+      assert_equal https, runner.capture("git", "remote", "get-url", "origin", chdir: path).stdout.strip
+      refute workspace.bootstrap(repos: [repo])
+      assert system("git", "-C", path, "remote", "set-url", "origin", https)
+      assert workspace.bootstrap(repos: [repo])
+      assert_equal 2, commands.size
     end
   end
 

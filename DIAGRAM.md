@@ -54,7 +54,7 @@ See [the composed operator runbook](docs/operator-runbook.md) for public command
 │     deterministic AMC successor construction                                             │
 │                │                                                                         │
 │                ▼                                                                         │
-│                     af-xlsx-data-sources                                                 │
+│                     af-xlsx-files-data                                                   │
 │                     CANONICAL PROJECT STATE: PROJECT_STATE.yml                           │
 │                     Adventure Master Catalog (AMC)                                       │
 │                     metadata + boundaries + accepted assessments                         │
@@ -161,7 +161,7 @@ See [the composed operator runbook](docs/operator-runbook.md) for public command
 │                                                   ▼                                      │
 │                                      successor canonical AMC                             │
 │                                                   │                                      │
-│                                                   └────────► af-xlsx-data-sources        │
+│                                                   └────────► af-xlsx-files-data          │
 │                                                                                          │
 └───────────────────────────────────────────┬──────────────────────────────────────────────┘
                                             │

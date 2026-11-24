@@ -21,7 +21,7 @@ present, but it must not silently create a second authority.
 
 In particular:
 
-- `af-xlsx-data-sources/PROJECT_STATE.yml` owns moving AMC role state.
+- `af-xlsx-files-data/PROJECT_STATE.yml` owns moving AMC role state.
 - `md-specification-files` owns accepted semantic specifications.
 - `af-source-md-data` owns the private canonical Markdown corpus and source registry.
 - Individual implementation repositories own their code and local test suites.

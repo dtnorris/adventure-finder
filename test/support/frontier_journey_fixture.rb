@@ -18,7 +18,7 @@ module Ig07cSourceAcceptance
       @frontier_code = inventory(@frontier)
       @ontology_binding = binding_for(@afao)
       @source_heads = %w[adventure-finder af-data-pipeline af-workloads workload-orchestrator local-ollama-workers
-        af-cli-scoring-utility af-frontier-pack af-xlsx-data-sources af-cli-query-matcher md-specification-files].to_h do |name|
+        af-cli-scoring-utility af-frontier-pack af-xlsx-files-data af-cli-query-matcher md-specification-files].to_h do |name|
         source = name == "af-data-pipeline" ? @pipeline_source_root : File.join(sources, name)
         source = @repository_root if name == "adventure-finder"
         source = ENV.fetch("AF_QUERY_MATCHER_ROOT", source) if name == "af-cli-query-matcher"

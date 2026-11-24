@@ -510,7 +510,7 @@ abort "post-promotion replay changed operation, authority, Git or adoption inven
   replay_inventories.merge(promotion_inventories).all? { |path, inventory| fixture.inventory(path) == inventory }
 abort "forbidden child call observed" unless fixture.forbidden_calls.empty?
 if dual_root
-  fixture.verify_consumers(%w[af-xlsx-data-sources af-cli-query-matcher af-frontier-pack].to_h do |name|
+  fixture.verify_consumers(%w[af-xlsx-files-data af-cli-query-matcher af-frontier-pack].to_h do |name|
     [name, name == "af-cli-query-matcher" ? ENV.fetch("AF_QUERY_MATCHER_ROOT", File.join(sources, name)) : File.join(sources, name)]
   end)
   fixture.verify_code
