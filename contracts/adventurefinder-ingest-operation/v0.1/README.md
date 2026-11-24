@@ -137,7 +137,7 @@ Locators are root-relative, not identities. Allowed roots are:
 | `pipeline` | Explicit supported `AF_DATA_PIPELINE_ROOT`, else `AF_PROJECT_ROOT/af-data-pipeline` |
 | `converter` | Explicit supported `AF_PDF_CONVERTER_ROOT` / router `--pdf-converter-root`, else component default |
 | `source` | Explicit router `--source-root`, else `AF_PROJECT_ROOT/af-source-md-data` |
-| `catalog` | Explicit router `--catalog-root`, else `AF_PROJECT_ROOT/af-xlsx-data-sources` |
+| `catalog` | Explicit router `--catalog-root`, else `AF_PROJECT_ROOT/af-xlsx-files-data` |
 
 `AF_PROJECT_ROOT` remains the component parent. Preserve supported AFW/scorer
 overrides (`AF_AFW_ROOT`, `AF_SCORER_ROOT`, `--afw-root`, `--scorer-repo`) when

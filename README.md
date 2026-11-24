@@ -28,7 +28,7 @@ The frozen cross-repository and artifact snapshot is recorded in
 [`milestones/amc-6.0.yml`](milestones/amc-6.0.yml).
 
 This is historical context only. Live catalog roles remain authoritative in
-`af-xlsx-data-sources/PROJECT_STATE.yml`.
+`af-xlsx-files-data/PROJECT_STATE.yml`.
 
 ## Quick start
 
@@ -580,8 +580,12 @@ bin/af-doctor
 It checks required commands (including the resolved executable path and useful runtime
 versions), reports missing runtime-specific commands, checks expected repository
 checkouts and verifies the canonical source registry exists. For catalog diagnostics,
-it reads `PROJECT_STATE.yml` under `af-xlsx-data-sources` in the workspace. Pass
+it reads `PROJECT_STATE.yml` under `af-xlsx-files-data` in the workspace. Pass
 `--catalog-root PATH` to select a separate catalog directory.
+The default expects a checkout of `dtnorris/af-xlsx-files-data` with its own
+`origin`. Move an existing `af-xlsx-data-sources` checkout and update its origin
+before using the new defaults. Bootstrap refuses the old path while it is occupied,
+including by a symlink.
 The [public XLSX owner](https://github.com/dtnorris/af-xlsx-files) validates all
 three workbook bindings and their version ceilings before doctor reports
 `catalog_head`. Set `AF_XLSX_FILES_ROOT` to the absolute path of the owner's API
@@ -619,7 +623,7 @@ The machine-readable source of truth for this table is [`repos.yml`](repos.yml).
 | Repository | Lifecycle | Responsibility |
 | --- | --- | --- |
 | `md-specification-files` | current | Normative AdventureFinder specifications and semantic contracts |
-| `af-xlsx-data-sources` | current | Canonical AMC workbooks plus `PROJECT_STATE.yml` |
+| `af-xlsx-files-data` | current | Canonical AMC workbooks plus `PROJECT_STATE.yml` |
 | `af-source-md-data` | current/private | Canonical page-addressable source corpus plus `source_registry.yml` |
 | `af-data-pipeline` | current | Deterministic ingestion handoffs, AMC mutation, review, and finalization |
 | `af-cli-scoring-utility` | current | Source-grounded AFAO assessment/scoring evidence |
@@ -645,7 +649,7 @@ flowchart TD
     pdf --> corpus["af-source-md-data / source registry"]
     corpus --> pipeline["af-data-pipeline: intake, review, AMC promotion"]
     review["David + frontier-model adjudication"] --> pipeline
-    pipeline --> catalog["af-xlsx-data-sources: canonical AMC / PROJECT_STATE.yml"]
+    pipeline --> catalog["af-xlsx-files-data: canonical AMC / PROJECT_STATE.yml"]
     catalog --> afw["af-workloads: workload and qualification semantics"]
     corpus --> afw
     afw -->|"Opaque jobs / logical pools"| wlo["workload-orchestrator: generic execution"]
@@ -682,7 +686,7 @@ AdventureFinder intentionally separates several kinds of truth.
 AdventureFinder semantics. Implementation repositories automate those contracts; they
 do not silently redefine them.
 
-**Catalog state.** `af-xlsx-data-sources/PROJECT_STATE.yml` is the authority for moving
+**Catalog state.** `af-xlsx-files-data/PROJECT_STATE.yml` is the authority for moving
 roles such as `catalog_head`, `matcher_authorized_baseline`, and
 `production_dependency_floor`. A frozen operation may intentionally retain an older
 exact artifact.

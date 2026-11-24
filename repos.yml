@@ -13,8 +13,8 @@ repositories:
     visibility: private
     default: true
 
-  - name: af-xlsx-data-sources
-    github: dtnorris/af-xlsx-data-sources
+  - name: af-xlsx-files-data
+    github: dtnorris/af-xlsx-files-data
     role: Canonical AMC workbooks and PROJECT_STATE.yml moving-role authority.
     groups: [core, authority, data]
     lifecycle: current

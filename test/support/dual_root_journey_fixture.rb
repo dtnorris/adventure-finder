@@ -165,9 +165,9 @@ module Ig07cSourceAcceptance
     # in the selected layout. Missing consumers/dependencies or any refusal fail.
     def verify_consumers(source_roots)
       tools = directory("consumer-tools")
-      catalog_tools = File.join(tools, "af-xlsx-data-sources")
+      catalog_tools = File.join(tools, "af-xlsx-files-data")
       source_roots.each do |name, source_root|
-        names = name == "af-xlsx-data-sources" ? %w[bin/check-project-state-consumers contracts Gemfile Gemfile.lock] : %w[bin lib config Gemfile Gemfile.lock]
+        names = name == "af-xlsx-files-data" ? %w[bin/check-project-state-consumers contracts Gemfile Gemfile.lock] : %w[bin lib config Gemfile Gemfile.lock]
         self.class.copy_runtime(source_root, File.join(tools, name), names:)
       end
       FileUtils.cp(File.join(catalog, "PROJECT_STATE.yml"), File.join(catalog_tools, "PROJECT_STATE.yml"))

@@ -12,6 +12,9 @@ require_relative "adventure_finder_xlsx_files"
 
 module AdventureFinderWorkspace
   SCHEMA_VERSION = "adventurefinder-workspace/v0.1"
+  CATALOG_REPOSITORY = "af-xlsx-files-data"
+  CATALOG_GITHUB = "dtnorris/af-xlsx-files-data"
+  LEGACY_CATALOG_REPOSITORY = "af-xlsx-data-sources"
   TEST_TIMING_HISTORY_SCHEMA_VERSION = "adventurefinder-test-timings/v0.1"
   TEST_TIMING_HISTORY_LIMIT = 3
 
@@ -141,8 +144,12 @@ module AdventureFinderWorkspace
         name = repo.fetch("name")
         path = repo_path(repo)
 
-        if path.directory? && (path / ".git").directory?
-          if name == "af-workloads" && !afw_bootstrap_origin?(repo, path)
+        if name == CATALOG_REPOSITORY && (catalog_legacy_path? || path.symlink?)
+          err.puts format("%-30s ERROR: migrate the legacy catalog or resolve the symlink before bootstrapping: %s", name, path)
+          failures << name
+          next
+        elsif git_checkout?(path)
+          if ["af-workloads", CATALOG_REPOSITORY].include?(name) && !bootstrap_origin?(repo, path)
             err.puts format("%-30s ERROR: expected %s at %s; retain the existing checkout separately", name, repo.fetch("github"), path)
             failures << name
             next
@@ -435,11 +442,23 @@ module AdventureFinderWorkspace
 
     private
 
-    # Verify an existing AFW checkout belongs to the bootstrap manifest owner.
+    # Verify an existing checkout belongs to the bootstrap manifest owner.
     # Returns false for missing or different origins under either supported protocol.
-    def afw_bootstrap_origin?(repo, path)
+    # The private catalog also requires its literal origin to name the same owner.
+    def bootstrap_origin?(repo, path)
       origin = runner.capture("git", "remote", "get-url", "origin", chdir: path)
-      origin.success? && %w[ssh https].any? { |protocol| clone_url(repo, protocol) == origin.stdout.strip }
+      urls = %w[ssh https].map { |protocol| clone_url(repo, protocol) }
+      return false unless origin.success? && urls.include?(origin.stdout.strip)
+      return true unless repo.fetch("github") == CATALOG_GITHUB
+
+      configured = runner.capture("git", "config", "--local", "--get-all", "remote.origin.url", chdir: path)
+      configured.success? && urls.include?(configured.stdout.strip)
+    end
+
+    # Return true if the retired catalog path is occupied, including a dangling link.
+    def catalog_legacy_path?
+      legacy = root / LEGACY_CATALOG_REPOSITORY
+      legacy.exist? || legacy.symlink?
     end
 
     # Runs selected repositories in order and returns every planned suite result.
@@ -911,15 +930,25 @@ module AdventureFinderWorkspace
         errors << "--catalog-root requires a nonblank path"
         return
       end
-      catalog = catalog_root.nil? ? root / "af-xlsx-data-sources" : Pathname.new(catalog_root).expand_path
+      catalog = catalog_root.nil? ? root / CATALOG_REPOSITORY : Pathname.new(catalog_root).expand_path
       state_path = catalog / "PROJECT_STATE.yml"
       out.puts
       out.puts "Canonical project state:"
 
-      if catalog_root.nil? && !state_path.file?
-        out.puts "  WARN #{state_path} not found"
-        warnings << "PROJECT_STATE.yml unavailable"
-        return
+      if catalog_root.nil?
+        if catalog_legacy_path? || catalog.symlink?
+          errors << "migrate the legacy catalog or resolve the symlink before using the default: #{catalog}"
+          return
+        end
+        unless state_path.file?
+          out.puts "  WARN #{state_path} not found"
+          warnings << "PROJECT_STATE.yml unavailable"
+          return
+        end
+        unless git_checkout?(catalog) && bootstrap_origin?({"github" => CATALOG_GITHUB}, catalog)
+          errors << "expected a checkout of #{CATALOG_GITHUB} at #{catalog}"
+          return
+        end
       end
 
       owner = XlsxFiles.load!

@@ -33,7 +33,7 @@ second authority for implementation-specific or semantic facts.
 Authority remains:
 
 - `md-specification-files` — accepted AdventureFinder semantic specifications;
-- `af-xlsx-data-sources/PROJECT_STATE.yml` — moving canonical AMC role state;
+- `af-xlsx-files-data/PROJECT_STATE.yml` — moving canonical AMC role state;
 - `af-source-md-data` — canonical private source corpus and source registry;
 - each implementation repository — its code and repository-local tests.
 
