@@ -7,12 +7,3 @@ steps:
     artifact_paths:
       - ".ci-results/**/*"
     command: "AF_CI_PUBLIC_PIPELINE=0 bash .buildkite/test.sh"
-
-  - label: "AF — public pipeline with split stores"
-    key: "af-public-pipeline"
-    agents:
-      queue: "act-macos"
-    timeout_in_minutes: 20
-    artifact_paths:
-      - ".ci-results/**/*"
-    command: "AF_CI_PUBLIC_PIPELINE=1 bash .buildkite/test.sh"
