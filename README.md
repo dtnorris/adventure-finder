@@ -16,7 +16,7 @@ with the `-data` suffix. The public sample includes everything you need to try i
 
 [Try the public sample](#try-the-public-sample) ·
 [Use your own library](#use-your-own-library) ·
-[Set up the maintainer workspace](#maintainer-workspace-setup)
+[Set up the full workspace](#full-workspace-setup)
 
 ## Architecture
 
@@ -196,12 +196,15 @@ See [DIAGRAM.md](DIAGRAM.md) for the fuller ownership view.
 
 <a name="quick-start"></a>
 
-## Maintainer workspace setup
+<a name="maintainer-workspace-setup"></a>
 
-The commands below set up David’s full maintainer workspace, including the
-private data repositories listed in [`repos.yml`](repos.yml). To see how the
-tools fit together, see [Architecture](#architecture). To run and review
-scoring jobs in that workspace, see the [operator runbook](docs/operator-runbook.md).
+## Full workspace setup
+
+Use the full workspace to prepare scoring jobs, run them on configured workers,
+and review the results for your catalog. The setup commands below use David’s
+repository locations from [`repos.yml`](repos.yml), including his private data
+repositories. For your own library, see [the private repository layout](#set-up-your-own-private-repositories).
+Once your data and workers are configured, follow the [scoring runbook](docs/operator-runbook.md).
 
 Run the setup commands from the parent directory that will hold both the front
 door checkout and the separate non-Git component container.
