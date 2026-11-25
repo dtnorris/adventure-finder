@@ -152,6 +152,48 @@ The workspace defaults in [`repos.yml`](repos.yml) point to David’s repositori
 Creating repos with the same names under your account does not change those
 defaults.
 
+## Scoring architecture
+
+Scoring is one way to prepare a catalog. The public sample starts with a scored
+workbook, so it can skip the workers shown here.
+
+```mermaid
+flowchart TD
+    sources["Owned published sources"] -->|"PDF / born-digital"| pdf["pdf-to-llm-md-converter"]
+    sources -->|"Photographed pages"| photos["image-to-pdf-converter"]
+    photos --> pdf
+    pdf --> corpus["af-source-md-data / source registry"]
+    corpus --> pipeline["af-pipeline: intake, review, AMC promotion"]
+    review["David + frontier-model adjudication"] --> pipeline
+    pipeline --> catalog["af-xlsx-files-data: canonical AMC / PROJECT_STATE.yml"]
+    catalog --> afw["af-workloads: workload and qualification semantics"]
+    corpus --> afw
+    afw -->|"Opaque jobs / logical pools"| wlo["workload-orchestrator: generic execution"]
+    wlo -->|"Local command dispatch"| scorer["af-workloads scoring adapter → af-scorer"]
+    scorer -->|"Default inference"| local["Local Ollama worker"]
+    local -->|"Model response"| scorer
+    wlo -.->|"Readiness / guarded capacity APIs"| rpof["runpod-ollama-fleet: optional provider layer"]
+    rpof --> remote["Remote Ollama workers"]
+    scorer --> evidence["Scoring evidence / af-evidence-data"]
+    evidence --> pipeline
+    catalog --> frontier["af-frontier-pack → frontier reasoning"]
+```
+
+The workload orchestrator (WLO) runs opaque commands. The af-workloads (AFW)
+component owns adventure IDs, scoring dimensions, qualification policy, and result interpretation. The scoring utility owns prompt construction,
+rubrics and scoring output. The registered production context selects the
+public worker sources for each execution.
+Local Ollama Workers (LOW) and runpod-ollama-fleet (RPOF) independently publish exact READY workers. WLO discovers local,
+remote or mixed named registries and runs scoring commands locally against the
+selected endpoint. RPOF independently admits and manages bounded paid capacity;
+WLO does not create paid resources or dispatch jobs through a provider runner.
+
+Supporting deterministic selection remains `af-cli-query-matcher`: a natural-language
+request becomes validated AFPS and then deterministic filtering/ranking.
+
+This diagram describes responsibility and data flow, not Git dependency ownership.
+See [DIAGRAM.md](DIAGRAM.md) for the fuller ownership view.
+
 <a name="quick-start"></a>
 
 ## Maintainer workspace setup
@@ -755,48 +797,6 @@ bin/af-operator-acceptance --only operator-lifecycle
 The equivalent Rake entrypoint is `rake test:operator_acceptance`. This acceptance task
 is intentionally separate from the repository's default unit suite because it requires
 the WLO and RPOF sibling checkouts and their already-installed Bundler dependencies.
-
-## Scoring architecture
-
-Scoring is one way to prepare a catalog. The public sample starts with a scored
-workbook, so it can skip the workers shown here.
-
-```mermaid
-flowchart TD
-    sources["Owned published sources"] -->|"PDF / born-digital"| pdf["pdf-to-llm-md-converter"]
-    sources -->|"Photographed pages"| photos["image-to-pdf-converter"]
-    photos --> pdf
-    pdf --> corpus["af-source-md-data / source registry"]
-    corpus --> pipeline["af-pipeline: intake, review, AMC promotion"]
-    review["David + frontier-model adjudication"] --> pipeline
-    pipeline --> catalog["af-xlsx-files-data: canonical AMC / PROJECT_STATE.yml"]
-    catalog --> afw["af-workloads: workload and qualification semantics"]
-    corpus --> afw
-    afw -->|"Opaque jobs / logical pools"| wlo["workload-orchestrator: generic execution"]
-    wlo -->|"Local command dispatch"| scorer["af-workloads scoring adapter → af-scorer"]
-    scorer -->|"Default inference"| local["Local Ollama worker"]
-    local -->|"Model response"| scorer
-    wlo -.->|"Readiness / guarded capacity APIs"| rpof["runpod-ollama-fleet: optional provider layer"]
-    rpof --> remote["Remote Ollama workers"]
-    scorer --> evidence["Scoring evidence / af-evidence-data"]
-    evidence --> pipeline
-    catalog --> frontier["af-frontier-pack → frontier reasoning"]
-```
-
-The workload orchestrator (WLO) runs opaque commands. The af-workloads (AFW)
-component owns adventure IDs, scoring dimensions, qualification policy, and result interpretation. The scoring utility owns prompt construction,
-rubrics and scoring output. The registered production context selects the
-public worker sources for each execution.
-Local Ollama Workers (LOW) and runpod-ollama-fleet (RPOF) independently publish exact READY workers. WLO discovers local,
-remote or mixed named registries and runs scoring commands locally against the
-selected endpoint. RPOF independently admits and manages bounded paid capacity;
-WLO does not create paid resources or dispatch jobs through a provider runner.
-
-Supporting deterministic selection remains `af-cli-query-matcher`: a natural-language
-request becomes validated AFPS and then deterministic filtering/ranking.
-
-This diagram describes responsibility and data flow, not Git dependency ownership.
-See [DIAGRAM.md](DIAGRAM.md) for the fuller ownership view.
 
 ## Authority and trust boundaries
 
