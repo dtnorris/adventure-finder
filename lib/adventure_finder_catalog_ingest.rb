@@ -230,7 +230,7 @@ module AdventureFinderWorkspace
         project_root: context.fetch("project_root"),
         pipeline_root: context.fetch("pipeline_root"),
         afw_root: env["AF_AFW_ROOT"],
-        scorer_root: env["AF_SCORER_ROOT"] || Pathname(context.fetch("project_root")).join("af-cli-scoring-utility"),
+        scorer_root: env["AF_SCORER_ROOT"],
         source_root: context.fetch("source_root"),
         catalog_root: context.fetch("catalog_root"),
         operation_store: store,

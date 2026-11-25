@@ -267,8 +267,9 @@ defaults. A build with all authorities selected can leave it unset.
 
 For split workload preparation, set `AF_AFW_ROOT` to the reviewed public
 `dtnorris/af-workloads` checkout and `AF_AFW_DATA_ROOT` to an existing separate
-workload store. Select the scorer with `AF_SCORER_ROOT` and a roots-only
-`AF_SCORER_CONFIG` whose output directory is inside the workload store. The
+workload store. Preparation selects the pinned public `af-scorer` under
+`AF_PROJECT_ROOT`. Set a roots-only `AF_SCORER_CONFIG` whose output directory is
+inside the workload store. `AF_SCORER_ROOT` overrides the scorer checkout. The
 front door retains the code identity and store binding with the preparation.
 Use the same selections on resume. `bin/af-catalog prepare-workload` stops after
 preparation. Offline case replay uses the public checkout's
@@ -279,7 +280,7 @@ scorer selections and with `AF_AFW_DATA_ROOT` unset. Frozen production batches
 continue to use the paths in their production context. Keep the original
 checkout and state available for this recovery.
 
-The three archived/experimental entries remain opt-in with `--all` and live outside
+The three adjacent archived/experimental entries remain opt-in with `--all` and live outside
 the component container, beside the front door. `--adjacent-root` or
 `AF_ADJACENT_ROOT` explicitly selects a different outside parent. Legacy
 `af-inference-orchestrator-production` remains HOLD outside, unmanaged by this list.
@@ -299,7 +300,10 @@ The distinction matters: an old experiment should be easy to discover without be
 accidentally treated as a current production dependency.
 
 The manifest also retains the experimental `5e-tools-corpus-converter` and the
-archived `af-corpus-ingester-basics` and `af-matcher-cli`.
+archived `af-corpus-ingester-basics` and `af-matcher-cli`. The private
+`md-specification-files` and `af-cli-scoring-utility` entries are opt-in for
+historical fixtures and recovery. Use the original revisions and inputs named by
+the historical operation or fixture.
 
 ## Commands
 
@@ -308,6 +312,13 @@ archived `af-corpus-ingester-basics` and `af-matcher-cli`.
 Clone missing repositories into the workspace root.
 
 Normal bootstrap includes current repositories marked `default: true` in `repos.yml`.
+It clones the pinned public `af-specification-md` and `af-scorer` into sibling
+directories of the same names. Use the specification checkout for `--spec-root`
+and the scorer configuration's `paths.specification_root`. Setup and tests run
+in `af-scorer`; the specification checkout supplies documents.
+If either public slot is occupied, bootstrap verifies the origin and pin and
+reports a conflict before setup. For an existing workspace, use a fresh component
+root or reconcile the conflicting checkout separately before rerunning bootstrap.
 It clones the public `dtnorris/af-workloads` into the `af-workloads` slot and
 checks the origin when that checkout already exists. If the slot holds the
 private donor, retain it separately and select it explicitly for recovery.

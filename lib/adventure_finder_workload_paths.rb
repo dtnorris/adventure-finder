@@ -8,6 +8,22 @@ module AdventureFinderWorkspace
   class WorkloadPaths
     attr_reader :code, :data
 
+    # Return the explicit scorer path or the workspace's verified public scorer.
+    # Missing or mismatched default checkouts raise Error before scorer use.
+    def self.scorer_root!(project_root, override: nil)
+      return Pathname(override).expand_path if override
+
+      manifest = Manifest.new(File.expand_path("../repos.yml", __dir__))
+      scorer = manifest.selected.find { |repo| repo.fetch("name") == SCORER_REPOSITORY }
+      raise Error, "repos.yml must pin the public scorer revision" unless scorer && scorer["revision"]
+
+      path = Pathname(project_root).expand_path.join(scorer.fetch("checkout", SCORER_REPOSITORY))
+      raise Error, "bootstrap the public scorer at #{path}" unless path.directory?
+
+      CheckoutIdentity.verify!(path, scorer)
+      path
+    end
+
     # Resolve selected directories. Public callers must explicitly select both
     # roots. Invalid or overlapping selections raise Error before owner writes.
     def initialize(code:, data:, explicit_code: true)
@@ -73,7 +89,7 @@ module AdventureFinderWorkspace
     def check_scorer!(repo, config)
       return unless data
 
-      raise Error, "select AF_SCORER_ROOT and AF_SCORER_CONFIG explicitly" unless repo && config
+      raise Error, "select AF_SCORER_CONFIG explicitly" unless config
 
       require code.join("lib/af_workloads/scorer_input_selection").to_s
       selection = AFWorkloads::ScorerInputSelection.load(config)

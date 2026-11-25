@@ -5,12 +5,15 @@ workspace_root_default: /Users/davidnorris/code/adventure-finder-components
 # `default: true` means normal bootstrap/status/sync/test operations include the
 # repository. Historical/experimental repos remain documented but opt-in.
 repositories:
-  - name: md-specification-files
-    github: dtnorris/md-specification-files
+  - name: af-specification-md
+    github: dtnorris/af-specification-md
+    clone_protocol: https
+    revision: 394a44c2c2052ce2eeb6d28cd7647ad8a50acfcf
+    verify_origin: true
     role: Normative AdventureFinder specifications and semantic contracts.
     groups: [core, authority]
     lifecycle: current
-    visibility: private
+    visibility: public
     default: true
 
   - name: af-xlsx-files-data
@@ -59,16 +62,18 @@ repositories:
     verify_origin: true
     requires: [git]
 
-  - name: af-cli-scoring-utility
-    github: dtnorris/af-cli-scoring-utility
+  - name: af-scorer
+    github: dtnorris/af-scorer
+    clone_protocol: https
+    revision: fdd620850b24a5b801eb68391ca3e98c22d4b28a
+    verify_origin: true
     role: Source-grounded AFAO assessment generation and scoring evidence.
     groups: [core, code, scoring]
     lifecycle: current
-    visibility: private
+    visibility: public
     default: true
-    setup: bundle install
+    setup: BUNDLE_FROZEN=true bundle install
     test: bundle exec rake test
-    test_duration_hint_seconds: 1.57
     requires: [ruby, bundle, git]
 
   - name: af-workloads
@@ -129,7 +134,7 @@ repositories:
     role: Deterministic consumption bridge from canonical artifacts to frontier-model reasoning packs.
     groups: [core, code, consumption]
     lifecycle: current
-    visibility: private
+    visibility: public
     default: true
     setup: bundle install
     test: bundle exec rake
@@ -189,6 +194,22 @@ repositories:
     notes:
       - Shallow-cloned by default because this repository is materially larger than the other AdventureFinder repositories.
       - Run `git fetch --unshallow` inside the repository only when historical Git traversal is actually needed.
+
+  - name: md-specification-files
+    github: dtnorris/md-specification-files
+    role: Private predecessor for frozen specification reads and historical Frontier journey fixtures.
+    groups: [archive]
+    lifecycle: archived
+    visibility: private
+    default: false
+
+  - name: af-cli-scoring-utility
+    github: dtnorris/af-cli-scoring-utility
+    role: Private predecessor for frozen scoring recovery and historical operator acceptance fixtures.
+    groups: [code, archive]
+    lifecycle: archived
+    visibility: private
+    default: false
 
   - name: 5e-tools-corpus-converter
     location: adjacent

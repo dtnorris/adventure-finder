@@ -45,8 +45,10 @@ bin/af-catalog prepare-workload OPERATION_UUID \
   --historical-project-state RETAINED_PROJECT_STATE.yml
 ```
 
-When selecting the public scorer with `AF_SCORER_ROOT`, also explicitly select
-`AF_SCORER_CONFIG=/absolute/path/to/input-selection.yml`. Use AFW's roots-only
+Preparation defaults to the manifest-pinned `af-scorer` checkout under
+`AF_PROJECT_ROOT`. An explicit `AF_SCORER_ROOT` selects a different checkout,
+including the original scorer for historical recovery. For split preparation,
+set `AF_SCORER_CONFIG=/absolute/path/to/input-selection.yml`. Use AFW's roots-only
 configuration: `paths.xlsx_root`, `specification_root`, `source_root`,
 `output_root`, and optional `files.source_registry`. The coordinator passes the
 same file through staged selection, compilation, inspection and the rendered
