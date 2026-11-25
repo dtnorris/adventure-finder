@@ -9,6 +9,12 @@ page-marked Markdown from your library. You can filter the catalog to a shortlis
 and open the matching source pages locally. In that workflow, your private catalog,
 books, and extracted passages stay on your machine.
 
+The tools are public. David keeps his own library in separate private repositories
+that use the `-data` suffix. For example, `af-source-md` provides the tools for
+reading source pages, while `af-source-md-data` holds his books’ Markdown files
+and source registry. You can try the public sample without access to any of
+David’s repositories marked `-data`.
+
 **Sample question.** What can I run with little prep that still gives players
 choices that matter? The public sample has three adventures across two sources.
 Filtering for low GM Preparation Burden and high Consequential Player Agency
@@ -125,11 +131,10 @@ This is historical context only. Live catalog roles remain authoritative in
 To build a private Frontier pack from an existing accepted catalog and a selected
 source library, follow [Build and use a private Frontier pack](docs/private-frontier-pack.md).
 
-For maintainers with access to the private repositories in [`repos.yml`](repos.yml),
-the commands below set up the full workspace. For production operation, use the
-[composed operator runbook](docs/operator-runbook.md). It resolves short handles
-and calls component-owned public interfaces for execution, capacity and review.
-A map of the components and their responsibilities is under [Architecture](#architecture).
+The commands below set up David’s full maintainer workspace, including the
+private data repositories listed in [`repos.yml`](repos.yml). To see how the
+tools fit together, see [Architecture](#architecture). To run and review
+scoring jobs in that workspace, see the [operator runbook](docs/operator-runbook.md).
 
 Run the setup commands from the parent directory that will hold both the front
 door checkout and the separate non-Git component container.
