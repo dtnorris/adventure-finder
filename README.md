@@ -810,6 +810,10 @@ roles such as `catalog_head`, `matcher_authorized_baseline`, and
 `production_dependency_floor`. A frozen operation may intentionally retain an older
 exact artifact.
 
+<a name="historical-milestones"></a>
+
+For the September 2026 catalog baseline, see the [AMC 6.0 milestone record](milestones/amc-6.0.yml).
+
 **Source corpus.** `af-source-md-data` is the private canonical Markdown corpus
 and source-resolution authority. It contains copyrighted owned source material and must
 remain private.
@@ -896,13 +900,3 @@ and evidence under `.ci-results/`.
 `rake test:operator_acceptance` remains a separate cross-repository command.
 The GitHub workflow tests only this repository's own orchestration code and manifest.
 It does not attempt to clone private sibling repositories in CI.
-
-## Historical milestones
-
-**AMC 6.0 — September 19, 2026.** AMC 6.0 marks completion of the established
-13-column production-scoring baseline across all 879 Adventure Catalog records.
-The frozen cross-repository and artifact snapshot is recorded in
-[`milestones/amc-6.0.yml`](milestones/amc-6.0.yml).
-
-This is historical context only. Live catalog roles remain authoritative in
-`af-xlsx-files-data/PROJECT_STATE.yml`.
