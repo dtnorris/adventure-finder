@@ -862,6 +862,45 @@ class AdventureFinderWorkspaceTest < Minitest::Test
     assert_equal 1, repo["clone_depth"]
   end
 
+  # Runs normal bootstrap for the evidence entry with a local Git endpoint.
+  # Every network protocol is disabled, so a stale manifest URL fails to clone.
+  def test_default_bootstrap_clones_evidence_from_new_url_into_retained_directory
+    repo = manifest.repositories.find { |entry| entry.fetch("name") == "llm-response-data" }
+    Dir.mktmpdir do |directory|
+      checkout_root = File.join(directory, "components")
+      endpoint = File.join(directory, "endpoint.git")
+      front_door = File.expand_path("..", __dir__)
+      bin = File.join(directory, "bin")
+      new_url = "git@github.com:dtnorris/af-evidence-data.git"
+      environment = {
+        "AF_GIT_PROTOCOL" => nil,
+        "GIT_CONFIG_NOSYSTEM" => "1",
+        "GIT_CONFIG_GLOBAL" => File::NULL,
+        "GIT_CONFIG_COUNT" => "1",
+        "GIT_CONFIG_KEY_0" => "url.file://#{endpoint}.insteadOf",
+        "GIT_CONFIG_VALUE_0" => new_url,
+        "GIT_ALLOW_PROTOCOL" => "file"
+      }
+      assert system(environment, "git", "init", "--quiet", "--bare", "--template=", endpoint)
+      FileUtils.mkdir_p(bin)
+      FileUtils.cp(%w[af-bootstrap af-workspace].map { |name| File.join(front_door, "bin", name) }, bin)
+      File.symlink(File.join(front_door, "lib"), File.join(directory, "lib"))
+      File.write(File.join(directory, "repos.yml"), manifest.data.merge("repositories" => [repo]).to_yaml)
+
+      output, status = Open3.capture2e(environment, File.join(bin, "af-bootstrap"), "--root", checkout_root)
+      assert status.success?, output
+      assert_match(/^llm-response-data\s+cloning \(depth 1\)$/, output)
+      assert_equal ["llm-response-data"], Dir.children(checkout_root)
+      checkout = File.join(checkout_root, "llm-response-data")
+      origin, status = Open3.capture2e(environment, "git", "config", "--local", "--get", "remote.origin.url", chdir: checkout)
+      assert status.success?, origin
+      assert_equal new_url, origin.strip
+      output, status = Open3.capture2e(environment, File.join(bin, "af-bootstrap"), "--root", checkout_root)
+      assert status.success?, output
+      assert_match(/^llm-response-data\s+already present$/, output)
+    end
+  end
+
   def test_clone_urls_support_ssh_and_https
     Dir.mktmpdir do |dir|
       workspace = AdventureFinderWorkspace::Workspace.new(

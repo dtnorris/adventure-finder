@@ -179,7 +179,7 @@ repositories:
       - bin/setup creates/reuses the repository-local .venv and installs the checked-in Python requirements there.
 
   - name: llm-response-data
-    github: dtnorris/llm-response-data
+    github: dtnorris/af-evidence-data
     role: Historical/raw AdventureFinder evidence archive; never project-state authority.
     groups: [evidence, data]
     lifecycle: current

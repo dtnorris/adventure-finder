@@ -61,10 +61,11 @@ For historical operator acceptance scenarios that require donor code, set
 The public split-pipeline test in CI uses the catalog front door and
 independently allocated synthetic stores.
 
-`llm-response-data` is intentionally shallow-cloned (`--depth 1`) because its Git
-history is large and normal AdventureFinder work generally needs the current evidence
-tree, not every historical object. Unshallow it only when the question actually requires
-Git-history traversal.
+Bootstrap shallow-clones the private `dtnorris/af-evidence-data` archive into
+`llm-response-data`. The directory name also locates retained evidence for installed
+readers. For an existing checkout, the operator updates its fetch and push origins
+after verifying repository identity. Unshallow the archive only when Git-history
+traversal is required.
 
 Archived and experimental repositories are documented but opt-in through `--all`.
 
