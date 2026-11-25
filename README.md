@@ -1,52 +1,219 @@
 # AdventureFinder
 
-The **workspace/front-door repository** for the AdventureFinder polyrepo project.
+Which adventure from the books I own fits my group, and which pages should I
+read to prepare it? David Norris built AdventureFinder to answer that question.
+It uses a scored adventure catalog and a registry of page-marked source files
+to filter your library and open the matching pages locally.
 
-AdventureFinder's north star is to build the best possible artifact for David +
-frontier ChatGPT to reason about and explore David's TTRPG adventure library. This
-repository does not own that artifact's canonical truth. It makes the repositories
-that *do* own it easier to understand, clone, inspect, synchronize, test, and reproduce.
+**Sample question.** What can I run with little prep that still gives players
+choices that matter? The public sample has three adventures across two sources.
+Filtering for low GM Preparation Burden and high Consequential Player Agency
+shortlists **ADV-0001 · Adventure One**. The source lookup retrieves **Book One,
+printed pages 10–11**, where Adventure One begins and continues.
 
-## What this repository owns
+The tools are public. David keeps his catalog and books in private repositories
+with the `-data` suffix. The public sample includes everything you need to try it.
 
-Only cross-repository concerns:
+[Try the public sample](#try-the-public-sample) ·
+[Use your own library](#use-your-own-library) ·
+[Set up the full workspace](#full-workspace-setup)
 
-- the map of AdventureFinder repositories and their responsibilities;
-- safe multi-repo bootstrap/status/sync/test commands;
-- lightweight environment/integrity checks;
-- optional workspace commit snapshots; and
-- future tests for genuinely cross-repository contracts.
+## Architecture
 
-It deliberately contains **no copied AMC workbook, book corpus, scoring semantics,
-matching semantics, or model evidence**.
+### From owned books to a shortlist
 
-## Historical milestones
+Register the pages from a book so each adventure can point back to its source.
+Review the adventure boundaries and proposed scores, then build a Frontier pack
+from the accepted catalog, registry, and scoring definitions. The pack lets you
+filter on recorded scores and look up the pages behind each match.
 
-**AMC 6.0 — September 19, 2026.** AMC 6.0 marks completion of the established
-13-column production-scoring baseline across all 879 Adventure Catalog records.
-The frozen cross-repository and artifact snapshot is recorded in
-[`milestones/amc-6.0.yml`](milestones/amc-6.0.yml).
+```mermaid
+flowchart TD
+    books["Owned books"] --> pages["Registered source pages"]
+    pages --> review["Review adventures and scores"]
+    review --> catalog["Accepted catalog"]
+    catalog --> pack["Build a Frontier pack"]
+    pages --> pack
+    pack --> shortlist["Filter to a shortlist"]
+    shortlist --> lookup["Read the matching pages"]
+    lookup --> choice["Choose an adventure"]
+    lookup -.-> compare["Optional ChatGPT comparison"]
+    compare --> choice
+```
 
-This is historical context only. Live catalog roles remain authoritative in
-`af-xlsx-files-data/PROJECT_STATE.yml`.
+The CLI reproduces the shortlist and source lookup. You decide which adventure
+to run. For the model and worker side of catalog preparation, see
+[Scoring architecture](#scoring-architecture).
 
-## Quick start
+## Repository map
 
-To build a private Frontier pack from an existing accepted catalog and a selected
-source library, follow [Build and use a private Frontier pack](docs/private-frontier-pack.md).
+<a name="what-this-repository-owns"></a>
 
-For production operation, start with the
-[composed operator runbook](docs/operator-runbook.md). It resolves short handles
-and calls component-owned public interfaces for execution, capacity and review.
+[adventure-finder](https://github.com/dtnorris/adventure-finder) is the workspace repository you are reading.
+It provides the commands to clone, check, test, and snapshot the component
+repositories. The catalog, book files, and scoring evidence live separately.
 
-The front door stays outside the non-Git component container. For a new installation:
+| Stage | Public tools | What they do |
+| --- | --- | --- |
+| Prepare book pages | [image-to-pdf-converter](https://github.com/dtnorris/image-to-pdf-converter) · [pdf-to-llm-md-converter](https://github.com/dtnorris/pdf-to-llm-md-converter) · [af-source-md](https://github.com/dtnorris/af-source-md) | Turn photographed pages into a PDF, convert PDFs to page-marked Markdown, and register the files for source lookup. |
+| Build the catalog | [af-pipeline](https://github.com/dtnorris/af-pipeline) · [af-xlsx-files](https://github.com/dtnorris/af-xlsx-files) | Review adventure boundaries and scoring evidence, work with catalog workbooks, and adopt the reviewed catalog. |
+| Score adventures | [af-specification-md](https://github.com/dtnorris/af-specification-md) · [af-workloads](https://github.com/dtnorris/af-workloads) · [af-scorer](https://github.com/dtnorris/af-scorer) · [af-evidence](https://github.com/dtnorris/af-evidence) | Define scoring dimensions, prepare scoring jobs, propose assessments, and preserve the evidence for review. |
+| Explore your library | [af-frontier-pack](https://github.com/dtnorris/af-frontier-pack) | Build a pack from an accepted catalog and sources, filter adventures by score, and retrieve the pages for each match. |
+| Run scoring jobs | [workload-orchestrator](https://github.com/dtnorris/workload-orchestrator) · [local-ollama-workers](https://github.com/dtnorris/local-ollama-workers) | Schedule jobs and make local Ollama workers available for scoring. |
+
+The [private repository layout](#set-up-your-own-private-repositories) lists the
+five data stores and their contents. Maintainers can find checkout names,
+optional infrastructure, and archived tools in the [workspace manifest](repos.yml).
+
+## Try the public sample
+
+You’ll need Bash, Git, Ruby 3.2 or later with RubyGems, `unzip`, and HTTPS access
+to GitHub and RubyGems. Run the block from an empty directory you can write to.
+It clones the public repositories at fixed revisions, installs REXML 3.4.4 in
+that directory, and builds a fresh pack from the synthetic workbook, registry,
+and Markdown. The sample runs locally and requires no account, private library,
+or model. [Frontier Pack fixture](https://github.com/dtnorris/af-frontier-pack/tree/e6af8ed5695e50a91c6878a03a20461222f2b0b4/test/fixtures)
 
 ```bash
-export AF_PROJECT_ROOT=/Users/davidnorris/code/adventure-finder-components
-export AF_ADVENTURE_FINDER_ROOT=/Users/davidnorris/code/adventure-finder
-cd /Users/davidnorris/code
+env -i PATH="$PATH" bash <<'BASH'
+set -euo pipefail
+mkdir home gems
+export HOME="$PWD/home" GEM_HOME="$PWD/gems" GEM_PATH="$PWD/gems"
+export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
+
+checkout() {
+  local repo=$1 revision=$2
+  git -c credential.helper= clone --no-checkout "https://github.com/dtnorris/$repo.git" "$repo"
+  git -C "$repo" -c advice.detachedHead=false checkout --detach "$revision"
+  test "$(git -C "$repo" rev-parse HEAD)" = "$revision"
+}
+checkout af-frontier-pack e6af8ed5695e50a91c6878a03a20461222f2b0b4
+checkout af-source-md a44019961e822b19a727e3562c2ecda4cfe0a7bd
+checkout af-specification-md 394a44c2c2052ce2eeb6d28cd7647ad8a50acfcf
+ruby -S gem install rexml --version 3.4.4 --no-document --clear-sources --source https://rubygems.org
+
+export AF_SOURCE_MD_ROOT="$PWD/af-source-md"
+export AF_FRONTIER_OUTPUT="$PWD/pack"
+frontier=./af-frontier-pack/bin/af-frontier
+fixture=af-frontier-pack/test/fixtures
+"$frontier" build --amc "$fixture/5e_Adventure_Master_Catalog_9.9.9.xlsx" \
+  --source-registry "$fixture/source_registry.yml" --corpus-root "$fixture/corpus" \
+  --public-afao af-specification-md/AdventureFinder_Analysis_Ontology_AFAO_v1.6.1.md
+"$frontier" doctor
+
+"$frontier" select --where 'GMPB<=2' --where 'CPA>=4' | tee shortlist.tsv
+"$frontier" source ADV-0001 | tee source.json
+"$frontier" source ADV-0001 --emit | tee source.md
+
+"$frontier" select --where 'GMPB<=2' --where 'CPA>=5' | tee tighter-shortlist.tsv
+BASH
+```
+
+The build reports `Built 3 adventures across 2 sources` and `doctor` reports
+that the pack passed its integrity checks. `select` applies both score thresholds
+and writes one row to `shortlist.tsv`, `ADV-0001` followed by `Adventure One`.
+`source.json` gives the source and range. In `source.md`, the printed-page
+markers are 10 and 11 and the text reads “Adventure One begins.” and “Adventure
+One continues.” Compare those markers to the fixture. The page 9 prelude and page
+12 text fall outside the excerpt. Raising the agency threshold from 4 to 5 gives
+`Matched 0 adventures.` and an empty `tighter-shortlist.tsv`.
+[Book One source fixture](https://github.com/dtnorris/af-frontier-pack/blob/e6af8ed5695e50a91c6878a03a20461222f2b0b4/test/fixtures/corpus/Book_One_LLM_Edition.md)
+
+The CLI filters recorded scores and retrieves the matching pages. You can ask
+ChatGPT to compare alternatives using public sample material or notes you have
+permission to share. Keep private source material local, check the trade-offs
+against the pages, and make the final choice for your group.
+
+## Use your own library
+
+**Already have a catalog?** With an accepted catalog, a source registry, and
+the matching book files, follow [Build and use a private Frontier pack](docs/private-frontier-pack.md).
+
+**Starting a new library?** Use the layout below to keep your book files,
+catalog workbooks, and scoring records in private repositories.
+
+### Set up your own private repositories
+
+To use the full workflow with your own books, clone the five public tools below.
+In your own account or organization, create a separate **private** repository
+for each tool, using the name in the second column. Each private repository can
+start empty. As you build your library, keep these files in the corresponding
+private checkout.
+
+| Public tool to clone | Private repository to create | What goes there |
+| --- | --- | --- |
+| `af-pipeline` | `af-pipeline-data` | Approvals, review records, and pipeline receipts |
+| `af-workloads` | `af-workloads-data` | Scoring workloads and their generated plans |
+| `af-xlsx-files` | `af-xlsx-files-data` | Catalog workbooks and the file that identifies the accepted workbook |
+| `af-source-md` | `af-source-md-data` | Page-marked Markdown from your books and the source registry |
+| `af-evidence` | `af-evidence-data` | Saved evidence bundles and their manifests |
+
+The workspace defaults in [`repos.yml`](repos.yml) point to David’s repositories.
+Creating repos with the same names under your account does not change those
+defaults.
+
+## Scoring architecture
+
+Scoring is one way to prepare a catalog. The public sample starts with a scored
+workbook, so it can skip the workers shown here.
+
+```mermaid
+flowchart TD
+    sources["Owned published sources"] -->|"PDF / born-digital"| pdf["pdf-to-llm-md-converter"]
+    sources -->|"Photographed pages"| photos["image-to-pdf-converter"]
+    photos --> pdf
+    pdf --> corpus["af-source-md-data / source registry"]
+    corpus --> pipeline["af-pipeline: intake, review, AMC promotion"]
+    review["David + frontier-model adjudication"] --> pipeline
+    pipeline --> catalog["af-xlsx-files-data: canonical AMC / PROJECT_STATE.yml"]
+    catalog --> afw["af-workloads: workload and qualification semantics"]
+    corpus --> afw
+    afw -->|"Opaque jobs / logical pools"| wlo["workload-orchestrator: generic execution"]
+    wlo -->|"Local command dispatch"| scorer["af-workloads scoring adapter → af-scorer"]
+    scorer -->|"Default inference"| local["Local Ollama worker"]
+    local -->|"Model response"| scorer
+    wlo -.->|"Readiness / guarded capacity APIs"| rpof["runpod-ollama-fleet: optional provider layer"]
+    rpof --> remote["Remote Ollama workers"]
+    scorer --> evidence["Scoring evidence / af-evidence-data"]
+    evidence --> pipeline
+    catalog --> frontier["af-frontier-pack → frontier reasoning"]
+```
+
+The workload orchestrator (WLO) runs opaque commands. The af-workloads (AFW)
+component owns adventure IDs, scoring dimensions, qualification policy, and result interpretation. The scoring utility owns prompt construction,
+rubrics and scoring output. The registered production context selects the
+public worker sources for each execution.
+Local Ollama Workers (LOW) and runpod-ollama-fleet (RPOF) independently publish exact READY workers. WLO discovers local,
+remote or mixed named registries and runs scoring commands locally against the
+selected endpoint. RPOF independently admits and manages bounded paid capacity;
+WLO does not create paid resources or dispatch jobs through a provider runner.
+
+Supporting deterministic selection remains `af-cli-query-matcher`: a natural-language
+request becomes validated AFPS and then deterministic filtering/ranking.
+
+This diagram describes responsibility and data flow, not Git dependency ownership.
+See [DIAGRAM.md](DIAGRAM.md) for the fuller ownership view.
+
+<a name="quick-start"></a>
+
+<a name="maintainer-workspace-setup"></a>
+
+## Full workspace setup
+
+Use the full workspace to prepare scoring jobs, run them on configured workers,
+and review the results for your catalog. The setup commands below use David’s
+repository locations from [`repos.yml`](repos.yml), including his private data
+repositories. For your own library, see [the private repository layout](#set-up-your-own-private-repositories).
+Once your data and workers are configured, follow the [scoring runbook](docs/operator-runbook.md).
+
+Run the setup commands from the parent directory that will hold both the front
+door checkout and the separate non-Git component container.
+
+```bash
 git clone git@github.com:dtnorris/adventure-finder.git
-cd "$AF_ADVENTURE_FINDER_ROOT"
+export AF_PROJECT_ROOT="$PWD/adventure-finder-components"
+cd adventure-finder
+export AF_ADVENTURE_FINDER_ROOT="$PWD"
 
 bin/af-doctor
 bin/af-bootstrap
@@ -117,255 +284,24 @@ the component container, beside the front door. `--adjacent-root` or
 `AF_ADJACENT_ROOT` explicitly selects a different outside parent. Legacy
 `af-inference-orchestrator-production` remains HOLD outside, unmanaged by this list.
 
+## Repository selection
+
+Normal commands use entries with:
+
+```yaml
+default: true
+```
+
+Use `--core` for only the repositories tagged `core`, or `--all` to include retained
+experimental/archived repositories.
+
+The distinction matters: an old experiment should be easy to discover without being
+accidentally treated as a current production dependency.
+
+The manifest also retains the experimental `5e-tools-corpus-converter` and the
+archived `af-corpus-ingester-basics` and `af-matcher-cli`.
+
 ## Commands
-
-### `bin/af-context`
-
-Resolve a registered production handle to frozen, explicit cross-repository context:
-
-```bash
-bin/af-context batch 39
-bin/af-context fleet A --json
-```
-
-The checked-in registry records workspace-relative production roots, artifact paths,
-identities, and frozen hashes. Resolution uses `AF_PROJECT_ROOT`, or the manifest's
-default workspace root when the variable is unset, and returns absolute paths. It does
-not discover contexts from the current directory, shell variables other than the
-workspace-root override, or numerically newest files.
-
-Default output is a compact operator summary. Use `--json` for the complete,
-deterministic machine-readable context.
-
-Use the read-only verifier when the production checkouts are mounted:
-
-```bash
-bin/af-context batch 39 --verify
-bin/af-context fleet A --verify
-```
-
-Batch verification checks path presence plus the registered plan ID and SHA-256. Fleet
-verification follows RPOF's existing immutable chain from the normalized campaign
-declaration through the campaign identity and budget declaration to the durable binding
-hash. It never starts work, creates resources, changes capacity, or writes provider
-state.
-
-### `bin/af-model`
-
-Resolve a short model alias once against a frozen production plan without contacting a
-worker, provider, or inference endpoint:
-
-```bash
-bin/af-model preflight batch 39 qwen35
-bin/af-model preflight batch 39 qwen35 --json
-```
-
-Batch 39 registers `qwen35`, `qwen27`, `gemma`, and `gptoss`. The current Qwen
-aliases resolve as `qwen35 -> frozen pool qwen -> qwen3.6:35b-a3b` and
-`qwen27 -> frozen pool qwen27 -> qwen3.6:27b`. The emitted artifact is bound to
-the batch identity, plan ID, plan SHA-256, and pool ID. Its separate generic
-capability request copies the plan's exact Ollama model, digest, context,
-residency, and optional GPU constraint. Aliases contain no model defaults and
-are never passed downstream for reinterpretation. AdventureFinder production
-currently requires `require_fully_gpu_resident` to be exactly `true`; preflight
-rejects a frozen plan that disables or omits that requirement.
-
-Deliberately bootstrap one exact local capability, then use the ordinary batch
-workflow:
-
-```bash
-bin/af-local bootstrap batch 39 qwen35
-bin/af-batch start 39
-```
-
-`af-local bootstrap` persists the exact generic capability-request bytes and
-invokes LOW with `bootstrap --capability-request PATH --json`. `af-batch` never
-bootstraps a model. It writes WLO's strict
-named-source configuration for the independently selected `low workers --json`
-and/or `rpof workers --json` publishers. WLO consumes those registries directly,
-preserves their namespaces and checkpoints, and schedules over their union.
-AdventureFinder creates no synthetic registry identity.
-
-### `bin/af-batch`
-
-Open the exact registered production batch as WLO's foreground work owner:
-
-```bash
-bin/af-batch start 39
-bin/af-batch resume 39
-bin/af-batch retry 39 0946-openness --reason "confirmed transient model timeout" --dry-run
-bin/af-batch recovery 39
-```
-
-`start` never remanifests AFW work, clears pause, retries terminal attempts, or
-acknowledges a breaker. `resume` requires retained execution state and delegates
-to WLO's explicit foreground resume. Both verify the registered plan ID and
-SHA-256 first, use WLO's compact live dashboard, and preserve FO-06 Ctrl-C
-cancellation. Provider capacity is unchanged. See
-[`docs/batch-foreground.md`](docs/batch-foreground.md).
-
-`retry` resolves FO-07 short handles against the frozen AFW plan, verifies the
-canonical job through WLO diagnostics, requires an operator reason, and
-delegates exact selected authorization to WLO. `recovery` is read-only. `repair`
-is a separate fail-closed command; WLO currently exposes no safe generic
-retained-state repair transformation.
-
-### Durable local ingest execution
-
-After a catalog ingest has produced one verified staged workload, the same front door
-can establish each frozen local capability and advance one authoritative WLO
-execution without per-model bootstrap commands:
-
-```bash
-bin/af-catalog plan-local-capabilities OPERATION_UUID --json
-bin/af-catalog local-start OPERATION_UUID --selected-by OPERATOR
-bin/af-catalog local-status OPERATION_UUID
-```
-
-`local-start` records immutable local-only authority, delegates readiness to LOW, and
-delegates scheduling and attempts to WLO. It preserves one worker identity and busy
-slot across safe capability transitions. It has no remote/paid fallback and grants no
-implicit retry, breaker acknowledgement, score acceptance, or catalog promotion.
-Use `local-resume OPERATION_UUID` after a coordinator-owned drain/restart. An ordinary
-operator pause additionally requires the explicit `--continue-operator-pause` flag
-after public drain is verified. See
-[`docs/LOCAL_INGEST_EXECUTION_V0.1.md`](docs/LOCAL_INGEST_EXECUTION_V0.1.md).
-
-### `bin/af-operator-acceptance`
-
-Replay the production orchestration control paths with the component repositories'
-existing fake workers, fake provider, temporary state roots, and real CLI test seams:
-
-```bash
-bin/af-operator-acceptance
-```
-
-The harness resolves `adventure-finder`, `workload-orchestrator`, and
-`runpod-ollama-fleet` from the workspace root, strips provider credentials, and loads a
-TCP/HTTP network guard into every scenario process. It exercises registered production
-context resolution, dynamic READY-worker consumption, late capacity, local execution
-evidence, pause/resume behavior, observer/process-ownership boundaries, campaign
-admission and teardown, and representative fail-closed paths. It neither starts Ollama
-nor contacts RunPod or an inference endpoint.
-
-The named `rpof-safety-gate` scenario adds FO-08's finite crash-liability,
-guardian identity/failure-domain, compute-only billing-scope, and pre-mutation
-refusal proofs using the same offline fake-provider boundary.
-
-`operator-lifecycle` is the explicit end-to-end replay: it resolves the portable
-production context beneath a temporary workspace, starts a fake-backed campaign,
-publishes NOT_READY then READY workers through RPOF's real registry producer, lets WLO
-complete two locally executed jobs, observes the durable evidence without mutation,
-and drives guardian-owned teardown through retry and verified provider absence to
-`CLOSED`. See [`docs/operator-acceptance.md`](docs/operator-acceptance.md) for the
-HP/FP evidence map.
-
-Use a different sibling-checkout root or select individual scenarios when diagnosing a
-failure:
-
-```bash
-AF_PROJECT_ROOT=/another/path bin/af-operator-acceptance
-bin/af-operator-acceptance --list
-bin/af-operator-acceptance --only operator-lifecycle
-```
-
-The equivalent Rake entrypoint is `rake test:operator_acceptance`. This acceptance task
-is intentionally separate from the repository's default unit suite because it requires
-the WLO and RPOF sibling checkouts and their already-installed Bundler dependencies.
-
-### Durable ingest operations
-
-`bin/af-catalog start` creates a durable operation for one explicitly declared
-digital-book PDF and returns its stable UUID handle. `bin/af-catalog resume HANDLE`
-revalidates that operation in a fresh process and reports its current meaningful gate.
-The source-only driver using `--canonical-destination` validates deterministic
-source progression up to the boundary-editorial review workspace. For new editorial
-work, pass `--spec-root /absolute/path/to/af-specification-md` on `start` or
-`resume HANDLE`. This freezes the pinned public inventory, Editorial 2.0 Draft
-and ABDS 1.4 identities in the operation before bundle creation. Without selection,
-the journey pauses and prints a resume command. Resume rechecks those exact bytes;
-changed selection or historical editorial rebinding requires a new operation.
-That scope is
-documented in [`docs/INGEST_SOURCE_DRIVER_V0.1.md`](docs/INGEST_SOURCE_DRIVER_V0.1.md).
-For an approved boundary and authorized staged-scoring intent, the ordinary
-`resume` continuation proceeds through pipeline staging, AFW-qualified workload
-preparation, local LOW/WLO execution, standing-directive release, and the one
-explicit final-promotion decision. It does not require individual ACCEPT for
-eligible scores or a pre-scoring promotion of the staged catalog. The supported
-public gates and exceptions are documented in
-[`docs/CATALOG_INGEST_FRONT_DOOR_V0.1.md`](docs/CATALOG_INGEST_FRONT_DOOR_V0.1.md).
-
-The `AdventureFinderWorkspace::IngestOperationStore` library creates,
-reloads, validates, and read-only inspects versioned ingest-operation revisions. It
-persists portable component artifact references and explicit operator choices, not
-copies of component-owned canonical state. The public library invocation, storage
-layout, replay rules, and failure classifications are documented in
-[`docs/INGEST_OPERATION_PERSISTENCE_V0.1.md`](docs/INGEST_OPERATION_PERSISTENCE_V0.1.md).
-
-The read-only composition with the pipeline's public operation-input router is
-documented in
-[`docs/INGEST_OPERATION_ROUTING_COMPOSITION_V0.1.md`](docs/INGEST_OPERATION_ROUTING_COMPOSITION_V0.1.md).
-It derives the current operator gate without running the pipeline's returned commands
-or persisting a copy of pipeline routing state.
-
-Explicit successor catalog version intent is a separate durable, replay-safe
-AdventureFinder authorization; it does not change operation v0.1 history or pipeline
-routing. See
-[`docs/SUCCESSOR_VERSION_AUTHORIZATION_V0.1.md`](docs/SUCCESSOR_VERSION_AUTHORIZATION_V0.1.md).
-
-The standard zero-inference handoff from an approved ingest operation to one
-authority-bound AFW workload is documented in
-[`docs/STAGED_WORKLOAD_PREPARATION_V0.1.md`](docs/STAGED_WORKLOAD_PREPARATION_V0.1.md).
-It records an explicit scoring choice, lets pipeline issue staged authority, and lets
-AFW select the qualified production cases without running scoring or adopting a catalog.
-The explicit preparation/planning/local-start commands are an operator-controlled
-alternative to continuous post-boundary `resume`, not additional mandatory steps.
-The evidence and limits of the clean-local three-decision proof are summarized in
-[`docs/IG19E_V2_CLOSEOUT.md`](docs/IG19E_V2_CLOSEOUT.md).
-
-### Exact final promotion
-
-`bin/af-catalog final-promotion` is the single operator gate for a pipeline-validated
-IG-18A2 release package. It displays the exact base, current catalog, finalized
-candidate, catalog delta, scoring coverage, separate acceptance authorities,
-exceptions, compatibility result, concurrency classification, and shared-role effect.
-It proceeds when the pipeline says `readiness.ready`; `readiness.full_scoring` remains
-a separate completeness fact, so an independently authorized terminal release with
-gaps is still reviewable.
-
-```bash
-bin/af-catalog final-promotion \
-  --inputs /path/to/final-release-inputs.json \
-  --package /path/to/final-release-package.json \
-  --approver "David Norris"
-```
-
-The optional `--preview` flag reports the owner-bound red-cell preview only after
-rehashing it and does not add another approval step. When an independently validated
-IG-17F result is already part of the package, the review attributes it separately and
-uses the derived candidate. AFDP now provides `af-frontier-residual-scoring` v0.2
-(`prepare`, `apply`, `decline`, `verify`) for an *optional*, separately requested
-structured frontier handoff. The front door displays the exact component-tool
-instructions but does not generate or route that request automatically. A package
-with eligible terminal residual gaps may still proceed under its independently
-validated gap authority without a frontier request or extra mandatory decision.
-A derived candidate requires its own package validation and fresh final approval;
-the original approval does not transfer.
-
-The front door stores only durable coordination evidence under
-`operations/final-promotions/PACKAGE_ID/`: the pipeline request, pipeline decision,
-software-timestamped AdventureFinder decision reference, and pipeline result. Repeating
-an approved, completed promotion delegates to AFDP's historical replay and reports
-`ALREADY_PROMOTED` only after independent owner verification. The original `PROMOTED`
-result remains unchanged. A retained approval without an exact completed result, or
-with a manifest still at its reviewed state, requires explicit recovery; restarting
-does not automatically attempt publication again. The one
-typed APPROVE or DECLINE decision is bound by the pipeline to the exact package,
-candidate, evidence graph, repository HEAD, manifest, and role snapshots. The pipeline
-revalidates those inputs at the transaction boundary and remains the only workbook and
-`PROJECT_STATE.yml` writer. Promotion and Git persistence remain separate; the command
-prints exact path-scoped commit suggestions and never stages, commits, pushes, or opens
-a pull request.
 
 ### `bin/af-bootstrap`
 
@@ -392,12 +328,45 @@ bin/af-bootstrap --core
 bin/af-bootstrap --all
 ```
 
-The large `llm-response-data` evidence repository is shallow-cloned by default.
+The private evidence archive (`af-evidence-data`) uses the historical checkout name
+`llm-response-data` in this workspace. Bootstrap shallow-clones it by default.
 If a task truly needs its Git history:
 
 ```bash
 cd "$AF_PROJECT_ROOT/llm-response-data"
 git fetch --unshallow
+```
+
+### `bin/af-doctor`
+
+Check the local workspace and important authorities:
+
+```bash
+bin/af-doctor
+```
+
+It checks required commands (including the resolved executable path and useful runtime
+versions), reports missing runtime-specific commands, checks expected repository
+checkouts and verifies the canonical source registry exists. For catalog diagnostics,
+it reads `PROJECT_STATE.yml` under `af-xlsx-files-data` in the workspace. Pass
+`--catalog-root PATH` to select a separate catalog directory.
+The default expects a checkout of `dtnorris/af-xlsx-files-data` with its own
+`origin`. Move an existing `af-xlsx-data-sources` checkout and update its origin
+before using the new defaults. Bootstrap refuses the old path while it is occupied,
+including by a symlink.
+The [public XLSX owner](https://github.com/dtnorris/af-xlsx-files) validates all
+three workbook bindings and their version ceilings before doctor reports
+`catalog_head`. Set `AF_XLSX_FILES_ROOT` to the absolute path of the owner's API
+0.1 source checkout or make the library available on the Ruby load path.
+
+That last behavior is intentional: **never infer "the current AMC" from the numerically
+largest filename or from a version copied into this README.**
+
+Use strict mode when you want warnings (including optional converter dependencies) to
+make the command fail:
+
+```bash
+bin/af-doctor --strict
 ```
 
 ### `bin/af-status`
@@ -569,38 +538,6 @@ After installation, `af-test` can be run from any directory. Because the wrapper
 not `cd`, the caller's current working directory is unchanged when the test run exits.
 If this `adventure-finder` checkout moves, rerun the installer from the new location.
 
-### `bin/af-doctor`
-
-Check the local workspace and important authorities:
-
-```bash
-bin/af-doctor
-```
-
-It checks required commands (including the resolved executable path and useful runtime
-versions), reports missing runtime-specific commands, checks expected repository
-checkouts and verifies the canonical source registry exists. For catalog diagnostics,
-it reads `PROJECT_STATE.yml` under `af-xlsx-files-data` in the workspace. Pass
-`--catalog-root PATH` to select a separate catalog directory.
-The default expects a checkout of `dtnorris/af-xlsx-files-data` with its own
-`origin`. Move an existing `af-xlsx-data-sources` checkout and update its origin
-before using the new defaults. Bootstrap refuses the old path while it is occupied,
-including by a symlink.
-The [public XLSX owner](https://github.com/dtnorris/af-xlsx-files) validates all
-three workbook bindings and their version ceilings before doctor reports
-`catalog_head`. Set `AF_XLSX_FILES_ROOT` to the absolute path of the owner's API
-0.1 source checkout or make the library available on the Ruby load path.
-
-That last behavior is intentional: **never infer "the current AMC" from the numerically
-largest filename or from a version copied into this README.**
-
-Use strict mode when you want warnings (including optional converter dependencies) to
-make the command fail:
-
-```bash
-bin/af-doctor --strict
-```
-
 ### `bin/af-snapshot`
 
 Record exact sibling-repository commits:
@@ -616,74 +553,259 @@ value.
 
 A snapshot is **not** canonical project state and never replaces `PROJECT_STATE.yml`.
 
-## Repository map
+### Durable local ingest execution
 
-The machine-readable source of truth for this table is [`repos.yml`](repos.yml).
+After a catalog ingest has produced one verified staged workload, the same front door
+can establish each frozen local capability and advance one authoritative WLO
+execution without per-model bootstrap commands:
 
-| Repository | Lifecycle | Responsibility |
-| --- | --- | --- |
-| `md-specification-files` | current | Normative AdventureFinder specifications and semantic contracts |
-| `af-xlsx-files-data` | current | Canonical AMC workbooks plus `PROJECT_STATE.yml` |
-| `af-source-md-data` | current/private | Canonical page-addressable source corpus plus `source_registry.yml` |
-| `af-data-pipeline` | current | Deterministic ingestion handoffs, AMC mutation, review, and finalization |
-| `af-cli-scoring-utility` | current | Source-grounded AFAO assessment/scoring evidence |
-| `af-workloads` | current/core | AdventureFinder scoring workload construction, qualification semantics, and result interpretation |
-| `workload-orchestrator` | current/supporting | Generic plan validation, placement, readiness, scheduling, and execution state |
-| `runpod-ollama-fleet` | current/supporting | Optional RunPod/Ollama provider and fleet infrastructure |
-| `af-frontier-pack` | current | Deterministic frontier-model consumption bridge |
-| `af-cli-query-matcher` | current/supporting | AFPS parsing and deterministic filtering/ranking |
-| `pdf-to-llm-md-converter` | current | PDF → page-addressable Markdown |
-| `image-to-pdf-converter` | current | Physical-book photos → normalized image-only PDF |
-| `llm-response-data` | current/evidence | Historical/raw evidence archive; not authority |
-| `5e-tools-corpus-converter` | experimental | Earlier local-5e.tools corpus-conversion spike |
-| `af-corpus-ingester-basics` | archived | Superseded candidate-ingestion prototype |
-| `af-matcher-cli` | archived | Completed direct-LLM recommendation experiment |
-
-## Architecture
-
-```mermaid
-flowchart TD
-    sources["Owned published sources"] -->|"PDF / born-digital"| pdf["pdf-to-llm-md-converter"]
-    sources -->|"Photographed pages"| photos["image-to-pdf-converter"]
-    photos --> pdf
-    pdf --> corpus["af-source-md-data / source registry"]
-    corpus --> pipeline["af-data-pipeline: intake, review, AMC promotion"]
-    review["David + frontier-model adjudication"] --> pipeline
-    pipeline --> catalog["af-xlsx-files-data: canonical AMC / PROJECT_STATE.yml"]
-    catalog --> afw["af-workloads: workload and qualification semantics"]
-    corpus --> afw
-    afw -->|"Opaque jobs / logical pools"| wlo["workload-orchestrator: generic execution"]
-    wlo -->|"Local command dispatch"| scorer["AFW scoring adapter → af-cli-scoring-utility"]
-    scorer -->|"Default inference"| local["Local Ollama worker"]
-    local -->|"Model response"| scorer
-    wlo -.->|"Readiness / guarded capacity APIs"| rpof["runpod-ollama-fleet: optional provider layer"]
-    rpof --> remote["Remote Ollama workers"]
-    scorer --> evidence["Scoring evidence / llm-response-data archive"]
-    evidence --> pipeline
-    catalog --> frontier["af-frontier-pack → frontier reasoning"]
+```bash
+bin/af-catalog plan-local-capabilities OPERATION_UUID --json
+bin/af-catalog local-start OPERATION_UUID --selected-by OPERATOR
+bin/af-catalog local-status OPERATION_UUID
 ```
 
-WLO treats jobs as opaque commands; Adventure IDs, dimensions, qualification policy,
-and result interpretation remain in AFW. The scoring utility owns prompt construction,
-rubrics and scoring output. The registered production context selects the
-public worker sources for each execution.
-LOW and RPOF independently publish exact READY workers. WLO discovers local,
-remote or mixed named registries and runs scoring commands locally against the
-selected endpoint. RPOF independently admits and manages bounded paid capacity;
-WLO does not create paid resources or dispatch jobs through a provider runner.
+`local-start` records immutable local-only authority, delegates readiness to LOW, and
+delegates scheduling and attempts to WLO. It preserves one worker identity and busy
+slot across safe capability transitions. It has no remote/paid fallback and grants no
+implicit retry, breaker acknowledgement, score acceptance, or catalog promotion.
+Use `local-resume OPERATION_UUID` after a coordinator-owned drain/restart. An ordinary
+operator pause additionally requires the explicit `--continue-operator-pause` flag
+after public drain is verified. See
+[`docs/LOCAL_INGEST_EXECUTION_V0.1.md`](docs/LOCAL_INGEST_EXECUTION_V0.1.md).
 
-Supporting deterministic selection remains `af-cli-query-matcher`: a natural-language
-request becomes validated AFPS and then deterministic filtering/ranking.
+### Durable ingest operations
 
-This diagram describes responsibility and data flow, not Git dependency ownership.
-See [DIAGRAM.md](DIAGRAM.md) for the fuller ownership view.
+`bin/af-catalog start` creates a durable operation for one explicitly declared
+digital-book PDF and returns its stable UUID handle. `bin/af-catalog resume HANDLE`
+revalidates that operation in a fresh process and reports its current meaningful gate.
+The source-only driver using `--canonical-destination` validates deterministic
+source progression up to the boundary-editorial review workspace. For new editorial
+work, pass `--spec-root /absolute/path/to/af-specification-md` on `start` or
+`resume HANDLE`. This freezes the pinned public inventory, Editorial 2.0 Draft
+and ABDS 1.4 identities in the operation before bundle creation. Without selection,
+the journey pauses and prints a resume command. Resume rechecks those exact bytes;
+changed selection or historical editorial rebinding requires a new operation.
+That scope is
+documented in [`docs/INGEST_SOURCE_DRIVER_V0.1.md`](docs/INGEST_SOURCE_DRIVER_V0.1.md).
+For an approved boundary and authorized staged-scoring intent, the ordinary
+`resume` continuation proceeds through pipeline staging, AFW-qualified workload
+preparation, local LOW/WLO execution, standing-directive release, and the one
+explicit final-promotion decision. It does not require individual ACCEPT for
+eligible scores or a pre-scoring promotion of the staged catalog. The supported
+public gates and exceptions are documented in
+[`docs/CATALOG_INGEST_FRONT_DOOR_V0.1.md`](docs/CATALOG_INGEST_FRONT_DOOR_V0.1.md).
+
+The `AdventureFinderWorkspace::IngestOperationStore` library creates,
+reloads, validates, and read-only inspects versioned ingest-operation revisions. It
+persists portable component artifact references and explicit operator choices, not
+copies of component-owned canonical state. The public library invocation, storage
+layout, replay rules, and failure classifications are documented in
+[`docs/INGEST_OPERATION_PERSISTENCE_V0.1.md`](docs/INGEST_OPERATION_PERSISTENCE_V0.1.md).
+
+The read-only composition with the pipeline's public operation-input router is
+documented in
+[`docs/INGEST_OPERATION_ROUTING_COMPOSITION_V0.1.md`](docs/INGEST_OPERATION_ROUTING_COMPOSITION_V0.1.md).
+It derives the current operator gate without running the pipeline's returned commands
+or persisting a copy of pipeline routing state.
+
+Explicit successor catalog version intent is a separate durable, replay-safe
+AdventureFinder authorization; it does not change operation v0.1 history or pipeline
+routing. See
+[`docs/SUCCESSOR_VERSION_AUTHORIZATION_V0.1.md`](docs/SUCCESSOR_VERSION_AUTHORIZATION_V0.1.md).
+
+The standard zero-inference handoff from an approved ingest operation to one
+authority-bound AFW workload is documented in
+[`docs/STAGED_WORKLOAD_PREPARATION_V0.1.md`](docs/STAGED_WORKLOAD_PREPARATION_V0.1.md).
+It records an explicit scoring choice, lets pipeline issue staged authority, and lets
+AFW select the qualified production cases without running scoring or adopting a catalog.
+The explicit preparation/planning/local-start commands are an operator-controlled
+alternative to continuous post-boundary `resume`, not additional mandatory steps.
+The evidence and limits of the clean-local three-decision proof are summarized in
+[`docs/IG19E_V2_CLOSEOUT.md`](docs/IG19E_V2_CLOSEOUT.md).
+
+### `bin/af-context`
+
+Resolve a registered production handle to frozen, explicit cross-repository context:
+
+```bash
+bin/af-context batch 39
+bin/af-context fleet A --json
+```
+
+The checked-in registry records workspace-relative production roots, artifact paths,
+identities, and frozen hashes. Resolution uses `AF_PROJECT_ROOT`, or the manifest's
+default workspace root when the variable is unset, and returns absolute paths. It does
+not discover contexts from the current directory, shell variables other than the
+workspace-root override, or numerically newest files.
+
+Default output is a compact operator summary. Use `--json` for the complete,
+deterministic machine-readable context.
+
+Use the read-only verifier when the production checkouts are mounted:
+
+```bash
+bin/af-context batch 39 --verify
+bin/af-context fleet A --verify
+```
+
+Batch verification checks path presence plus the registered plan ID and SHA-256. Fleet
+verification follows RPOF's existing immutable chain from the normalized campaign
+declaration through the campaign identity and budget declaration to the durable binding
+hash. It never starts work, creates resources, changes capacity, or writes provider
+state.
+
+### `bin/af-model`
+
+Resolve a short model alias once against a frozen production plan without contacting a
+worker, provider, or inference endpoint:
+
+```bash
+bin/af-model preflight batch 39 qwen35
+bin/af-model preflight batch 39 qwen35 --json
+```
+
+Batch 39 registers `qwen35`, `qwen27`, `gemma`, and `gptoss`. The current Qwen
+aliases resolve as `qwen35 -> frozen pool qwen -> qwen3.6:35b-a3b` and
+`qwen27 -> frozen pool qwen27 -> qwen3.6:27b`. The emitted artifact is bound to
+the batch identity, plan ID, plan SHA-256, and pool ID. Its separate generic
+capability request copies the plan's exact Ollama model, digest, context,
+residency, and optional GPU constraint. Aliases contain no model defaults and
+are never passed downstream for reinterpretation. AdventureFinder production
+currently requires `require_fully_gpu_resident` to be exactly `true`; preflight
+rejects a frozen plan that disables or omits that requirement.
+
+Deliberately bootstrap one exact local capability, then use the ordinary batch
+workflow:
+
+```bash
+bin/af-local bootstrap batch 39 qwen35
+bin/af-batch start 39
+```
+
+`af-local bootstrap` persists the exact generic capability-request bytes and
+invokes LOW with `bootstrap --capability-request PATH --json`. `af-batch` never
+bootstraps a model. It writes WLO's strict
+named-source configuration for the independently selected `low workers --json`
+and/or `rpof workers --json` publishers. WLO consumes those registries directly,
+preserves their namespaces and checkpoints, and schedules over their union.
+AdventureFinder creates no synthetic registry identity.
+
+### `bin/af-batch`
+
+Open the exact registered production batch as WLO's foreground work owner:
+
+```bash
+bin/af-batch start 39
+bin/af-batch resume 39
+bin/af-batch retry 39 0946-openness --reason "confirmed transient model timeout" --dry-run
+bin/af-batch recovery 39
+```
+
+`start` never remanifests AFW work, clears pause, retries terminal attempts, or
+acknowledges a breaker. `resume` requires retained execution state and delegates
+to WLO's explicit foreground resume. Both verify the registered plan ID and
+SHA-256 first, use WLO's compact live dashboard, and preserve FO-06 Ctrl-C
+cancellation. Provider capacity is unchanged. See
+[`docs/batch-foreground.md`](docs/batch-foreground.md).
+
+`retry` resolves FO-07 short handles against the frozen AFW plan, verifies the
+canonical job through WLO diagnostics, requires an operator reason, and
+delegates exact selected authorization to WLO. `recovery` is read-only. `repair`
+is a separate fail-closed command; WLO currently exposes no safe generic
+retained-state repair transformation.
+
+### Exact final promotion
+
+`bin/af-catalog final-promotion` is the single operator gate for a pipeline-validated
+IG-18A2 release package. It displays the exact base, current catalog, finalized
+candidate, catalog delta, scoring coverage, separate acceptance authorities,
+exceptions, compatibility result, concurrency classification, and shared-role effect.
+It proceeds when the pipeline says `readiness.ready`; `readiness.full_scoring` remains
+a separate completeness fact, so an independently authorized terminal release with
+gaps is still reviewable.
+
+```bash
+bin/af-catalog final-promotion \
+  --inputs /path/to/final-release-inputs.json \
+  --package /path/to/final-release-package.json \
+  --approver "David Norris"
+```
+
+The optional `--preview` flag reports the owner-bound red-cell preview only after
+rehashing it and does not add another approval step. When an independently validated
+IG-17F result is already part of the package, the review attributes it separately and
+uses the derived candidate. AFDP now provides `af-frontier-residual-scoring` v0.2
+(`prepare`, `apply`, `decline`, `verify`) for an *optional*, separately requested
+structured frontier handoff. The front door displays the exact component-tool
+instructions but does not generate or route that request automatically. A package
+with eligible terminal residual gaps may still proceed under its independently
+validated gap authority without a frontier request or extra mandatory decision.
+A derived candidate requires its own package validation and fresh final approval;
+the original approval does not transfer.
+
+The front door stores only durable coordination evidence under
+`operations/final-promotions/PACKAGE_ID/`: the pipeline request, pipeline decision,
+software-timestamped AdventureFinder decision reference, and pipeline result. Repeating
+an approved, completed promotion delegates to AFDP's historical replay and reports
+`ALREADY_PROMOTED` only after independent owner verification. The original `PROMOTED`
+result remains unchanged. A retained approval without an exact completed result, or
+with a manifest still at its reviewed state, requires explicit recovery; restarting
+does not automatically attempt publication again. The one
+typed APPROVE or DECLINE decision is bound by the pipeline to the exact package,
+candidate, evidence graph, repository HEAD, manifest, and role snapshots. The pipeline
+revalidates those inputs at the transaction boundary and remains the only workbook and
+`PROJECT_STATE.yml` writer. Promotion and Git persistence remain separate; the command
+prints exact path-scoped commit suggestions and never stages, commits, pushes, or opens
+a pull request.
+
+### `bin/af-operator-acceptance`
+
+Replay the production orchestration control paths with the component repositories'
+existing fake workers, fake provider, temporary state roots, and real CLI test seams:
+
+```bash
+bin/af-operator-acceptance
+```
+
+The harness resolves `adventure-finder`, `workload-orchestrator`, and
+`runpod-ollama-fleet` from the workspace root, strips provider credentials, and loads a
+TCP/HTTP network guard into every scenario process. It exercises registered production
+context resolution, dynamic READY-worker consumption, late capacity, local execution
+evidence, pause/resume behavior, observer/process-ownership boundaries, campaign
+admission and teardown, and representative fail-closed paths. It neither starts Ollama
+nor contacts RunPod or an inference endpoint.
+
+The named `rpof-safety-gate` scenario adds FO-08's finite crash-liability,
+guardian identity/failure-domain, compute-only billing-scope, and pre-mutation
+refusal proofs using the same offline fake-provider boundary.
+
+`operator-lifecycle` is the explicit end-to-end replay: it resolves the portable
+production context beneath a temporary workspace, starts a fake-backed campaign,
+publishes NOT_READY then READY workers through RPOF's real registry producer, lets WLO
+complete two locally executed jobs, observes the durable evidence without mutation,
+and drives guardian-owned teardown through retry and verified provider absence to
+`CLOSED`. See [`docs/operator-acceptance.md`](docs/operator-acceptance.md) for the
+HP/FP evidence map.
+
+Use a different sibling-checkout root or select individual scenarios when diagnosing a
+failure:
+
+```bash
+AF_PROJECT_ROOT=/another/path bin/af-operator-acceptance
+bin/af-operator-acceptance --list
+bin/af-operator-acceptance --only operator-lifecycle
+```
+
+The equivalent Rake entrypoint is `rake test:operator_acceptance`. This acceptance task
+is intentionally separate from the repository's default unit suite because it requires
+the WLO and RPOF sibling checkouts and their already-installed Bundler dependencies.
 
 ## Authority and trust boundaries
 
 AdventureFinder intentionally separates several kinds of truth.
 
-**Specifications.** `md-specification-files` is the normative home of accepted
-AdventureFinder semantics. Implementation repositories automate those contracts; they
+**Specifications.** `af-specification-md` publishes the ontology and shared definitions used by the public tools. Implementation repositories automate those contracts; they
 do not silently redefine them.
 
 **Catalog state.** `af-xlsx-files-data/PROJECT_STATE.yml` is the authority for moving
@@ -691,11 +813,15 @@ roles such as `catalog_head`, `matcher_authorized_baseline`, and
 `production_dependency_floor`. A frozen operation may intentionally retain an older
 exact artifact.
 
+<a name="historical-milestones"></a>
+
+For the September 2026 catalog baseline, see the [AMC 6.0 milestone record](milestones/amc-6.0.yml).
+
 **Source corpus.** `af-source-md-data` is the private canonical Markdown corpus
 and source-resolution authority. It contains copyrighted owned source material and must
 remain private.
 
-**Evidence.** `llm-response-data` preserves historical/raw evidence. Its filenames and
+**Evidence.** `af-evidence-data` preserves historical/raw evidence. Its filenames and
 directory dates are not project-state authority.
 
 **Generated frontier packs.** `af-frontier-pack` produces disposable derivatives for
@@ -713,20 +839,6 @@ Git submodules are intentionally avoided. Day-to-day AdventureFinder work freque
 moves independent repositories forward, and submodule pointer churn would add another
 state-management layer without improving the canonical data model. When an exact
 cross-repo state matters, `bin/af-snapshot` records the commit set explicitly.
-
-## Repository selection
-
-Normal commands use entries with:
-
-```yaml
-default: true
-```
-
-Use `--core` for only the repositories tagged `core`, or `--all` to include retained
-experimental/archived repositories.
-
-The distinction matters: an old experiment should be easy to discover without being
-accidentally treated as a current production dependency.
 
 ## Adding or changing a repository
 
