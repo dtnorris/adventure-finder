@@ -13,7 +13,8 @@ The tools are public. David keeps his own library in separate private repositori
 that use the `-data` suffix. For example, `af-source-md` provides the tools for
 reading source pages, while `af-source-md-data` holds his books’ Markdown files
 and source registry. You can try the public sample without access to any of
-David’s repositories marked `-data`.
+David’s repositories marked `-data`. For the full layout, see
+[Set up your own private repositories](#set-up-your-own-private-repositories).
 
 **Sample question.** What can I run with little prep that still gives players
 choices that matter? The public sample has three adventures across two sources.
@@ -101,6 +102,28 @@ against the pages, and make the final choice for your group.
 3. Build a disposable pack from the scored catalog, registry, and ontology.
    Filter it for your session and pull up the relevant pages to compare the
    candidates. [af-frontier-pack](https://github.com/dtnorris/af-frontier-pack)
+
+## Set up your own private repositories
+
+To use the full workflow with your own books, clone the five public tools below.
+In your own account or organization, create a separate **private** repository
+for each tool, using the name in the second column. Each private repository can
+start empty. As you build your library, keep these files in the corresponding
+private checkout.
+
+| Public tool to clone | Private repository to create | What goes there |
+| --- | --- | --- |
+| `af-pipeline` | `af-pipeline-data` | Approvals, review records, and pipeline receipts |
+| `af-workloads` | `af-workloads-data` | Scoring workloads and their generated plans |
+| `af-xlsx-files` | `af-xlsx-files-data` | Catalog workbooks and the file that identifies the accepted workbook |
+| `af-source-md` | `af-source-md-data` | Page-marked Markdown from your books and the source registry |
+| `af-evidence` | `af-evidence-data` | Saved evidence bundles and their manifests |
+
+The workspace defaults in [`repos.yml`](repos.yml) point to David’s repositories.
+Creating repos with the same names under your account does not change those
+defaults. Once you have an accepted catalog, a source registry, and the matching
+book files, [build a private Frontier pack](docs/private-frontier-pack.md) using
+the paths to your own copies.
 
 ## What this repository owns
 
