@@ -15,6 +15,7 @@ module AdventureFinderWorkspace
   CATALOG_REPOSITORY = "af-xlsx-files-data"
   CATALOG_GITHUB = "dtnorris/af-xlsx-files-data"
   LEGACY_CATALOG_REPOSITORY = "af-xlsx-data-sources"
+  SCORER_REPOSITORY = "af-scorer"
   TEST_TIMING_HISTORY_SCHEMA_VERSION = "adventurefinder-test-timings/v0.1"
   TEST_TIMING_HISTORY_LIMIT = 3
 
@@ -144,7 +145,13 @@ module AdventureFinderWorkspace
       urls = ["https://github.com/#{github}.git", "git@github.com:#{github}.git"]
       origin = run.call("remote", "get-url", "--all", "origin")
       push = run.call("remote", "get-url", "--push", "--all", "origin")
-      unless root.success? && root.stdout.strip == path.to_s && [origin, push].all? { |result|
+      origins = [origin, push]
+      # Pinned entries that opt into origin checks require the configured owner
+      # as well as the effective URL, which Git may rewrite.
+      if repo["revision"] && repo["verify_origin"]
+        origins << run.call("config", "--local", "--get-all", "remote.origin.url")
+      end
+      unless root.success? && root.stdout.strip == path.to_s && origins.all? { |result|
         result.success? && urls.include?(result.stdout.strip)
       }
         raise Error, "expected #{github} checkout and origin at #{path}"
@@ -656,6 +663,13 @@ module AdventureFinderWorkspace
           elapsed: nil,
           output: nil
         )
+      end
+
+      begin
+        CheckoutIdentity.verify!(path, repo, runner:) if repo["verify_origin"]
+      rescue Error => error
+        return TestResult.new(name: name, suite: repo["suite"], command: command,
+          result: :fail, output: "ERROR: #{error.message}\n")
       end
 
       unless capture

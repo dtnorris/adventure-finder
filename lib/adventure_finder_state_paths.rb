@@ -26,13 +26,13 @@ module AdventureFinderWorkspace
         raise Error, "AF_STATE_ROOT is unwritable"
       end
       project = Pathname(project_root || env.fetch("AF_PROJECT_ROOT", Pathname(front_door_root).parent.to_s))
-      roles = [front_door_root, File.expand_path("..", __dir__), *owner_roots]
+      roles = [front_door_root, File.expand_path("..", __dir__), *owner_roots, project.join("af-cli-scoring-utility")]
       {
         "AF_DATA_PIPELINE_ROOT" => "af-data-pipeline",
         "AF_PDF_CONVERTER_ROOT" => "pdf-to-llm-md-converter",
         "AF_SOURCE_ROOT" => "af-source-md-data",
         "AF_AFW_ROOT" => "af-workloads", "LOW_REPO_ROOT" => "local-ollama-workers",
-        "AF_SCORER_ROOT" => "af-cli-scoring-utility",
+        "AF_SCORER_ROOT" => SCORER_REPOSITORY,
         "WLO_REPO_ROOT" => "workload-orchestrator"
       }.each { |selector, name| roles << env.fetch(selector, project.join(name).to_s) }
       %w[AF_DATA_PIPELINE_DATA_ROOT AF_AFW_DATA_ROOT LOW_STATE_ROOT].each do |selector|

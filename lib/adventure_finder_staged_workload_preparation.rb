@@ -240,7 +240,8 @@ module AdventureFinderWorkspace
       @project_root = Pathname(project_root).expand_path
       @pipeline_root = Pathname(pipeline_root).expand_path
       @afw_root = afw_root
-      @scorer_root = Pathname(scorer_root).expand_path
+      @scorer_root = scorer_root && Pathname(scorer_root).expand_path
+      @scorer_override = @scorer_root
       @source_root = Pathname(source_root).expand_path
       @catalog_root = Pathname(catalog_root).expand_path
       @operation_store = operation_store
@@ -309,9 +310,10 @@ module AdventureFinderWorkspace
       @afw_root = @workload_paths.code
       library = afw_root.join("lib", "af_workloads.rb")
       raise Error, "AFW public library is unavailable: #{library}" unless library.file?
+      @scorer_root = WorkloadPaths.scorer_root!(project_root, override: @scorer_override)
       return unless @workload_paths.data
 
-      @workload_paths.check_scorer!(@env["AF_SCORER_ROOT"], @scorer_config)
+      @workload_paths.check_scorer!(scorer_root, @scorer_config)
       owners = [front_door_root, pipeline_root, source_root, catalog_root, scorer_root]
       owners << Pathname(@env.fetch("AF_DATA_PIPELINE_DATA_ROOT")) if @env.key?("AF_DATA_PIPELINE_DATA_ROOT")
       owners.each do |owner|

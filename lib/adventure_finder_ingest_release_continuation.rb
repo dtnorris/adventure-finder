@@ -34,7 +34,6 @@ module AdventureFinderWorkspace
       @env = env
       @storage = PipelineDataPaths.root(code_root: @pipeline, legacy_root: @front, env:)
       @afw = Pathname(env.fetch("AF_AFW_ROOT", @project.join("af-workloads").to_s)).expand_path
-      @scorer = Pathname(env.fetch("AF_SCORER_ROOT", @project.join("af-cli-scoring-utility").to_s)).expand_path
       @wlo = Pathname(env.fetch("WLO_REPO_ROOT", @project.join("workload-orchestrator").to_s)).expand_path
       @out = out
       @runner = runner || ->(environment, *argv, chdir:) { Open3.capture3(environment, *argv, chdir:) }
@@ -55,6 +54,7 @@ module AdventureFinderWorkspace
       fail_with("STALE_WORKLOAD_BINDING", "frozen execution plan changed") unless
         plan.to_s == preparation.dig("plan", "path") &&
         Digest::SHA256.file(plan).hexdigest == preparation.dig("plan", "sha256")
+      scorer = WorkloadPaths.scorer_root!(@project, override: @env["AF_SCORER_ROOT"])
       output = @front.join("output", "local-ingest-executions", "v0.1", operation_id, "wlo")
       status = invoke(@wlo, "wlo", "status", plan, "--output", output, "--json")
       report = parse_json(status)
@@ -103,7 +103,7 @@ module AdventureFinderWorkspace
         "selection_path" => roots.store.join("workloads", ".selections", workload_id, "selection.json").to_s,
         "selection_afw_root" => roots.code.to_s,
         "selection_project_root" => roots.store.to_s,
-        "selection_scorer_root" => @scorer.to_s,
+        "selection_scorer_root" => scorer.to_s,
         "workload_paths" => {
           "plan" => plan.to_s,
           "snapshot" => workload.join("snapshot.yml").to_s,

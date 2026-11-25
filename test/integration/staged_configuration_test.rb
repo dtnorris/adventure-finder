@@ -13,12 +13,13 @@ require "adventure_finder_staged_workload_preparation"
 class StagedConfigurationTest < Minitest::Test
   # Allocate independent caller code and mechanical inputs; no private corpus is read.
   def setup
-    components = File.expand_path("../../..", __dir__)
-    @pipeline = ENV.fetch("AF_DATA_PIPELINE_ROOT", File.join(components, "af-data-pipeline"))
-    scorer = ENV["AF_SCORER_ROOT"]
-    skip "set AF_SCORER_ROOT to the accepted public scorer for this offline journey" unless scorer
+    components = ENV.fetch("AF_PROJECT_ROOT", File.expand_path("../../..", __dir__))
+    public_pipeline = ENV["AF_TEST_PUBLIC_PIPELINE_ROOT"]
+    @pipeline = public_pipeline || ENV.fetch("AF_DATA_PIPELINE_ROOT", File.join(components, "af-data-pipeline"))
+    skip "select the public pipeline or set AF_SCORER_ROOT for this offline journey" unless
+      public_pipeline || ENV["AF_SCORER_ROOT"]
     @afw = File.realpath(ENV.fetch("AF_TEST_PUBLIC_AFW_ROOT", File.join(components, "af-workloads")))
-    @scorer = ENV.fetch("AF_SCORER_ROOT")
+    @scorer = AdventureFinderWorkspace::WorkloadPaths.scorer_root!(components, override: ENV["AF_SCORER_ROOT"]).to_s
     @temporary = Dir.mktmpdir("staged-config-")
     @data = File.join(@temporary, "workload-store")
     FileUtils.mkdir(@data)

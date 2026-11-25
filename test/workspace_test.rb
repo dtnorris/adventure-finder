@@ -99,6 +99,21 @@ class AdventureFinderWorkspaceTest < Minitest::Test
       @integration_output = integration_output
     end
 
+    # Model the verified public scorer checkout in tests that stub suite execution.
+    def capture(*argv, chdir:)
+      raise "unexpected checkout inspection: #{chdir}" unless File.basename(chdir) == "af-scorer"
+
+      @scorer ||= AdventureFinderWorkspace::Manifest.new(File.expand_path("../repos.yml", __dir__))
+        .selected.find { |repo| repo.fetch("name") == "af-scorer" }
+      stdout = case argv.drop(4)
+               when ["rev-parse", "--show-toplevel"] then chdir.to_s
+               when ["rev-parse", "HEAD"] then @scorer.fetch("revision")
+               when ["status", "--porcelain", "--untracked-files=all"], ["ls-files", "-v"] then ""
+               else "https://github.com/#{@scorer.fetch('github')}.git"
+               end
+      AdventureFinderWorkspace::CommandRunner::Result.new(stdout:, stderr: "", status: FakeStatus.new(true))
+    end
+
     def shell_capture(command, chdir:, env: {})
       @calls << [command, chdir.to_s, env]
       fixture_environment = env.merge("TEST_FIXTURE_SUITE" => command.end_with?("test:integration") ? "integration" : "fast")
@@ -816,6 +831,10 @@ class AdventureFinderWorkspaceTest < Minitest::Test
     names = manifest.selected.map { |repo| repo.fetch("name") }
 
     assert_includes names, "af-data-pipeline"
+    assert_includes names, "af-specification-md"
+    assert_includes names, "af-scorer"
+    refute_includes names, "md-specification-files"
+    refute_includes names, "af-cli-scoring-utility"
     assert_includes names, "llm-response-data"
     assert_includes names, "af-workloads"
     assert_includes names, "workload-orchestrator"
@@ -829,16 +848,42 @@ class AdventureFinderWorkspaceTest < Minitest::Test
   def test_core_selection_contains_authorities_and_current_core_code
     names = manifest.selected(core: true).map { |repo| repo.fetch("name") }
 
-    assert_includes names, "md-specification-files"
+    assert_includes names, "af-specification-md"
     assert_includes names, "af-xlsx-files-data"
     assert_includes names, "af-source-md-data"
     assert_includes names, "af-data-pipeline"
-    assert_includes names, "af-cli-scoring-utility"
+    assert_includes names, "af-scorer"
     assert_includes names, "af-workloads"
     refute_includes names, "workload-orchestrator"
     assert_includes names, "af-frontier-pack"
     refute_includes names, "runpod-ollama-fleet"
     refute_includes names, "llm-response-data"
+  end
+
+  # Refuse a private origin in the public scorer slot before running commands,
+  # even when Git rewrites its configured URL to the expected public URL.
+  def test_bootstrap_and_test_refuse_a_private_scorer_in_the_public_slot
+    scorer = manifest.selected.find { |repo| repo.fetch("name") == "af-scorer" }
+    Dir.mktmpdir do |directory|
+      path = File.join(directory, "af-scorer")
+      donor = "git@github.com:dtnorris/af-cli-scoring-utility.git"
+      public_url = "https://github.com/dtnorris/af-scorer.git"
+      assert system("git", "init", "--quiet", path)
+      assert system("git", "-C", path, "remote", "add", "origin", donor)
+      assert system("git", "-C", path, "config", "--local", "url.#{public_url}.insteadOf", donor)
+      runner = AdventureFinderWorkspace::CommandRunner.new
+      runner.define_singleton_method(:shell) { |*| raise "donor setup ran" }
+      runner.define_singleton_method(:shell_capture) { |*| raise "donor tests ran" }
+      out = StringIO.new
+      err = StringIO.new
+      workspace = AdventureFinderWorkspace::Workspace.new(manifest:, root: directory, runner:, out:, err:,
+        front_door_root: directory)
+      refute workspace.bootstrap(repos: [scorer], setup: true)
+      refute workspace.test(repos: [scorer], include_front_door: false)
+      assert_includes err.string, "expected dtnorris/af-scorer checkout and origin"
+      assert_includes out.string, "expected dtnorris/af-scorer checkout and origin"
+      assert_equal donor, runner.capture("git", "config", "--local", "--get", "remote.origin.url", chdir: path).stdout.strip
+    end
   end
 
   def test_afw_and_wlo_setup_is_current_without_stale_timing_hints
